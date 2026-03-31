@@ -1,0 +1,55 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+*.pyc
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Credentials & local config ────────────────────────────────────────────────
+# config.ini contains proxy passwords and MongoDB credentials — never commit it.
+# Copy config.ini.example and fill in your values locally.
+config.ini
+.env
+*.env
+secrets.json
+
+# ── Downloaded / generated data files ─────────────────────────────────────────
+ovhcloud_filings/
+hkex_pdfs/
+*.xlsx
+*.xls
+*.csv
+
+# ── Log files ─────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── IDE and OS artefacts ───────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Claude Code internal ───────────────────────────────────────────────────────
+.claude/
+
+# ── Pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/

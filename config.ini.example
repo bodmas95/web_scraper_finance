@@ -1,0 +1,54 @@
+[DEFAULT]
+output_path = /opt/data/raw
+
+[env]
+name = uat
+
+[HKEX]
+base_url = https://www.hkexnews.hk
+search_url = https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=en
+download_dir = hkex_pdfs
+
+[OVH]
+lei = 9695001J8OSOVX4TP939
+api_base = https://filings.xbrl.org
+investor_relations_url = https://corporate.ovhcloud.com/en/investor-relations/financial-results/
+newsroom_url = https://corporate.ovhcloud.com/en/newsroom/news
+download_dir = ovhcloud_filings
+output_file = ovhcloud_complete_financials.xlsx
+user_agent = OVHcloud-XBRL/2.0 research@example.com
+
+[HEADERS]
+user_agent = Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+content_type = application/x-www-form-urlencoded
+
+[uat]
+mongo_host = localhost
+mongo_port = 27017
+mongo_username =
+mongo_password =
+mongo_database = UAT_HR1
+mongo_authentication_database = admin
+
+[PROXY]
+; proxy_use controls which HTTP backend is used across the whole codebase:
+;   none   -> direct requests, no proxy
+;   server -> requests routed through IP-based proxy (system_host:system_port, no auth)
+;   system -> pycurl with NTLM authentication (host:port with user/pass below)
+proxy_use = none
+
+; server-mode proxy (IP-based, no credentials required)
+system_host =
+system_port =
+
+; system-mode proxy (NTLM authentication via pycurl)
+host =
+port = 8080
+user =
+pass =
+
+[LOGGING]
+level = INFO
+log_dir = logs
+max_bytes = 10485760
+backup_count = 5
