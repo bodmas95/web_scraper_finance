@@ -75,12 +75,12 @@ from config.config import get_section as _get_section
 _OVH_CFG = _get_section("OVH")
 
 DEBUG        = "--debug" in sys.argv
-OUTPUT       = "ovhcloud_complete_financials.xlsx"
-DOWNLOAD_DIR = "/opt/data/raw"
-LEI          = "9695001J8OSOVX4TP939"
-API_BASE     = "https://filings.xbrl.org"
+DOWNLOAD_DIR = _OVH_CFG.get("output_path")
+OUTPUT       = str(Path(DOWNLOAD_DIR) / "ovhcloud_complete_financials.xlsx")
+LEI          = None
+API_BASE     = None
 HEADERS      = {
-    "User-Agent": _OVH_CFG.get("user_agent", "OVHcloud-XBRL/2.0 research@example.com"),
+    "User-Agent": _OVH_CFG.get("user_agent"),
     "Accept":     "application/json,*/*",
 }
 
