@@ -18,7 +18,6 @@ from src.logging import get_logger
 
 logger = get_logger(__name__)
 
-_OVH_CFG     = get_section("OVH")
 _HEADERS_CFG = get_section("HEADERS")
 
 _HEADERS = {
@@ -313,7 +312,7 @@ class OVHCrawler:
         if years is None:
             years = [self.year] if self.year else [2025, 2026]
 
-        news_url  = _OVH_CFG.get("newsroom_url", self.url)
+        news_url  = self.url
         year_strs = {str(y) for y in years}
 
         params = {f"year[{y}]": str(y) for y in years}

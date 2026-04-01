@@ -32,8 +32,7 @@ from src.logging import get_logger
 
 logger = get_logger(__name__)
 
-_OVH_CFG    = get_section("OVH")
-_LOCAL_ROOT = Path(_OVH_CFG.get("download_dir", "ovhcloud_filings"))
+_LOCAL_ROOT = Path(get_section("DEFAULT").get("output_path", "/opt/data/raw"))
 
 
 def _now_iso() -> str:

@@ -24,12 +24,9 @@ from src.pipeline.db_utils import (
     update_ingestion_log,
     save_bytes_to_gridfs,
 )
-from config.config import get_section
 from src.logging import get_logger
 
 logger = get_logger(__name__)
-
-_OVH_CFG = get_section("OVH")
 
 _FILE_META = {
     "viewer_html": ("HTML", "text/html"),
@@ -98,7 +95,10 @@ def run(db, company: dict, source: dict) -> None:
     logger.info("API pipeline started | companyId=%s sourceId=%s", company_id, source_id)
 
     try:
-        parser_result = ovh_parser.run()
+        filters  = source.get("filters", [])
+        lei      = filters[0] if isinstance(filters, list) and filters else None
+        api_base = source.get("sourceUrl") or None
+        parser_result = ovh_parser.run(lei=lei, api_base=api_base)
         downloaded_at = _now_iso()
         log_file_records = []
 

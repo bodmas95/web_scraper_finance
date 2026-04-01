@@ -72,16 +72,15 @@ except ImportError:
     print("Install: pip install py-xbrl")
 
 from config.config import get_section as _get_section
-_OVH_CFG     = _get_section("OVH")
-_HEADERS_CFG = _get_section("HEADERS")
+_OVH_CFG = _get_section("OVH")
 
 DEBUG        = "--debug" in sys.argv
-OUTPUT       = _OVH_CFG.get("output_file",             "ovhcloud_complete_financials.xlsx")
-DOWNLOAD_DIR = _OVH_CFG.get("download_dir",             "ovhcloud_filings")
-LEI          = _OVH_CFG.get("lei",                      "9695001J8OSOVX4TP939")
-API_BASE     = _OVH_CFG.get("api_base",                 "https://filings.xbrl.org")
+OUTPUT       = "ovhcloud_complete_financials.xlsx"
+DOWNLOAD_DIR = "/opt/data/raw"
+LEI          = "9695001J8OSOVX4TP939"
+API_BASE     = "https://filings.xbrl.org"
 HEADERS      = {
-    "User-Agent": _HEADERS_CFG.get("user_agent", "OVHcloud-XBRL/2.0 research@example.com"),
+    "User-Agent": _OVH_CFG.get("user_agent", "OVHcloud-XBRL/2.0 research@example.com"),
     "Accept":     "application/json,*/*",
 }
 
@@ -1346,12 +1345,14 @@ def main():
     print(f"\n  Output: {OUTPUT}\n")
 
 
-def run(year: int | None = None) -> dict:
+def run(year: int | None = None, lei: str | None = None, api_base: str | None = None) -> dict:
     """
     Callable entry point for the pipeline.
 
     Args:
-        year: fiscal year to restrict to (e.g. 2025), or None for all years.
+        year:     fiscal year to restrict to (e.g. 2025), or None for all years.
+        lei:      LEI identifier from the source document's filters field.
+        api_base: XBRL API base URL from the source document's sourceUrl field.
 
     Returns:
         Dict with paths to every file produced:
@@ -1368,6 +1369,11 @@ def run(year: int | None = None) -> dict:
             },
         }
     """
+    global LEI, API_BASE
+    if lei:
+        LEI = lei
+    if api_base:
+        API_BASE = api_base
     main()
 
     root_dir = Path(DOWNLOAD_DIR)
