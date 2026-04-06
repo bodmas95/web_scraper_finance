@@ -70,7 +70,21 @@ def run_company(db, company_name: str) -> None:
         logger.warning("No active sources found for %s.", company_name)
         return
 
-    logger.info("Found %d active source(s).", len(sources))
+    # Deduplicate by (sourceType, sourceUrl) — keep first occurrence
+    total = len(sources)
+    seen = set()
+    deduped = []
+    for s in sources:
+        key = (s.get("sourceType", ""), s.get("sourceUrl", ""))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(s)
+        else:
+            logger.warning("Skipping duplicate source: type=%s url=%s id=%s",
+                           key[0], key[1], s.get("_id"))
+    sources = deduped
+
+    logger.info("Found %d active source(s) (%d unique).", total, len(sources))
 
     for source in sources:
         source_type = source.get("sourceType", "UNKNOWN")

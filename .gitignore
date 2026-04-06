@@ -53,3 +53,5 @@ desktop.ini
 .coverage
 htmlcov/
 .tox/
+
+ovh_filings/*

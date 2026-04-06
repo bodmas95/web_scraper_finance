@@ -1,75 +1,25 @@
-"""
-OVHcloud Full Financial Statement Extractor
-===========================================
-Extracts complete financial tables with French and English labels for all
-available fiscal years discovered dynamically from the XBRL filing API.
-
-KEY DESIGN:
-  Zero hardcoded concept names - everything auto-extracted
-  French labels from viewer JSON (labels.ns0.fr / labels.std.fr)
-  English labels from viewer JSON (labels.ns0.en / labels.std.en)
-  All 4 tables: Income Statement, Cash Flow, Assets, Liabilities
-  Balance Sheet split into Assets tab and Liabilities tab
-  All available fiscal years discovered at runtime - no hardcoded year list
-  XlsxWriter: professional formatting, alternating rows, frozen panes
-
-HOW LABELS WORK IN VIEWER JSON:
-  The ixbrlviewer.html contains a JSON blob with a "concepts" section:
-  {
-    "ifrs-full:Revenue": {
-      "labels": {
-        "ns0": {"en": "Total revenue",  "fr": "Total des produits"},
-        "std": {"en": "Revenue",        "fr": "Produits des activites ordinaires"}
-      }
-    },
-    "ovhgroupe:CurrentEbitda": {
-      "labels": {
-        "ns0": {"en": "Current EBITDA", "fr": "EBITDA courant"}
-      }
-    }
-  }
-  We prefer "ns0" labels (OVHcloud's own labels) over "std" (IFRS taxonomy).
-
-Install:
-    pip install py-xbrl requests pandas openpyxl xlsxwriter beautifulsoup4 lxml
-
-Run:
-    python ovhcloud_api_extractor.py
-    python ovhcloud_api_extractor.py --debug
-"""
-
-import sys, json, re, time, requests, warnings
-from src import http_client
+import sys
+import io
+import json
+import re
+import time
+import requests
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
+
+if sys.stdout.encoding != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 try:
     import pandas as pd
 except ImportError:
-    print("Run: pip install pandas openpyxl xlsxwriter requests beautifulsoup4 lxml")
-    sys.exit(1)
+    sys.exit("pip install pandas openpyxl xlsxwriter requests beautifulsoup4")
 
 try:
     from bs4 import BeautifulSoup
-    try:
-        from bs4 import XMLParsedAsHTMLWarning
-        warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
-    except ImportError:
-        pass
-    HAS_BS4 = True
 except ImportError:
-    HAS_BS4 = False
-    print("beautifulsoup4 not installed - install with: pip install beautifulsoup4 lxml")
-
-try:
-    from xbrl.instance import XbrlInstance, NumericFact
-    from xbrl.cache import HttpCache
-    HAS_PYXBRL = True
-    print("py-xbrl available")
-except ImportError:
-    HAS_PYXBRL = False
-    print("py-xbrl not installed - using raw JSON parser")
-    print("Install: pip install py-xbrl")
+    sys.exit("pip install beautifulsoup4")
 
 from config.config import get_section as _get_section
 _OVH_CFG = _get_section("OVH")
@@ -85,803 +35,784 @@ HEADERS      = {
 }
 
 
-# ============================================================================
-#  STEP 1 - API Discovery
-# ============================================================================
-
-def api_discover(lei: str, save_path: Path = None) -> list[dict]:
-    url = f"{API_BASE}/api/filings"
-    print(f"\nGET {url}")
-    print(f"filter[entity.identifier]={lei}")
-    try:
-        r = http_client.get(url, params={"filter[entity.identifier]": lei,
-                                          "page[size]": 50},
-                            headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        data    = r.json()
-        filings = data.get("data", [])
-        total   = data.get("meta", {}).get("count", "?")
-        print(f"{len(filings)} filing(s) returned (total on filings.xbrl.org: {total})")
-        attrs = []
-        for f in filings:
-            a = dict(f.get("attributes", {}))
-            a["_id"] = f.get("id", "")
-            attrs.append(a)
-        attrs.sort(key=lambda x: x.get("period_end", ""), reverse=True)
-        print()
-        for a in attrs:
-            j = "json: yes" if a.get("json_url")    else "json: no"
-            v = "viewer: yes" if a.get("viewer_url") else "viewer: no"
-            print(f"  period={a.get('period_end')}  {j}  {v}  errors={a.get('error_count', 0)}")
-        if save_path and attrs:
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            save_path.write_text(
-                json.dumps(attrs, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            print(f"Saved API listing: {save_path}")
-        return attrs
-    except Exception as e:
-        print(f"API error: {e}")
-        return []
-
-
-def make_fy_config(period_end_str: str) -> dict:
-    """Build a fiscal year config dict from a period_end date string."""
-    pe   = datetime.strptime(period_end_str, "%Y-%m-%d")
-    bs   = pe + timedelta(days=1)
-    return {
-        "year":       str(pe.year),
-        "period_end": period_end_str,
-        "bs_instant": bs.strftime("%Y-%m-%d"),
-    }
-
-
-def discover_fiscal_years(filings: list[dict]) -> dict:
-    """
-    Build a TARGET_FYS dict from whatever fiscal years exist in the API response.
-    Returns { "FY2025": {...}, "FY2024": {...}, "FY2023": {...}, ... }
-    sorted most-recent first.
-    """
-    configs = {}
-    for f in filings:
-        pe = f.get("period_end", "")
-        if not pe:
-            continue
-        fy_label = f"FY{pe[:4]}"
-        if fy_label not in configs:
-            configs[fy_label] = make_fy_config(pe)
-    return dict(sorted(configs.items(), reverse=True))
-
-
-def pick_filing(filings: list[dict], year: str) -> dict | None:
-    for f in filings:
-        if f.get("period_end", "").startswith(year):
-            return f
-    return None
-
-
-# ============================================================================
-#  STEP 2 - Download viewer HTML and extract labels and facts
-# ============================================================================
-
-def download_viewer_data(viewer_url: str, save_dir: Path | None = None) -> dict | None:
-    """
-    Download ixbrlviewer.html and extract the full embedded JSON blob.
-
-    If save_dir is provided the raw HTML is written to:
-        <save_dir>/ixbrlviewer.html
-
-    The embedded viewer JSON (the parsed data this function returns) is also
-    written separately as:
-        <save_dir>/viewer_data.json
-
-    Both files are skipped if they already exist on disk, so re-running the
-    script does not re-download files that are already present.
-    """
-    if not HAS_BS4:
-        print("BeautifulSoup not installed")
-        return None
-
-    full      = API_BASE + viewer_url
-    fname     = viewer_url.split("/")[-1]
-    html_path = save_dir / "ixbrlviewer.html"       if save_dir else None
-    json_path = save_dir / "viewer_data.json"       if save_dir else None
-
-    # Load from disk if already downloaded
-    if html_path and html_path.exists():
-        print(f"\nUsing cached {html_path}")
-        raw_bytes = html_path.read_bytes()
-    else:
-        print(f"\nDownloading {fname} ...")
-        try:
-            r = http_client.get(full, headers=HEADERS, timeout=120)
-            r.raise_for_status()
-            raw_bytes = r.content
-            print(f"{len(raw_bytes)/1024:.0f} KB downloaded")
-            if html_path:
-                html_path.write_bytes(raw_bytes)
-                print(f"Saved HTML: {html_path}")
-        except Exception as e:
-            print(f"Error: {e}")
-            return None
-
-    # Load parsed viewer JSON from disk if already extracted
-    if json_path and json_path.exists():
-        print(f"Using cached {json_path}")
-        try:
-            return json.loads(json_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"Cache read error, re-parsing: {e}")
-
-    try:
-        soup   = BeautifulSoup(raw_bytes, "lxml")
-        script = soup.find("script", {"type": "application/x.ixbrl-viewer+json"})
-        if not (script and script.string):
-            print("No viewer JSON found in HTML")
-            return None
-        data = json.loads(script.string)
-        print(f"JSON parsed: {len(script.string)/1024:.0f} KB")
-        if json_path:
-            json_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"Saved viewer JSON: {json_path}")
-        return data
-    except Exception as e:
-        print(f"Parse error: {e}")
-        return None
-
-
-def download_oim_json(json_url: str, save_dir: Path | None = None) -> dict | None:
-    """
-    Download the OIM xBRL-JSON facts file.
-
-    If save_dir is provided the file is written to:
-        <save_dir>/report.json
-
-    The file is skipped if it already exists on disk.
-    """
-    full      = API_BASE + json_url
-    fname     = json_url.split("/")[-1]
-    save_path = save_dir / "report.json" if save_dir else None
-
-    if save_path and save_path.exists():
-        print(f"\nUsing cached {save_path}")
-        try:
-            return json.loads(save_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"Cache read error, re-downloading: {e}")
-
-    print(f"\nDownloading {fname} ...")
-    try:
-        r = http_client.get(full, headers=HEADERS, timeout=120)
-        r.raise_for_status()
-        data = r.json()
-        print(f"{len(r.content)/1024:.0f} KB downloaded")
-        if save_path:
-            save_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"Saved OIM JSON: {save_path}")
-        return data
-    except Exception as e:
-        print(f"OIM JSON error: {e}")
-        return None
-
-
-# ============================================================================
-#  STEP 3 - Extract French and English labels from viewer JSON
-# ============================================================================
-
-def extract_labels(viewer_data: dict) -> dict[str, dict]:
-    """
-    Returns {concept: {"fr": ..., "en": ...}} for all concepts in viewer JSON.
-
-    The viewer JSON contains a "concepts" section where each entry has a "labels"
-    dict with two possible keys:
-      "ns0" - OVHcloud's own custom labels (preferred)
-      "std"  - IFRS standard taxonomy labels (fallback)
-    Both contain "fr" and "en" sub-keys.
-
-    Priority order: ns0 first, then std, then any other key present.
-    If only one language is available, it is used for both FR and EN.
-    """
-    if not viewer_data:
-        return {}
-
-    def _find_concepts(obj, depth=0) -> dict:
-        if depth > 8:
-            return {}
-        if isinstance(obj, dict):
-            if "concepts" in obj and isinstance(obj["concepts"], dict) \
-               and len(obj["concepts"]) > 5:
-                return obj["concepts"]
-            for v in obj.values():
-                r = _find_concepts(v, depth + 1)
-                if r:
-                    return r
-        elif isinstance(obj, list):
-            for item in obj[:5]:
-                r = _find_concepts(item, depth + 1)
-                if r:
-                    return r
-        return {}
-
-    concepts_raw = _find_concepts(viewer_data)
-    if not concepts_raw:
-        return {}
-
-    label_map = {}
-    for concept_key, meta in concepts_raw.items():
-        if not isinstance(meta, dict):
-            continue
-        labels = meta.get("labels", {})
-        if not labels:
-            continue
-
-        fr_label = ""
-        en_label = ""
-
-        for priority_key in ["ns0", "std"] + [k for k in labels if k not in ("ns0", "std")]:
-            lv = labels.get(priority_key, {})
-            if not isinstance(lv, dict):
-                continue
-            if not fr_label and lv.get("fr"):
-                fr_label = lv["fr"].strip()
-            if not en_label and lv.get("en"):
-                en_label = lv["en"].strip()
-            if fr_label and en_label:
-                break
-
-        if fr_label or en_label:
-            label_map[concept_key] = {
-                "fr": fr_label or en_label,
-                "en": en_label or fr_label,
-            }
-
-    both = sum(1 for v in label_map.values() if v["fr"] and v["en"])
-    print(f"{len(label_map)} bilingual labels extracted ({both} with both FR+EN)")
-    return label_map
-
-
-# ============================================================================
-#  STEP 4 - Parse all facts from viewer JSON
-# ============================================================================
-
-def parse_all_facts(viewer_data: dict) -> pd.DataFrame:
-    """
-    Parse all numeric facts from viewer JSON into a DataFrame.
-
-    Viewer JSON facts format (Arelle iXBRL viewer):
-    facts = {
-      "fc_173975": {
-        "a": {
-          "c": "ifrs-full:Revenue",        - concept name
-          "p": "2024-09-01/2025-09-01",    - period (duration) or "2025-08-31" (instant)
-          "u": "iso4217:EUR"               - unit
-        },
-        "v": "1084600000",                 - value in raw euros (always)
-        "d": -5                            - decimal precision indicator, NOT a scale factor
-      }
-    }
-
-    Values are always in raw euros. Divided by 1000 to convert to k-euros.
-    The "d" field only describes precision for display; it does not change the value.
-    """
-
-    def _find_facts(obj, depth=0) -> dict:
-        if depth > 8:
-            return {}
-        if isinstance(obj, dict):
-            if "facts" in obj and isinstance(obj["facts"], dict) \
-               and len(obj["facts"]) > 5:
-                sample = list(obj["facts"].values())[:3]
-                if any(isinstance(f, dict) and ("a" in f or "v" in f) for f in sample):
-                    return obj["facts"]
-            for v in obj.values():
-                r = _find_facts(v, depth + 1)
-                if r:
-                    return r
-        elif isinstance(obj, list):
-            for item in obj[:5]:
-                r = _find_facts(item, depth + 1)
-                if r:
-                    return r
-        return {}
-
-    facts_raw = _find_facts(viewer_data)
-    if not facts_raw:
-        print("No facts found in viewer JSON")
-        return pd.DataFrame()
-
-    records = []
-    for fid, fact in facts_raw.items():
-        if not isinstance(fact, dict):
-            continue
-        attrs   = fact.get("a", {})
-        if not isinstance(attrs, dict):
-            continue
-        concept = attrs.get("c", "")
-        period  = str(attrs.get("p", ""))
-        unit    = str(attrs.get("u", ""))
-        raw_val = fact.get("v")
-
-        if not concept or raw_val is None:
-            continue
-
-        try:
-            value_euros = float(str(raw_val).replace(",", ""))
-        except (ValueError, TypeError):
-            continue
-
-        value_ke = value_euros / 1_000
-        ptype    = "instant" if "/" not in period else "duration"
-
-        records.append({
-            "concept":     concept,
-            "value_ke":    value_ke,
-            "period":      period,
-            "period_type": ptype,
-            "unit":        unit,
-        })
-
-    df = pd.DataFrame(records)
-    if df.empty:
-        print("No numeric facts parsed")
-        return df
-
-    print(f"{len(df)} facts ({df['concept'].nunique()} unique concepts)")
-
-    if DEBUG:
-        print("\nALL FACTS:")
-        for concept, grp in df.groupby("concept"):
-            for _, row in grp.iterrows():
-                print(f"  {row['value_ke']:>14,.1f} k€  period={row['period']:<28}  {concept}")
-        print()
-
-    return df
-
-
-# ============================================================================
-#  STEP 5 - Classify facts into financial statements
-# ============================================================================
-
-# Presentation order for balance sheet rows, confirmed from OVHcloud's published PDF.
-# The number assigned to each concept controls sort order in the Excel sheet.
-# Non-current assets: 10-88, Current assets: 100-148, Total: 200+
-
-ASSET_ORDER = {
-    "ifrs-full:Goodwill":                                                          10,
-    "ifrs-full:IntangibleAssetsOtherThanGoodwill":                                 20,
-    "ifrs-full:PropertyPlantAndEquipment":                                         30,
-    "ifrs-full:RightofuseAssets":                                                  40,
-    "ifrs-full:RightofuseAssetsThatDoNotMeetDefinitionOfInvestmentProperty":       40,
-    "ifrs-full:NoncurrentDerivativeFinancialAssets":                               50,
-    "ifrs-full:OtherNoncurrentReceivables":                                        60,
-    "ifrs-full:OtherNoncurrentAssets":                                             65,
-    "ifrs-full:OtherNoncurrentFinancialAssets":                                    70,
-    "ifrs-full:DeferredTaxAssets":                                                 80,
-    "ifrs-full:NoncurrentAssets":                                                  88,
-    "ovhgroupe:CurrentTradesReceivablesAndContractAssets":                        100,
-    "ifrs-full:TradeAndOtherCurrentReceivables":                                  100,
-    "ovhgroupe:OtherReceivablesAndCurrentAssets":                                 110,
-    "ifrs-full:OtherCurrentAssets":                                               110,
-    "ifrs-full:CurrentTaxAssetsCurrent":                                          120,
-    "ifrs-full:CurrentTaxAssets":                                                 120,
-    "ifrs-full:CurrentDerivativeFinancialAssets":                                 130,
-    "ifrs-full:CashAndCashEquivalents":                                           140,
-    "ifrs-full:BalancesWithBanks":                                                140,
-    "ifrs-full:CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition":142,
-    "ifrs-full:CurrentAssets":                                                    148,
-    "ifrs-full:Assets":                                                           200,
-    "ifrs-full:EquityAndLiabilities":                                             200,
+FR_TO_EN = {
+    "Revenu": "Revenue",
+    "REVENU": "REVENUE",
+    "Chiffre d'affaires": "Revenue",
+    "Charges de personnel": "Personnel expenses",
+    "Charges opérationnelles": "Operating expenses",
+    "EBITDA courant": "Current EBITDA",
+    "EBITDA COURANT": "CURRENT EBITDA",
+    "EBITDA courant (1)": "Current EBITDA (1)",
+    "Dotations aux amortissements et dépréciations": "Depreciation and amortisation",
+    "Résultat opérationnel courant": "Current operating income",
+    "RÉSULTAT OPÉRATIONNEL COURANT": "CURRENT OPERATING INCOME",
+    "Autres produits opérationnels non courants": "Other non-current operating income",
+    "Autres charges opérationnelles non courantes": "Other non-current operating expenses",
+    "Résultat opérationnel": "Operating income",
+    "RÉSULTAT OPÉRATIONNEL": "OPERATING INCOME",
+    "Coût de l'endettement financier": "Cost of financial debt",
+    "Autres produits financiers": "Other financial income",
+    "Autres charges financières": "Other financial expenses",
+    "Résultat financier": "Financial result",
+    "RÉSULTAT FINANCIER": "FINANCIAL RESULT",
+    "Résultat avant impôt": "Profit before tax",
+    "RÉSULTAT AVANT IMPÔT": "PROFIT BEFORE TAX",
+    "Impôt sur le résultat": "Income tax expense",
+    "Résultat net consolidé": "Consolidated net income",
+    "Résultat net": "Net income",
+    "RÉSULTAT NET CONSOLIDÉ": "CONSOLIDATED NET INCOME",
+    "Résultat par action": "Earnings per share",
+    "RÉSULTAT PAR ACTION": "EARNINGS PER SHARE",
+    "Résultat de base par action ordinaire (en euros)": "Basic earnings per share (EUR)",
+    "Résultat dilué par action (en euros)": "Diluted earnings per share (EUR)",
+    "Réévaluation des instruments de couverture": "Revaluation of hedging instruments",
+    "Impôt sur les éléments recyclables": "Tax on recyclable items",
+    "Écarts de conversion": "Currency translation differences",
+    "Écarts de conversion (1)": "Currency translation differences (1)",
+    "Éléments recyclables en résultat": "Items recyclable to profit or loss",
+    "Écarts actuariels sur les régimes de retraites à prestations définies": "Actuarial gains/losses on defined benefit plans",
+    "Impôt sur les éléments non recyclables": "Tax on non-recyclable items",
+    "Éléments non recyclables en résultat": "Items not recyclable to profit or loss",
+    "Total des autres éléments du résultat global": "Total other comprehensive income",
+    "Résultat global de la période": "Total comprehensive income for the period",
+    "Goodwill": "Goodwill",
+    "Autres immobilisations incorporelles": "Other intangible assets",
+    "Immobilisations corporelles": "Property, plant and equipment",
+    "Droits d'utilisation relatifs aux contrats de location": "Right-of-use assets",
+    "Instruments financiers dérivés actifs non courants": "Non-current derivative financial assets",
+    "Instruments financiers dérivés actifs": "Derivative financial assets",
+    "Autres créances non courantes": "Other non-current receivables",
+    "Actifs financiers non courants": "Non-current financial assets",
+    "Impôts différés actifs": "Deferred tax assets",
+    "Total actif non courant": "Total non-current assets",
+    "Clients": "Trade receivables",
+    "Autres créances et actifs courants": "Other receivables and current assets",
+    "Actifs d'impôts courants": "Current tax assets",
+    "Instruments financiers dérivés actifs courants": "Current derivative financial assets",
+    "Trésorerie et équivalents de trésorerie": "Cash and cash equivalents",
+    "Total actif courant": "Total current assets",
+    "Total actif": "TOTAL ASSETS",
+    "TOTAL ACTIF": "TOTAL ASSETS",
+    "Capital social": "Share capital",
+    "Primes d'émission": "Share premium",
+    "Réserves et report à nouveau": "Reserves and retained earnings",
+    "Capitaux propres": "Total equity",
+    "Dettes financières non courantes": "Non-current financial debt",
+    "Dettes locatives non courantes": "Non-current lease liabilities",
+    "Instruments financiers dérivés passifs non courants": "Non-current derivative financial liabilities",
+    "Autres passifs financiers non courants": "Other non-current financial liabilities",
+    "Provisions non courantes": "Non-current provisions",
+    "Impôts différés passifs": "Deferred tax liabilities",
+    "Autres passifs non courants": "Other non-current liabilities",
+    "Total passif non courant": "Total non-current liabilities",
+    "Dettes financières courantes": "Current financial debt",
+    "Dettes locatives courantes": "Current lease liabilities",
+    "Provisions courantes": "Current provisions",
+    "Fournisseurs": "Trade payables",
+    "Passifs d'impôts courants": "Current tax liabilities",
+    "Instruments financiers dérivés passifs": "Current derivative financial liabilities",
+    "Autres passifs courants": "Other current liabilities",
+    "Total passif courant": "Total current liabilities",
+    "Total passif et capitaux propres": "TOTAL EQUITY AND LIABILITIES",
+    "TOTAL PASSIF ET CAPITAUX PROPRES": "TOTAL EQUITY AND LIABILITIES",
+    "Capacité d'autofinancement": "Operating cash flow before working capital",
+    "Variation du besoin en fonds de roulement lié à l'activité": "Change in working capital",
+    "Impôt versé": "Income tax paid",
+    "Flux de trésorerie liés à l'activité": "Cash flow from operating activities",
+    "FLUX DE TRÉSORERIE LIÉS À L'ACTIVITÉ": "CASH FLOW FROM OPERATING ACTIVITIES",
+    "Décaissements liés aux acquisitions d'immobilisations corporelles et incorporelles": "Payments for PP&E and intangible assets",
+    "Produits de cession d'immobilisations": "Proceeds from disposal of assets",
+    "Flux nets de trésoreries affectés aux opérations d'investissement": "Cash flow from investing activities",
+    "Flux de trésorerie liés aux opérations de financement": "Cash flow from financing activities",
+    "Incidence des variations des cours des devises": "Effect of exchange rate changes",
+    "Variation de la trésorerie": "Change in cash and cash equivalents",
+    "Trésorerie d'ouverture": "Opening cash balance",
+    "Trésorerie de clôture": "Closing cash balance",
+    "Ajustement des éléments du résultat net :": "Adjustments to net income:",
+    "Variations des provisions": "Changes in provisions",
+    "Résultat financier (hors écarts de change réalisés)": "Financial result (excl. realised FX)",
+    "Rachat d'actions propres": "Purchase of treasury shares",
+    "Augmentation des dettes financières": "Increase in financial debt",
+    "Remboursement des dettes financières": "Repayment of financial debt",
+    "Remboursement des dettes locatives": "Repayment of lease liabilities",
+    "Intérêts financiers payés": "Interest paid",
+    "Autres éléments du résultat global": "Other comprehensive income",
+    "Résultat global": "Total comprehensive income",
+    "Paiements en actions et actionnariat salarié": "Share-based payments",
+    "Paiements en actions et actionnariat salarié (1)": "Share-based payments (1)",
+    "Élimination des actions propres": "Treasury shares",
+    "Transactions avec les actionnaires": "Transactions with shareholders",
+    "Autres variations": "Other changes",
+    "Matériel informatique": "IT equipment",
+    "Infrastructure des centres de donnée": "Data centre infrastructure",
+    "Infrastructure des centres de données": "Data centre infrastructure",
+    "Adresses IP et réseaux": "IP addresses and networks",
+    "Réseau": "Network",
+    "Adresses IP": "IP addresses",
+    "Total capex pour les datacenters": "Total capex for data centres",
+    "Total capex pour les centres de donnees": "Total capex for data centres",
+    "Total capex pour les centres de données": "Total capex for data centres",
+    "TOTAL DES DEPENSES D'INVESTISSEMENT (CAPEX) POUR LES CENTRES DE DONNES": "TOTAL CAPEX FOR DATA CENTRES",
+    "TOTAL DES DEPENSES D'INVESTISSEMENT (CAPEX) POUR LES CENTRES DE DONNÉES": "TOTAL CAPEX FOR DATA CENTRES",
+    "Autres": "Other",
+    "Total des dépenses d'investissements": "Total capital expenditure",
+    "Total des dépenses d'investissement": "Total capital expenditure",
+    "Total des dépenses d'investissements (capex) pour les datacenters": "Total capex for data centres",
+    "Total capex pour les centres de données": "Total capex for data centres",
+    "TOTAL DES DEPENSES D'INVESTISSEMENT (CAPEX)": "TOTAL CAPITAL EXPENDITURE (CAPEX)",
+    "Total des dépenses d'investissement (capex)": "Total capital expenditure (capex)",
+    "Achats consommés": "Purchases consumed",
+    "Charges externes": "External charges",
+    "Impôts et taxes": "Taxes and duties",
+    "Dépréciations sur créances commerciales et autres actifs courants et autres provisions": "Impairment of trade receivables and other current assets and other provisions",
+    "CHARGES OPERATIONNELLES": "OPERATING EXPENSES",
 }
 
-# Equity: 10-48, Non-current liabilities: 100-168, Current liabilities: 200-268, Total: 300
-
-LIABILITY_ORDER = {
-    "ifrs-full:IssuedCapital":                                                     10,
-    "ifrs-full:SharePremium":                                                      20,
-    "ovhgroupe:ReservesAndRetainedEarnings":                                       30,
-    "ifrs-full:Reserves":                                                          30,
-    "ifrs-full:RetainedEarningsProfitLossForReportingPeriod":                      40,
-    "ifrs-full:ProfitLoss":                                                        42,
-    "ifrs-full:Equity":                                                            48,
-    "ifrs-full:LongtermBorrowings":                                               100,
-    "ifrs-full:NoncurrentLeaseLiabilities":                                       110,
-    "ifrs-full:NoncurrentPortionOfNoncurrentLeaseLiabilities":                    110,
-    "ifrs-full:NoncurrentDerivativeFinancialLiabilities":                         120,
-    "ifrs-full:OtherNoncurrentFinancialLiabilities":                              130,
-    "ifrs-full:NoncurrentProvisions":                                             140,
-    "ifrs-full:DeferredTaxLiabilities":                                           150,
-    "ifrs-full:OtherNoncurrentLiabilities":                                       160,
-    "ifrs-full:NoncurrentLiabilities":                                            168,
-    "ifrs-full:CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings":         200,
-    "ifrs-full:CurrentLeaseLiabilities":                                          210,
-    "ifrs-full:CurrentPortionOfNoncurrentLeaseLiabilities":                       210,
-    "ifrs-full:CurrentProvisions":                                                220,
-    "ifrs-full:TradeAndOtherCurrentPayablesToTradeSuppliers":                     230,
-    "ifrs-full:TradeAndOtherCurrentPayables":                                     230,
-    "ifrs-full:CurrentTaxLiabilitiesCurrent":                                     240,
-    "ifrs-full:CurrentTaxLiabilities":                                            240,
-    "ifrs-full:CurrentDerivativeFinancialLiabilities":                            250,
-    "ifrs-full:OtherCurrentLiabilities":                                          260,
-    "ifrs-full:CurrentLiabilities":                                               268,
-    "ifrs-full:EquityAndLiabilities":                                             300,
-}
-
-CF_KEYWORDS = [
-    "cashflows", "cashflow", "proceedsfrom", "paymentsto", "paymentsof",
-    "adjustmentsfor", "interestpaid", "incometaxespaid",
-    "effectofexchange", "increasedecrease", "receiptsdisbursements",
-    "payments", "receipts", "disbursements",
+TABLE_SIGNATURES = [
+    ("Income Statement",  "Résultat opérationnel courant",  10),
+    ("Income Statement",  "Résultat opérationnel",          11),
+    ("Income Statement",  "EBITDA courant",                 12),
+    ("OCI",               "résultat global",                20),
+    ("Assets",            "Total actif non",                30),
+    ("Assets",            "Total actif courant",            31),
+    ("Liabilities",       "Total passif non",               40),
+    ("Liabilities",       "Total passif courant",           41),
+    ("Liabilities",       "Capitaux propres",               42),
+    ("Changes in Equity", "Transactions avec les",          50),
+    ("Changes in Equity", "Paiements en actions",           51),
+    ("Cash Flow",         "Flux de trésorerie liés",        60),
+    ("Cash Flow",         "Variation du besoin",            61),
+    ("Cash Flow",         "Capacité d'autofinancement",     62),
+    ("Cash Flow",         "Trésorerie de clôture",          63),
+    ("Cash Flow",         "Trésorerie d'ouverture",         64),
+    ("Capex Breakdown",   "Matériel informatique",          70),
+    ("Capex Breakdown",   "Infrastructure des centres",     71),
+    ("Operating Expenses","Achats consommés",               80),
+    ("Operating Expenses","Charges externes",               81),
 ]
-
-IS_KEYWORDS = [
-    "revenue", "profit", "loss", "income", "expense", "benefit",
-    "depreciation", "amortisation", "amortization", "impairment",
-    "financecost", "financeincomes", "interestexpense", "taxexpense",
-    "comprehensive", "ebitda", "operatingincome",
-]
-
-
-def classify(concept: str, period_type: str) -> str:
-    """
-    Classify a fact into: Income Statement | Cash Flow | Assets | Liabilities | Other
-
-    The fundamental rule:
-      - Instant period (a single date)  => balance sheet item
-      - Duration period (a date range)  => flow item (income statement or cash flow)
-
-    For balance sheet items the concept local name is matched against keyword lists.
-    Liabilities are checked before assets because some names overlap (e.g. "tax").
-
-    For flow items, cash flow keywords are checked first; anything that matches
-    income statement keywords is assigned to Income Statement. OVHcloud-specific
-    concepts (prefixed ovhgroupe:) have their own keyword sets.
-    """
-    local = concept.split(":")[-1].lower()
-
-    if period_type == "instant":
-        liab_kw = [
-            "liabilit", "payable", "payables",
-            "debt", "borrowing", "longtermborrowings", "currentborrowings",
-            "provision", "provisions",
-            "equity", "issuedcapital", "sharepremium",
-            "reserves", "retainedearnings", "profitloss",
-            "retainedearningsprofitloss",
-            "derivativefinancialliabilit",
-            "currenttaxliabilit",
-            "deferredtaxliabilit",
-            "othercurrentliabilit",
-            "othernoncurrentliabilit",
-            "othernoncurrentfinancialliabilit",
-            "equityandliabilities",
-            "noncurrentliabilities",
-            "currentliabilities",
-        ]
-        asset_kw = [
-            "asset", "assets",
-            "goodwill",
-            "intangible",
-            "property", "propertyplant",
-            "rightofuse", "rightofuseasset",
-            "receivable", "receivables",
-            "cashandcash", "cashequivalents",
-            "deferredtaxasset",
-            "othernoncurrentreceivable",
-            "noncurrentfinancialasset",
-            "derivativefinancialasset",
-            "currenttaxasset",
-            "noncurrentassets",
-            "currentassets",
-            "balanceswithbanks",
-        ]
-
-        if any(k in local for k in liab_kw):
-            return "Liabilities"
-        if any(k in local for k in asset_kw):
-            return "Assets"
-
-        if "ovhgroupe" in concept.lower():
-            if any(k in local for k in ["receivable", "tradereceivable", "currenttrade"]):
-                return "Assets"
-            if any(k in local for k in ["reserves", "retained"]):
-                return "Liabilities"
-            return "Assets"
-
-        return "Assets"
-
-    if any(k in local for k in CF_KEYWORDS):
-        return "Cash Flow"
-    if any(k in local for k in IS_KEYWORDS):
-        return "Income Statement"
-
-    if "ovhgroupe" in concept.lower():
-        if any(k in local for k in ["ebitda", "operating", "income", "revenue", "expense",
-                                     "financial", "netfinancial"]):
-            return "Income Statement"
-        if any(k in local for k in ["cash", "payments", "proceeds", "receipts",
-                                     "loans", "advances", "guarantee", "transaction"]):
-            return "Cash Flow"
-
-    return "Other"
-
-
-def period_to_fy(period: str) -> str | None:
-    """
-    Map a period string to a fiscal year label.
-
-    OVH fiscal year ends August 31 each year.
-
-    Duration  "2024-09-01/2025-08-31"  -> end date Aug 31 2025  -> FY2025
-    Instant   "2025-08-31"             -> Aug 31 2025            -> FY2025
-    Instant   "2025-09-01"             -> bs_instant for FY2025  -> FY2025
-                                          (subtract 1 day to reach Aug 31)
-
-    Returns None if the period string cannot be parsed.
-    """
-    period = period.strip()
-    end    = period.split("/")[1] if "/" in period else period
-    try:
-        d = datetime.strptime(end[:10], "%Y-%m-%d")
-    except ValueError:
-        return None
-    if d.month == 9 and d.day == 1:
-        d = d - timedelta(days=1)
-    return f"FY{d.year}"
-
-
-def group_facts_by_year(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """
-    Split a facts DataFrame (which may contain multiple years because each
-    filing includes current-year AND prior-year comparative data) into a dict
-    keyed by fiscal year label.
-
-    e.g. the FY2025 filing contains FY2025 and FY2024 facts side by side.
-    This function separates them into {"FY2025": df25, "FY2024": df24}.
-    """
-    if df.empty:
-        return {}
-    df = df.copy()
-    df["_fy"] = df["period"].apply(period_to_fy)
-    df = df[df["_fy"].notna()]
-    groups = {}
-    for fy_label, sub in df.groupby("_fy"):
-        groups[fy_label] = sub.drop(columns=["_fy"]).reset_index(drop=True)
-    return groups
-
-
-def deduplicate(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Remove duplicate rows from a facts DataFrame.
-
-    Step 1: Drop exact duplicates where concept + period + value_ke are identical.
-    Step 2: For the same concept + period with different values (which happens when
-            a total is reported alongside segment breakdowns), keep the row with the
-            largest absolute value - that is the consolidated total.
-    """
-    if df.empty:
-        return df
-
-    df = df.drop_duplicates(subset=["concept", "period", "value_ke"]).copy()
-
-    result = []
-    for (concept, period), grp in df.groupby(["concept", "period"]):
-        if len(grp) == 1:
-            result.append(grp.iloc[0])
-        else:
-            vals = pd.to_numeric(grp["value_ke"], errors="coerce")
-            idx  = vals.abs().idxmax()
-            result.append(grp.loc[idx])
-
-    return pd.DataFrame(result).reset_index(drop=True)
-
-
-def build_table(df_year: pd.DataFrame,
-                label_map: dict,
-                statement: str) -> pd.DataFrame:
-    """
-    Build a complete financial statement table for one fiscal year.
-
-    df_year is already scoped to a single fiscal year by group_facts_by_year().
-
-    Steps:
-    1. classify()       - assign each row to Income Statement / Cash Flow /
-                          Assets / Liabilities based on period_type and concept name
-    2. Statement filter - keep rows for the requested statement; for Assets and
-                          Liabilities run a secondary keyword pass for any rows
-                          that the classifier could not place clearly
-    3. deduplicate()    - remove exact copies and keep the largest value when the
-                          same concept+period appears under multiple dimensions
-    4. Label attachment - map concept -> French and English label; fall back to
-                          CamelCase splitting if no label is found
-    5. Zero filter      - drop rows with abs(value_ke) < 0.01
-    6. Ordering         - ASSET_ORDER / LIABILITY_ORDER for balance sheet tabs;
-                          sort by absolute value for Income Statement / Cash Flow
-    7. Section tagging  - tag each row as non-current / current / equity / total
-                          so write_excel() can insert section-header rows
-
-    Returns DataFrame: fr_label, en_label, concept, value_ke, period, section
-    """
-    df = df_year.copy()
-    if df.empty:
-        return pd.DataFrame()
-
-    df["statement"] = df.apply(
-        lambda r: classify(r["concept"], r["period_type"]), axis=1)
-
-    if statement == "Assets":
-        sub = df[df["statement"] == "Assets"].copy()
-        bs_unsorted = df[(df["statement"] == "Balance Sheet") &
-                         (df["period_type"] == "instant")]
-        if not bs_unsorted.empty:
-            liab_local = ["liabilit", "payable", "equity", "capital", "premium",
-                          "reserves", "profitloss", "provision", "borrowing"]
-            mask = ~bs_unsorted["concept"].str.split(":").str[-1].str.lower().apply(
-                lambda x: any(k in x for k in liab_local))
-            sub = pd.concat([sub, bs_unsorted[mask]], ignore_index=True)
-
-    elif statement == "Liabilities":
-        sub = df[df["statement"] == "Liabilities"].copy()
-        bs_unsorted = df[(df["statement"] == "Balance Sheet") &
-                         (df["period_type"] == "instant")]
-        if not bs_unsorted.empty:
-            liab_local = ["liabilit", "payable", "equity", "capital", "premium",
-                          "reserves", "profitloss", "provision", "borrowing"]
-            mask = bs_unsorted["concept"].str.split(":").str[-1].str.lower().apply(
-                lambda x: any(k in x for k in liab_local))
-            sub = pd.concat([sub, bs_unsorted[mask]], ignore_index=True)
-
-    else:
-        sub = df[df["statement"] == statement].copy()
-
-    if sub.empty:
-        return pd.DataFrame()
-
-    sub = deduplicate(sub)
-    sub = sub.copy()
-
-    sub["fr_label"] = sub["concept"].map(lambda c: label_map.get(c, {}).get("fr", ""))
-    sub["en_label"] = sub["concept"].map(lambda c: label_map.get(c, {}).get("en", ""))
-
-    def _fallback_label(row):
-        local = row["concept"].split(":")[-1]
-        return re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', local)
-
-    mask = sub["fr_label"] == ""
-    sub.loc[mask, "fr_label"] = sub[mask].apply(_fallback_label, axis=1)
-    mask = sub["en_label"] == ""
-    sub.loc[mask, "en_label"] = sub[mask].apply(_fallback_label, axis=1)
-
-    sub = sub[sub["value_ke"].abs() >= 0.01].copy()
-
-    if statement == "Assets":
-        order_map = ASSET_ORDER
-    elif statement == "Liabilities":
-        order_map = LIABILITY_ORDER
-    else:
-        order_map = {}
-
-    if order_map:
-        def _pres_sort(row):
-            pos = order_map.get(row["concept"])
-            if pos is not None:
-                return (pos, 0)
-            return (55, -abs(row["value_ke"]))
-        sub["_sk"] = sub.apply(_pres_sort, axis=1)
-        sub = sub.sort_values("_sk").drop(columns=["_sk"])
-    else:
-        sub["_abs"] = sub["value_ke"].abs()
-        sub = sub.sort_values("_abs", ascending=False).drop(columns=["_abs"])
-
-    def _section_of(row):
-        c = row["concept"]
-        if statement == "Assets":
-            o = ASSET_ORDER.get(c, 55)
-            if o < 88:  return "non-current"
-            if o < 200: return "current"
-            return "total"
-        elif statement == "Liabilities":
-            o = LIABILITY_ORDER.get(c, 55)
-            if o < 48:  return "equity"
-            if o < 168: return "non-current"
-            if o < 300: return "current"
-            return "total"
-        return "line"
-
-    sub["section"] = sub.apply(_section_of, axis=1)
-    return sub[["fr_label", "en_label", "concept", "value_ke", "period", "section"]].reset_index(drop=True)
-
-
-# ============================================================================
-#  STEP 6 - py-xbrl label enrichment
-# ============================================================================
-
-def pyxbrl_enrich_labels(json_url: str, label_map: dict,
-                          cache_dir: str = ".xbrl_cache") -> dict:
-    """
-    Use py-xbrl to resolve IFRS taxonomy labels for concepts still missing
-    French or English labels after extract_labels().
-    Operates only on concepts not already present in label_map.
-    """
-    if not HAS_PYXBRL or not json_url:
-        return label_map
-
-    full_url = API_BASE + json_url
-    print(f"\n[py-xbrl] Enriching labels from taxonomy ...")
-    try:
-        cache    = HttpCache(cache_dir)
-        instance = XbrlInstance.create_from_url(full_url, cache)
-
-        count = 0
-        for fact in instance.facts:
-            if not isinstance(fact, NumericFact):
-                continue
-            prefix = fact.concept.prefix or ""
-            local  = str(fact.concept.name)
-            key    = f"{prefix}:{local}" if prefix else local
-            if key in label_map:
-                continue
-
-            lbs = {}
-            try:
-                lbs = fact.concept.labels
-            except Exception:
-                pass
-
-            fr = (lbs.get("fr", {}).get("standard") or
-                  lbs.get("fr", {}).get("label", ""))
-            en = (lbs.get("en", {}).get("standard") or
-                  lbs.get("en", {}).get("label", ""))
-
-            if en or fr:
-                label_map[key] = {"fr": fr or en, "en": en or fr}
-                count += 1
-
-        print(f"py-xbrl added {count} additional labels")
-    except Exception as e:
-        print(f"py-xbrl enrichment failed: {e}")
-
-    return label_map
-
-
-# ============================================================================
-#  STEP 7 - Write Excel with XlsxWriter
-# ============================================================================
 
 SHEET_STYLES = {
-    "Income Statement": {"hdr_bg": "#1A4080", "alt_bg": "#EDF3FC"},
-    "Cash Flow":        {"hdr_bg": "#145A32", "alt_bg": "#E9F7EF"},
-    "Assets":           {"hdr_bg": "#6E4B00", "alt_bg": "#FEF9E7"},
-    "Liabilities":      {"hdr_bg": "#4A235A", "alt_bg": "#F5EEF8"},
+    "Income Statement":   {"hdr_bg": "#1A4080", "alt_bg": "#EDF3FC"},
+    "OCI":                {"hdr_bg": "#2E4057", "alt_bg": "#E8EDF2"},
+    "Assets":             {"hdr_bg": "#6E4B00", "alt_bg": "#FEF9E7"},
+    "Liabilities":        {"hdr_bg": "#4A235A", "alt_bg": "#F5EEF8"},
+    "Changes in Equity":  {"hdr_bg": "#1B4332", "alt_bg": "#E9F7EF"},
+    "Cash Flow":          {"hdr_bg": "#145A32", "alt_bg": "#E9F7EF"},
+    "Capex Breakdown":    {"hdr_bg": "#7B3F00", "alt_bg": "#FFF5E6"},
+    "Operating Expenses": {"hdr_bg": "#8B0000", "alt_bg": "#FDE8E8"},
 }
 
+TOTAL_KEYWORDS = [
+    "total actif", "total passif", "capitaux propres", "résultat opérationnel",
+    "résultat net", "résultat financier", "résultat avant", "résultat global",
+    "ebitda", "flux de trésorerie", "flux nets", "variation de la trésorerie",
+    "trésorerie de clôture", "trésorerie d'ouverture", "capacité d'autofinancement",
+    "total actif non", "total actif courant", "total passif non", "total passif courant",
+    "transactions avec", "total capex", "total des dépenses", "total des depenses",
+    "charges opérationnelles", "charges operationnelles",
+]
 
-def write_excel(all_tables: dict, output: str):
-    """
-    Write all financial statements to a formatted Excel workbook.
 
-    all_tables structure:
-      {
-        "Income Statement": {"FY2025": df, "FY2024": df, "FY2023": df, ...},
-        "Cash Flow":        {"FY2025": df, ...},
-        "Assets":           {"FY2025": df, ...},
-        "Liabilities":      {"FY2025": df, ...},
-      }
+def _get_english_label(fr_label: str) -> str:
+    if not fr_label:
+        return ""
+    en = FR_TO_EN.get(fr_label)
+    if en:
+        return en
+    stripped = re.sub(r"\s*\(\d+\)\s*$", "", fr_label).strip()
+    en = FR_TO_EN.get(stripped)
+    if en:
+        return en
+    fr_lower = fr_label.lower().strip()
+    for k, v in FR_TO_EN.items():
+        if k.lower().strip() == fr_lower:
+            return v
+    if len(fr_label) > 20:
+        for k, v in FR_TO_EN.items():
+            if k.startswith(fr_label[:30]) or fr_label.startswith(k[:30]):
+                return v
+    return ""
 
-    Column layout per sheet (N = number of fiscal years):
-      Col 0      : French label
-      Col 1      : English label
-      Col 2..N+1 : Year values, most recent first (one column per year)
-      Col N+2    : XBRL concept identifier
 
-    No YoY change columns are written - only the raw values from each filing.
-    """
+def _detect_unit_and_normalize(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return rows
+    header_text = " ".join(rows[0]).lower()
+    if "millions" not in header_text:
+        return rows
+    result = []
+    for ri, row in enumerate(rows):
+        new_row = list(row)
+        if ri == 0:
+            for ci, cell in enumerate(new_row):
+                new_row[ci] = cell.replace("millions", "milliers").replace("Millions", "Milliers")
+            result.append(new_row)
+            continue
+        for ci in range(len(new_row)):
+            cell = new_row[ci]
+            if not cell or ci == 0:
+                continue
+            if ci == 1 and re.match(r"^[\d.]+$", cell.strip()) and "." in cell:
+                continue
+            cell_stripped = cell.strip()
+            is_parens = cell_stripped.startswith("(") and cell_stripped.endswith(")")
+            num = _parse_french_number(cell)
+            if num is not None:
+                abs_val = abs(num) * 1000
+                if abs_val == int(abs_val):
+                    formatted = f"{int(abs_val):,}".replace(",", " ")
+                else:
+                    formatted = f"{abs_val:,.1f}".replace(",", " ")
+                if is_parens:
+                    new_row[ci] = f"({formatted})"
+                elif num < 0:
+                    new_row[ci] = f"-{formatted}"
+                else:
+                    new_row[ci] = formatted
+        result.append(new_row)
+    return result
+
+
+def _add_english_column(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return rows
+    result = []
+    for ri, row in enumerate(rows):
+        new_row = list(row)
+        if ri == 0:
+            new_row.insert(1, "Label (English)")
+        else:
+            new_row.insert(1, _get_english_label(row[0] if row else ""))
+        result.append(new_row)
+    return result
+
+
+def _parse_french_number(text: str):
+    t = text.strip().replace("\xa0", "").replace("\u202f", "").replace(" ", "")
+    if not t or t in ("-", "—", "–", "(-)", "pas", ""):
+        return None
+    negative = t.startswith("(") and t.endswith(")")
+    t = t.strip("()")
+    t = t.replace(",", ".")
+    t = re.sub(r"[^\d.\-]", "", t)
+    if not t:
+        return None
+    try:
+        val = float(t)
+        return -val if negative else val
+    except ValueError:
+        return None
+
+
+def _is_total_row(label: str) -> bool:
+    label_lower = label.lower().strip()
+    return any(kw in label_lower for kw in TOTAL_KEYWORDS)
+
+
+def _is_number_cell(text: str) -> bool:
+    t = text.strip().replace("\xa0", "").replace(" ", "").replace(",", ".").strip("()")
+    if not t or t in ("-", "—", "–"):
+        return True
+    try:
+        float(t)
+        return True
+    except ValueError:
+        return False
+
+
+def api_discover(lei: str) -> list[dict]:
+    url = f"{API_BASE}/api/filings"
+    print(f"\nGET {url}  filter[entity.identifier]={lei}")
+    r = requests.get(
+        url,
+        params={"filter[entity.identifier]": lei, "page[size]": 50},
+        headers=HEADERS,
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+    filings = data.get("data", [])
+    total = data.get("meta", {}).get("count", "?")
+    print(f"{len(filings)} filing(s) returned (total: {total})")
+    attrs = []
+    for f in filings:
+        a = dict(f.get("attributes", {}))
+        a["_id"] = f.get("id", "")
+        attrs.append(a)
+    attrs.sort(key=lambda x: x.get("period_end", ""), reverse=True)
+    for a in attrs:
+        print(
+            f"  period={a.get('period_end')}  "
+            f"report: {'yes' if a.get('report_url') else 'no'}  "
+            f"errors={a.get('error_count', 0)}"
+        )
+    return attrs
+
+
+def download_report(filing: dict, save_dir: Path) -> Path | None:
+    report_url = filing.get("report_url", "")
+    if not report_url:
+        print("  No report_url in filing metadata")
+        return None
+    save_path = save_dir / "report_doc.html"
+    if save_path.exists():
+        print(f"  [cache] {save_path.name} ({save_path.stat().st_size / 1e6:.1f} MB)")
+        return save_path
+    full_url = API_BASE + report_url
+    print(f"  Downloading report: {report_url.split('/')[-1]} ...")
+    r = requests.get(full_url, headers=HEADERS, timeout=180)
+    r.raise_for_status()
+    save_path.write_bytes(r.content)
+    print(f"  Saved: {save_path.name} ({len(r.content) / 1e6:.1f} MB)")
+    return save_path
+
+
+def _identify_table(tbl_text: str) -> str | None:
+    tbl_lower = tbl_text.lower()
+    matches = []
+    for sheet_name, keyword, priority in TABLE_SIGNATURES:
+        if keyword.lower() in tbl_lower:
+            matches.append((priority, sheet_name))
+    if not matches:
+        return None
+    matches.sort()
+    best = matches[0][1]
+    if best == "Operating Expenses":
+        if "ebitda" in tbl_lower or "résultat opérationnel" in tbl_lower:
+            return "Income Statement"
+        if not ("achats consom" in tbl_lower and "charges externes" in tbl_lower):
+            return None
+    if best == "Capex Breakdown":
+        if "capex" not in tbl_lower and "dépenses d'investissement" not in tbl_lower:
+            return None
+    return best
+
+
+def _parse_html_table(tbl) -> list[list[str]]:
+    rows = []
+    for tr in tbl.find_all("tr"):
+        cells = []
+        for td in tr.find_all(["td", "th"]):
+            text = td.get_text(" ", strip=True).replace("\xa0", " ")
+            text = re.sub(r"\s+", " ", text).strip()
+            cells.append(text)
+        if cells:
+            rows.append(cells)
+    if rows:
+        max_cols = max(len(r) for r in rows)
+        if max_cols >= 3:
+            rows = [r for r in rows if len(r) >= 2 or r == rows[0]]
+    return rows
+
+
+def extract_section_tables(report_path: Path, fy_label: str) -> dict[str, list[list[str]]]:
+    content = report_path.read_text(encoding="utf-8", errors="replace")
+    soup = BeautifulSoup(content, "html.parser")
+    tables = soup.find_all("table")
+    if tables:
+        return _extract_from_html_tables(soup, tables, content)
+    return _extract_from_span_text(content)
+
+
+def _extract_from_html_tables(soup, tables, content) -> dict[str, list[list[str]]]:
+    candidates: list[tuple[int, str, list[list[str]], bool, int]] = []
+    for i, tbl in enumerate(tables):
+        rows = tbl.find_all("tr")
+        if len(rows) < 4:
+            continue
+        tbl_text = tbl.get_text(" ", strip=True)
+        sheet_name = _identify_table(tbl_text)
+        if not sheet_name:
+            continue
+        parsed_rows = _parse_html_table(tbl)
+        if not parsed_rows or len(parsed_rows) < 3:
+            continue
+        header_text = " ".join(parsed_rows[0]).lower()
+        has_notes = "notes" in header_text
+        if not re.search(r"\d{4}", header_text):
+            continue
+        candidates.append((i, sheet_name, parsed_rows, has_notes, len(parsed_rows)))
+
+    result: dict[str, list[list[str]]] = {}
+    used_indices: set = set()
+    target_types = [
+        "Income Statement", "Assets", "Liabilities",
+        "Cash Flow", "Capex Breakdown", "Operating Expenses",
+    ]
+    for target in target_types:
+        type_candidates = [
+            (i, name, rows, has_notes, nrows)
+            for i, name, rows, has_notes, nrows in candidates
+            if name == target and i not in used_indices
+        ]
+        if not type_candidates:
+            continue
+        note_tables = ("Operating Expenses", "Capex Breakdown")
+        if target in note_tables:
+            type_candidates.sort(key=lambda x: x[4])
+        else:
+            type_candidates.sort(key=lambda x: (-int(x[3]), -x[4]))
+        best = type_candidates[0]
+        idx, name, parsed_rows, has_notes, nrows = best
+        result[name] = parsed_rows
+        used_indices.add(idx)
+        print(f"    Table {idx} -> {name}: {nrows} rows{'  (with Notes col)' if has_notes else ''}")
+        if target == "Changes in Equity" and len(type_candidates) > 1:
+            second = type_candidates[1]
+            idx2, _, rows2, _, nrows2 = second
+            key2 = f"{name} (2)"
+            result[key2] = rows2
+            used_indices.add(idx2)
+            print(f"    Table {idx2} -> {key2}: {nrows2} rows")
+
+    print(f"  {len(result)} financial tables extracted")
+    return result
+
+
+def _extract_note_table_from_flat(
+    flat: str, start_marker: str, end_marker: str, row_labels: list[str]
+) -> list[list[str]]:
+    def _make_accent_pattern(text: str) -> str:
+        result = []
+        for ch in text:
+            if ch.lower() in "eéèêë":
+                result.append("[eéèêëEÉÈÊË]")
+            elif ch.lower() in "aàâä":
+                result.append("[aàâäAÀÂÄ]")
+            elif ch.lower() in "oôö":
+                result.append("[oôöOÔÖ]")
+            elif ch.lower() in "uùûü":
+                result.append("[uùûüUÙÛÜ]")
+            elif ch.lower() in "iîï":
+                result.append("[iîïIÎÏ]")
+            elif ch.lower() in "cç":
+                result.append("[cçCÇ]")
+            elif ch in r"\.^$*+?{}[]|()":
+                result.append("\\" + ch)
+            else:
+                result.append(ch)
+        return "".join(result)
+
+    start_idx = -1
+    for m in re.finditer(re.escape(start_marker), flat, re.IGNORECASE):
+        after = flat[m.start(): m.start() + 400]
+        if re.search(r"\(en\s+(?:millions|milliers)", after, re.IGNORECASE):
+            start_idx = m.start()
+            break
+    if start_idx < 0:
+        return []
+
+    end_idx = -1
+    search_from = start_idx + len(start_marker)
+    for m in re.finditer(re.escape(end_marker), flat[search_from:], re.IGNORECASE):
+        end_idx = search_from + m.end() + 200
+        break
+    if end_idx < 0:
+        end_idx = min(start_idx + 5000, len(flat))
+
+    block = flat[start_idx:end_idx]
+    unit_m = re.search(r"\(en\s+(millions|milliers)\s+d.euros\)", block, re.IGNORECASE)
+    if not unit_m:
+        return []
+
+    unit_text = unit_m.group(0)
+    after_unit = block[unit_m.end():]
+    year_matches = list(re.finditer(r"\b(\d{4})\b", after_unit[:60]))
+    if len(year_matches) < 2:
+        return []
+
+    years = [ym.group(1) for ym in year_matches[:2]]
+    rows = [[unit_text] + years]
+
+    search_from = 0
+    for label in row_labels:
+        label_pattern = _make_accent_pattern(label)
+        label_m = re.search(label_pattern, block[search_from:], re.IGNORECASE)
+        if not label_m:
+            short_pat = _make_accent_pattern(label[:30])
+            label_m = re.search(short_pat, block[search_from:], re.IGNORECASE)
+            if not label_m:
+                continue
+
+        abs_start = search_from + label_m.start()
+        abs_end = search_from + label_m.end()
+        actual_label = block[abs_start:abs_end]
+        after_label = block[abs_end:]
+
+        num_pat = r"\(?\s*\d[\d\s]*(?:,\d+)?\s*\)?"
+        nums = []
+        last_num_end = 0
+        for nm in re.finditer(num_pat, after_label):
+            val = nm.group().strip()
+            if val and re.search(r"\d", val):
+                stripped = val.strip().strip("() ")
+                if re.match(r"^\d$", stripped):
+                    continue
+                nums.append(val)
+                last_num_end = nm.end()
+                if len(nums) >= 2:
+                    break
+
+        row = [actual_label] + nums[:2]
+        while len(row) < 3:
+            row.append("")
+        rows.append(row)
+        search_from = abs_end + last_num_end
+
+    return rows if len(rows) > 1 else []
+
+
+def _build_rows_from_entries(block: str, entries: list[dict], sheet_name: str) -> list[list[str]]:
+    m = re.search(r"\(en\s+(?:milliers|millions)\s+d.euros\)\s*(Notes)?\s*", block)
+    if not m:
+        return []
+
+    title = block[: m.start()].strip()
+    after_header_text = block[m.end():]
+    year_matches = list(re.finditer(r"(?:31\s+août\s+)?(\d{4})", after_header_text[:80]))
+    years = [ym.group(1) for ym in year_matches]
+    n_years = len(years)
+    if n_years == 0:
+        return []
+
+    has_notes = bool(m.group(1))
+    header = [title]
+    if has_notes:
+        header.append("Notes")
+    header.extend(years)
+    result = [header]
+
+    past_header = False
+    header_years_seen = 0
+    entry_idx = 0
+    for idx, e in enumerate(entries):
+        if e["type"] == "text" and re.match(r"^\d{4}$", e["text"].strip()):
+            header_years_seen += 1
+            if header_years_seen >= n_years:
+                entry_idx = idx + 1
+                past_header = True
+                break
+        if e["type"] == "text" and any(yr in e["text"] for yr in years):
+            header_years_seen += 1
+            if header_years_seen >= n_years:
+                entry_idx = idx + 1
+                past_header = True
+                break
+
+    if not past_header:
+        entry_idx = 0
+
+    current_label_parts = []
+    current_note = ""
+    current_values = []
+
+    def emit_row():
+        nonlocal current_label_parts, current_note, current_values
+        label = " ".join(current_label_parts).strip()
+        if not label and not current_values:
+            return
+        row = [label]
+        if has_notes:
+            row.append(current_note)
+        vals = current_values[:n_years]
+        while len(vals) < n_years:
+            vals.append("")
+        row.extend(vals)
+        result.append(row)
+        current_label_parts = []
+        current_note = ""
+        current_values = []
+
+    for e in entries[entry_idx:]:
+        if e["type"] == "number":
+            current_values.append(e["text"])
+            if len(current_values) >= n_years:
+                emit_row()
+        elif e["type"] == "text":
+            text = e["text"].strip()
+            if not text:
+                continue
+            if re.match(r"^\d+\.\d+$", text) and not current_values:
+                current_note = text
+                continue
+            if text in ("-", "—", "–"):
+                current_values.append("-")
+                if len(current_values) >= n_years:
+                    emit_row()
+                continue
+            if re.match(r"^[\d\s,.]+$", text) and current_values:
+                current_values.append(text)
+                if len(current_values) >= n_years:
+                    emit_row()
+                continue
+            if current_values:
+                emit_row()
+            current_label_parts.append(text)
+
+    if current_label_parts or current_values:
+        emit_row()
+
+    return result
+
+
+def _extract_from_span_text(content: str) -> dict[str, list[list[str]]]:
+    content_clean = re.sub(r"<(/?)ix:", r"<\1", content)
+    soup = BeautifulSoup(content_clean, "html.parser")
+
+    target_span = None
+    for span in soup.find_all("span"):
+        if "Compte de résultat consolidé" in span.get_text():
+            target_span = span
+            break
+
+    if not target_span:
+        print("  Could not find financial statements in span-based document")
+        return {}
+
+    container = target_span.parent
+    while container and container.name != "body":
+        if len(container.get_text()) > 50000:
+            break
+        container = container.parent
+
+    if not container:
+        container = soup.body or soup
+
+    entries = []
+    for span in container.find_all("span"):
+        ix_tag = span.find("nonfraction")
+        if ix_tag:
+            val_text = ix_tag.get_text(strip=True).replace("\xa0", " ")
+            entries.append({"type": "number", "text": val_text, "xbrl_name": ix_tag.get("name", "")})
+        else:
+            text = span.get_text(strip=True).replace("\xa0", " ")
+            if text:
+                entries.append({"type": "text", "text": text})
+
+    text_stream = " ".join(e["text"] for e in entries)
+    flat = re.sub(r"\s+", " ", text_stream)
+
+    if not re.search(r"Compte de résultat consolidé", flat):
+        return {}
+
+    pos = 0
+    entry_positions = []
+    for e in entries:
+        entry_positions.append(pos)
+        pos += len(e["text"]) + 1
+
+    table_defs = [
+        ("Income Statement", "Compte de résultat consolidé", "État du résultat global consolidé"),
+        ("Assets", "Bilan consolidé", "TOTAL ACTIF"),
+        ("Liabilities", None, "TOTAL PASSIF ET CAPITAUX PROPRES"),
+        ("Cash Flow", "Tableau des flux de trésorerie consolidés", None),
+    ]
+
+    note_table_defs = [
+        (
+            "Capex Breakdown",
+            "Principaux postes de Capex",
+            "TOTAL DES DEPENSES D'INVESTISSEMENT (CAPEX)",
+            [
+                "Matériel informatique",
+                "Infrastructure des centres",
+                "Réseau",
+                "Adresses IP",
+                "TOTAL DES DEPENSES D'INVESTISSEMENT (CAPEX) POUR LES CENTRES DE DONNES",
+                "Autres",
+                "TOTAL DES DEPENSES D'INVESTISSEMENT (CAPEX)",
+            ],
+        ),
+        (
+            "Operating Expenses",
+            "Charges opérationnelles",
+            "CHARGES OPÉRATIONNELLES",
+            [
+                "Achats consommés",
+                "Charges externes",
+                "Impôts et taxes",
+                "Dépréciations sur créances commerciales",
+                "CHARGES OPÉRATIONNELLES",
+            ],
+        ),
+    ]
+
+    result = {}
+
+    for sheet_name, start_marker, end_marker, row_labels in note_table_defs:
+        rows = _extract_note_table_from_flat(flat, start_marker, end_marker, row_labels)
+        if rows and len(rows) > 1:
+            result[sheet_name] = rows
+            print(f"    {sheet_name}: {len(rows)} rows (text-parsed)")
+
+    for sheet_name, start_marker, end_marker in table_defs:
+        if start_marker:
+            block_start = flat.find(start_marker)
+        else:
+            total_actif_pos = flat.find("TOTAL ACTIF")
+            if total_actif_pos < 0:
+                continue
+            next_header = re.search(r"\(en\s+(?:milliers|millions)", flat[total_actif_pos:])
+            if not next_header:
+                continue
+            block_start = total_actif_pos + next_header.start()
+
+        if block_start < 0:
+            continue
+
+        if end_marker:
+            block_end = flat.find(end_marker, block_start + 20)
+            if block_end < 0:
+                block_end = len(flat)
+            if sheet_name == "Assets":
+                extended = flat[block_end: block_end + 300]
+                next_section = re.search(r"\(en\s+(?:milliers|millions)", extended)
+                block_end += next_section.start() if next_section else 100
+            elif sheet_name == "Liabilities":
+                block_end += len(end_marker) + 100
+        else:
+            for end_pat in ["Les notes annexes", "Note 1 ", "INFORMATIONS"]:
+                e = flat.find(end_pat, block_start + 50)
+                if e > 0:
+                    block_end = e
+                    break
+            else:
+                block_end = min(block_start + 10000, len(flat))
+
+        block = flat[block_start:block_end]
+        block_entries = [
+            e for idx, e in enumerate(entries)
+            if entry_positions[idx] >= block_start and entry_positions[idx] < block_end
+        ]
+        rows = _build_rows_from_entries(block, block_entries, sheet_name)
+        if rows and len(rows) > 1:
+            result[sheet_name] = rows
+            print(f"    {sheet_name}: {len(rows)} rows (ix-parsed)")
+
+    return result
+
+
+def table_to_dataframe(rows: list[list[str]], sheet_name: str) -> pd.DataFrame:
+    if not rows or len(rows) < 2:
+        return pd.DataFrame()
+    header = rows[0]
+    data = rows[1:]
+    max_cols = max(len(r) for r in rows)
+    header = header + [""] * (max_cols - len(header))
+    data = [r + [""] * (max_cols - len(r)) for r in data]
+    clean_data = [r for r in data if r[0] and len(r[0]) <= 200 and any(c.strip() for c in r)]
+    if not clean_data:
+        return pd.DataFrame()
+    return pd.DataFrame(clean_data, columns=header[:max_cols])
+
+
+def write_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
     try:
         import xlsxwriter
     except ImportError:
-        print("\nxlsxwriter not found - install: pip install xlsxwriter")
-        print("Falling back to openpyxl ...")
-        _write_openpyxl(all_tables, output)
+        print("xlsxwriter not found, falling back to openpyxl")
+        _write_openpyxl(all_data, output)
         return
 
     print(f"\nWriting {output} ...")
@@ -892,457 +823,261 @@ def write_excel(all_tables: dict, output: str):
         d.update(kw)
         return wb.add_format(d)
 
-    num_fmt = "#,##0;(#,##0);\"-\""
-
-    # Cover sheet
     cov = wb.add_worksheet("Overview")
     cov.hide_gridlines(2)
     cov.set_column("A:A", 32)
     cov.set_column("B:G", 22)
     cov.set_row(0, 48)
-    cov.merge_range("A1:G1",
-        "OVHcloud (OVH Groupe SA) - Complete ESEF Financial Statements",
+    cov.merge_range(
+        "A1:G1",
+        f"{_OVH_CFG.get('company_short_name')} — {_OVH_CFG.get('section_title')} (all filings)",
         F(bold=True, font_size=17, font_color="#FFFFFF", bg_color="#0D1B2A",
-          align="center", valign="vcenter"))
+          align="center", valign="vcenter"),
+    )
     cov.set_row(1, 20)
-    cov.merge_range("A2:G2",
-        f"Source: filings.xbrl.org REST API  |  ESEF / IFRS  |  Amounts in k€  |  "
-        f"{datetime.now():%Y-%m-%d %H:%M}",
-        F(italic=True, font_size=9, font_color="#CCCCCC", bg_color="#0D1B2A",
-          align="center"))
+    cov.merge_range(
+        "A2:G2",
+        f"Source: {API_BASE}  |  LEI: {LEI}  |  Generated: {datetime.now():%Y-%m-%d %H:%M}",
+        F(italic=True, font_size=9, font_color="#CCCCCC", bg_color="#0D1B2A", align="center"),
+    )
 
-    cov.set_row(3, 18)
-    cov.write("A4", "Data Source and Method",
-        F(bold=True, font_size=11, font_color="#0D1B2A", bottom=2))
-    cov.merge_range("B4:G4", "", F(bottom=2))
+    row = 3
+    for fy_label in sorted(all_data.keys(), reverse=True):
+        fy_tables = all_data[fy_label]
+        cov.set_row(row, 22)
+        cov.write(row, 0, fy_label,
+            F(bold=True, font_size=12, font_color="#FFFFFF", bg_color="#1A4080"))
+        cov.merge_range(row, 1, row, 6, f"{len(fy_tables)} tables extracted",
+            F(font_color="#FFFFFF", bg_color="#1A4080"))
+        row += 1
+        for tbl_name, tbl_rows in fy_tables.items():
+            cov.write(row, 0, f"  {tbl_name}", F(font_color="#333333", indent=1))
+            cov.write(row, 1, f"{len(tbl_rows) - 1} data rows", F(font_color="#666666"))
+            row += 1
+        row += 1
 
-    info_rows = [
-        ("Company",         "OVHcloud / OVH Groupe SA"),
-        ("Stock Exchange",  "Euronext Paris (OVH)"),
-        ("LEI",             LEI),
-        ("Fiscal Year End", "31 August each year"),
-        ("Currency",        "Euros (EUR) - amounts in k€ (thousands)"),
-        ("API",             f"GET {API_BASE}/api/filings?filter[entity.identifier]={LEI}"),
-        ("Data File",       "ixbrlviewer.html embedded JSON / OIM xBRL-JSON fallback"),
-        ("Label Source",    "French + English from viewer JSON concepts.labels.ns0/std"),
-        ("Parser",          "Raw viewer JSON + py-xbrl taxonomy enrichment"),
-        ("Negatives",       "Outflows shown in (parentheses)"),
-        ("Coverage",        "All facts extracted automatically - no hardcoded concept list"),
+    all_sheet_names: list[str] = []
+    seen_names: set = set()
+    canonical_order = [
+        "Income Statement", "Assets", "Liabilities",
+        "Cash Flow", "Operating Expenses", "Capex Breakdown",
     ]
-    k_fmt = F(bold=True, font_color="#1A4080", bg_color="#F0F4FF", border=1)
-    v_fmt = F(font_color="#333333", bg_color="#FFFFFF", border=1)
-    for ri, (k, v) in enumerate(info_rows, 5):
-        cov.set_row(ri, 15)
-        cov.write(ri, 0, k, k_fmt)
-        cov.merge_range(ri, 1, ri, 6, v, v_fmt)
+    for name in canonical_order:
+        for fy_label, fy_tables in all_data.items():
+            for tbl_name in fy_tables:
+                base_name = re.sub(r"\s*\(\d+\)$", "", tbl_name)
+                if base_name == name and tbl_name not in seen_names:
+                    all_sheet_names.append(tbl_name)
+                    seen_names.add(tbl_name)
+    for fy_label, fy_tables in all_data.items():
+        for tbl_name in fy_tables:
+            if tbl_name not in seen_names:
+                all_sheet_names.append(tbl_name)
+                seen_names.add(tbl_name)
 
-    cov.set_row(17, 22)
-    cov.write(17, 0, "Financial Statement Sheets",
-        F(bold=True, font_size=11, font_color="#FFFFFF", bg_color="#1A4080", border=1))
-    cov.merge_range(17, 1, 17, 6, "", F(bg_color="#1A4080", border=1))
+    fy_labels_sorted = sorted(all_data.keys(), reverse=True)
 
-    for ri, (stmt, style) in enumerate(SHEET_STYLES.items(), 18):
-        stmt_years = all_tables.get(stmt, {})
-        counts     = {fy: len(df) for fy, df in stmt_years.items()}
-        summary    = "  |  ".join(
-            f"{fy}: {n} lines" for fy, n in sorted(counts.items(), reverse=True))
-        cov.set_row(ri, 18)
-        cov.write(ri, 0, stmt,
-            F(bold=True, font_color="#FFFFFF", bg_color=style["hdr_bg"],
-              border=1, indent=1))
-        cov.merge_range(ri, 1, ri, 6, summary,
-            F(font_color="#FFFFFF", bg_color=style["hdr_bg"], border=1, indent=1))
-
-    # One sheet per financial statement
-    for stmt, style in SHEET_STYLES.items():
+    for sheet_name in all_sheet_names:
+        base_name = re.sub(r"\s*\(\d+\)$", "", sheet_name)
+        style = SHEET_STYLES.get(base_name, {"hdr_bg": "#333333", "alt_bg": "#F5F5F5"})
         hdr_bg = style["hdr_bg"]
         alt_bg = style["alt_bg"]
-
-        ws = wb.add_worksheet(stmt)
+        ws = wb.add_worksheet(sheet_name[:31])
         ws.hide_gridlines(2)
+        current_row = 0
 
-        stmt_data = all_tables.get(stmt, {})
-        years     = sorted(stmt_data.keys(), reverse=True)
+        for fy_label in fy_labels_sorted:
+            tbl_rows = all_data.get(fy_label, {}).get(sheet_name)
+            if not tbl_rows:
+                continue
+            n_cols = max(len(r) for r in tbl_rows) if tbl_rows else 4
+            ws.set_row(current_row, 28)
+            ws.merge_range(
+                current_row, 0, current_row, max(0, n_cols - 1),
+                f"{_OVH_CFG.get('company_short_name')} — {sheet_name}  |  {fy_label}",
+                F(bold=True, font_size=13, font_color="#FFFFFF", bg_color="#0D1B2A",
+                  align="left", indent=2, valign="vcenter"),
+            )
+            current_row += 1
 
-        # Column layout: FR label | EN label | year cols... | XBRL concept
-        n_years     = len(years)
-        concept_col = 2 + n_years
+            if tbl_rows:
+                header = tbl_rows[0]
+                ws.set_row(current_row, 22)
+                for ci, h in enumerate(header):
+                    col_w = 50 if ci == 0 else (45 if ci == 1 else 20)
+                    ws.set_column(ci, ci, col_w)
+                    ws.write(current_row, ci, h,
+                        F(bold=True, font_color="#FFFFFF", bg_color=hdr_bg,
+                          align="center", border=1, text_wrap=True))
+                current_row += 1
 
-        ws.freeze_panes(4, 0)
-        ws.set_column(0, 0, 50)
-        ws.set_column(1, 1, 50)
-        for ci in range(2, 2 + n_years):
-            ws.set_column(ci, ci, 17)
-        ws.set_column(concept_col, concept_col, 52)
+            for ri, row_cells in enumerate(tbl_rows[1:]):
+                label = row_cells[0] if row_cells else ""
+                is_total = _is_total_row(label)
+                bg = "#D5E8D4" if is_total else (alt_bg if ri % 2 == 0 else "#FFFFFF")
+                ws.set_row(current_row, 18 if is_total else 16)
+                for ci, cell in enumerate(row_cells):
+                    is_label_col = ci <= 1
+                    num_val = _parse_french_number(cell) if not is_label_col else None
+                    if not is_label_col and num_val is not None:
+                        ws.write_number(current_row, ci, num_val,
+                            F(bg_color=bg, border=1, align="right",
+                              num_format="#,##0;(#,##0);\"-\"",
+                              bold=is_total, font_size=9))
+                    elif not is_label_col and cell.strip() in ("-", "—", "–", ""):
+                        ws.write(current_row, ci, cell.strip() or None,
+                            F(bg_color=bg, border=1, align="center", font_size=9, bold=is_total))
+                    else:
+                        ws.write(current_row, ci, cell,
+                            F(bg_color=bg, border=1,
+                              indent=1 if (ci == 0 and is_total) else (2 if ci == 0 else 0),
+                              text_wrap=True, bold=is_total,
+                              font_color="#0D1B2A" if ci == 0 else "#444444",
+                              italic=(ci == 1),
+                              font_size=10 if (ci == 0 and is_total) else 9))
+                current_row += 1
 
-        ws.set_row(0, 36)
-        ws.merge_range(0, 0, 0, concept_col,
-            f"OVHcloud - {stmt}  |  IFRS  |  k€  |  Source: filings.xbrl.org",
-            F(bold=True, font_size=14, font_color="#FFFFFF",
-              bg_color="#0D1B2A", align="left", indent=2, valign="vcenter"))
+            current_row += 2
 
-        ws.set_row(1, 16)
-        ws.merge_range(1, 0, 1, concept_col,
-            f"All XBRL-tagged line items extracted automatically  "
-            f"LEI: {LEI}  |  Amounts in thousands of euros (k€)  |  Outflows in (parentheses)",
-            F(italic=True, font_size=8, font_color="#AAAAAA",
-              bg_color="#0D1B2A", align="left", indent=2))
-
-        ws.set_row(2, 6)
-        ws.merge_range(2, 0, 2, concept_col, "", F(bg_color=hdr_bg))
-
-        ws.set_row(3, 24)
-        hdr_f = F(bold=True, font_color="#FFFFFF", bg_color=hdr_bg,
-                  align="center", border=1, text_wrap=True, font_size=10)
-
-        col_headers  = ["Libelle (Francais)", "Label (English)"]
-        col_headers += [f"{y} (k€)" for y in years]
-        col_headers += ["Concept XBRL"]
-
-        for ci, h in enumerate(col_headers):
-            ws.write(3, ci, h, hdr_f)
-
-        if not years or all(stmt_data.get(y, pd.DataFrame()).empty for y in years):
-            ws.merge_range(4, 0, 4, concept_col,
-                f"No {stmt} data found - check API connectivity",
-                F(font_color="#CC0000", bold=True))
-            continue
-
-        # Build unified concept list: union of all years, preserving labels
-        seen = {}
-        for fy in years:
-            df = stmt_data.get(fy, pd.DataFrame())
-            if not df.empty:
-                for _, r in df.iterrows():
-                    if r["concept"] not in seen:
-                        seen[r["concept"]] = {"fr": r["fr_label"], "en": r["en_label"]}
-
-        val_maps = {}
-        for fy in years:
-            df = stmt_data.get(fy, pd.DataFrame())
-            val_maps[fy] = dict(zip(df["concept"], df["value_ke"])) if not df.empty else {}
-
-        # Sort: concepts present in most recent year first (by magnitude), then older years
-        def _sort_key(c):
-            v = val_maps[years[0]].get(c) if years else None
-            if v is not None:
-                return (0, -abs(v))
-            for fy in years[1:]:
-                v = val_maps[fy].get(c)
-                if v is not None:
-                    return (1, -abs(v))
-            return (2, 0)
-
-        ordered = sorted(seen.keys(), key=_sort_key)
-
-        SECTION_HDRS = {
-            ("Assets",      "non-current"): "Non-current Assets / Actif non courant",
-            ("Assets",      "current"):     "Current Assets / Actif courant",
-            ("Assets",      "total"):       "TOTAL ASSETS / TOTAL ACTIF",
-            ("Liabilities", "equity"):      "Equity / Capitaux propres",
-            ("Liabilities", "non-current"): "Non-current Liabilities / Passif non courant",
-            ("Liabilities", "current"):     "Current Liabilities / Passif courant",
-            ("Liabilities", "total"):       "TOTAL EQUITY AND LIABILITIES / TOTAL PASSIF ET CAPITAUX PROPRES",
-        }
-
-        last_section = None
-        actual_row   = 4
-
-        for concept in ordered:
-            sec = "line"
-            for fy in years:
-                df = stmt_data.get(fy, pd.DataFrame())
-                if (df is not None and not df.empty
-                        and "section" in df.columns
-                        and concept in df["concept"].values):
-                    sec = df.loc[df["concept"] == concept, "section"].values[0]
-                    break
-
-            if stmt in ("Assets", "Liabilities") and sec != last_section \
-               and sec not in ("line", ""):
-                hdr_text = SECTION_HDRS.get((stmt, sec), "")
-                if hdr_text:
-                    is_total = (sec == "total")
-                    sec_bg   = hdr_bg if is_total else "#2F6096"
-                    ws.set_row(actual_row, 22)
-                    ws.merge_range(actual_row, 0, actual_row, concept_col, hdr_text,
-                        F(bold=True, font_color="#FFFFFF", bg_color=sec_bg,
-                          border=1, indent=1, font_size=10 if is_total else 9,
-                          top=2, bottom=2))
-                    actual_row += 1
-                last_section = sec
-
-            yr_vals = [val_maps[fy].get(concept) for fy in years]
-            fr_lbl  = seen[concept]["fr"]
-            en_lbl  = seen[concept]["en"]
-
-            is_bold = sec in ("total",) or any(
-                k in concept.split(":")[-1].lower()
-                for k in ["noncurrentassets", "currentassets",
-                           "noncurrentliabilities", "currentliabilities",
-                           "equityandliabilities", "assets", "equity"])
-
-            alt = (actual_row % 2 == 0)
-            bg  = "#E8F4E8" if is_bold else (alt_bg if alt else "#FFFFFF")
-
-            ws.set_row(actual_row, 18)
-            ws.write(actual_row, 0, fr_lbl,
-                F(bg_color=bg, border=1, indent=2 if not is_bold else 1,
-                  text_wrap=True, font_color="#0D1B2A", bold=is_bold))
-            ws.write(actual_row, 1, en_lbl,
-                F(bg_color=bg, border=1, indent=2 if not is_bold else 1,
-                  text_wrap=True, font_color="#444444", italic=True,
-                  font_size=9, bold=is_bold))
-
-            nf = F(bg_color=bg, border=1, align="right", num_format=num_fmt, bold=is_bold)
-            for ci, v in enumerate(yr_vals, 2):
-                ws.write(actual_row, ci, round(v) if v is not None else None, nf)
-
-            ws.write(actual_row, concept_col, concept,
-                F(bg_color="#F2F2F2", border=1, font_color="#AAAAAA", font_size=8))
-            actual_row += 1
-
-        print(f"Sheet: {stmt}  ({len(ordered)} line items, {len(years)} years)")
+        ws.freeze_panes(2, 0)
+        print(f"  Sheet: {sheet_name[:31]}")
 
     wb.close()
     print(f"\nSaved: {output}")
 
 
-def _write_openpyxl(all_tables: dict, output: str):
-    """Fallback writer used when xlsxwriter is not installed."""
-    from openpyxl import Workbook as OWB
+def _write_openpyxl(all_data: dict, output: str):
+    from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter as gcl
+    from openpyxl.utils import get_column_letter
 
-    wb  = OWB()
-    cov = wb.active
-    cov.title  = "Overview"
-    cov["A1"]  = "OVHcloud Complete Financial Statements"
-    cov["A2"]  = f"Source: filings.xbrl.org API | py-xbrl | {datetime.now():%Y-%m-%d}"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Overview"
+    ws["A1"] = f"{_OVH_CFG.get('company_short_name')} — {_OVH_CFG.get('section_title')}"
 
     def _border():
         s = Side(style="thin", color="AAAAAA")
         return Border(left=s, right=s, top=s, bottom=s)
 
-    for stmt in ["Income Statement", "Cash Flow", "Assets", "Liabilities"]:
-        ws    = wb.create_sheet(stmt)
-        years = sorted(all_tables.get(stmt, {}).keys(), reverse=True)
+    fy_labels_sorted = sorted(all_data.keys(), reverse=True)
+    all_sheet_names = []
+    seen = set()
+    for fy in fy_labels_sorted:
+        for name in all_data[fy]:
+            if name not in seen:
+                all_sheet_names.append(name)
+                seen.add(name)
 
-        hdrs  = ["Libelle (Francais)", "Label (English)"]
-        hdrs += [f"{y} (k€)" for y in years]
-        hdrs += ["Concept XBRL"]
+    for sheet_name in all_sheet_names:
+        ws = wb.create_sheet(sheet_name[:31])
+        current_row = 1
+        for fy_label in fy_labels_sorted:
+            tbl_rows = all_data.get(fy_label, {}).get(sheet_name)
+            if not tbl_rows:
+                continue
+            ws.cell(current_row, 1, f"{sheet_name} — {fy_label}")
+            ws.cell(current_row, 1).font = Font(name="Arial", bold=True, size=13, color="FFFFFF")
+            ws.cell(current_row, 1).fill = PatternFill("solid", fgColor="0D1B2A")
+            current_row += 1
+            for ri, row_cells in enumerate(tbl_rows):
+                is_header = ri == 0
+                label = row_cells[0] if row_cells else ""
+                is_total = _is_total_row(label) if not is_header else False
+                for ci, cell in enumerate(row_cells):
+                    c = ws.cell(current_row, ci + 1, cell)
+                    c.border = _border()
+                    if is_header:
+                        c.font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+                        c.fill = PatternFill("solid", fgColor="1A4080")
+                        c.alignment = Alignment(horizontal="center")
+                    elif is_total:
+                        c.font = Font(name="Arial", bold=True, size=10)
+                        c.fill = PatternFill("solid", fgColor="D5E8D4")
+                    else:
+                        c.font = Font(name="Arial", size=9)
+                    if ci > 0 and not is_header:
+                        c.alignment = Alignment(horizontal="right")
+                current_row += 1
+            current_row += 2
 
-        for ci, h in enumerate(hdrs, 1):
-            c           = ws.cell(1, ci, h)
-            c.font      = Font(name="Arial", bold=True, color="FFFFFF", size=10)
-            c.fill      = PatternFill("solid", fgColor="1A4080")
-            c.border    = _border()
-            c.alignment = Alignment(horizontal="center", vertical="center")
-
-        stmt_data = all_tables.get(stmt, {})
-        seen      = {}
-        for fy in years:
-            df = stmt_data.get(fy, pd.DataFrame())
-            if not df.empty:
-                for _, r in df.iterrows():
-                    if r["concept"] not in seen:
-                        seen[r["concept"]] = {"fr": r["fr_label"], "en": r["en_label"]}
-
-        val_maps = {}
-        for fy in years:
-            df = stmt_data.get(fy, pd.DataFrame())
-            val_maps[fy] = dict(zip(df["concept"], df["value_ke"])) if not df.empty else {}
-
-        for ri, concept in enumerate(seen, 2):
-            yr_vals = [val_maps[fy].get(concept) for fy in years]
-            row     = [seen[concept]["fr"], seen[concept]["en"]]
-            row    += [round(v) if v is not None else None for v in yr_vals]
-            row    += [concept]
-
-            for ci, val in enumerate(row, 1):
-                c           = ws.cell(ri, ci, val)
-                c.border    = _border()
-                c.font      = Font(name="Arial", size=9)
-                if ci >= 3:
-                    c.alignment = Alignment(horizontal="right")
-
-        ws.column_dimensions["A"].width = 48
-        ws.column_dimensions["B"].width = 48
-        for i in range(len(years)):
-            ws.column_dimensions[gcl(3 + i)].width = 18
-        ws.column_dimensions[gcl(3 + len(years))].width = 48
-        ws.freeze_panes = "A2"
+        ws.column_dimensions["A"].width = 50
+        for ci in range(2, 10):
+            ws.column_dimensions[get_column_letter(ci)].width = 18
 
     wb.save(output)
     print(f"\nSaved (openpyxl): {output}")
 
 
-# ============================================================================
-#  MAIN
-# ============================================================================
-
 def main():
-    print("OVHcloud Complete Financial Extractor")
-    print("=" * 40)
+    print(f"{_OVH_CFG.get('company_short_name')} Financial Extractor — {_OVH_CFG.get('section_title')}")
+    print("=" * 62)
 
     root_dir = Path(DOWNLOAD_DIR)
     root_dir.mkdir(exist_ok=True)
 
-    all_filings = api_discover(LEI, save_path=root_dir / "api_filings.json")
+    all_filings = api_discover(LEI)
     if not all_filings:
-        print("\n[FATAL] No filings found. Check network connection.")
+        print("\n[FATAL] No filings found.")
         sys.exit(1)
 
-    TARGET_FYS = discover_fiscal_years(all_filings)
-    if not TARGET_FYS:
-        print("\n[FATAL] No fiscal years discovered from filings.")
-        sys.exit(1)
+    (root_dir / "api_filings.json").write_text(
+        json.dumps(all_filings, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
-    print(f"\nFiscal year filings found: {', '.join(TARGET_FYS.keys())}")
-    print("Each filing contains current-year AND prior-year comparative data.")
-    print(f"\nDownload directory: {root_dir.resolve()}")
+    all_data: dict[str, dict[str, list[list[str]]]] = {}
 
-    # master_facts: {fy_label: DataFrame}
-    # Each filing contributes two years of data. Facts from multiple filings
-    # are merged and deduplicated so the primary filing for a year takes
-    # precedence (largest absolute value wins in deduplicate()).
-    master_facts = {}
-    label_master = {}
-
-    for fy_label, fy_cfg in TARGET_FYS.items():
-        print(f"\nProcessing filing {fy_label}  ({fy_cfg['period_end']})")
-        print("-" * 40)
-
-        filing = pick_filing(all_filings, fy_cfg["year"])
-        if not filing:
-            print(f"No filing found for {fy_label}")
+    for filing in all_filings:
+        pe = filing.get("period_end", "")
+        if not pe:
             continue
-
+        fy_label = f"FY{pe[:4]}"
         fy_dir = root_dir / fy_label
         fy_dir.mkdir(exist_ok=True)
-        print(f"Filing directory: {fy_dir}")
 
-        viewer_url = filing.get("viewer_url", "")
-        json_url   = filing.get("json_url", "")
+        print(f"\n{'=' * 60}")
+        print(f"Processing {fy_label}  (period_end={pe})")
+        print(f"{'=' * 60}")
 
-        labels = {}
-        facts  = pd.DataFrame()
-
-        if viewer_url:
-            viewer_data = download_viewer_data(viewer_url, save_dir=fy_dir)
-            if viewer_data:
-                labels = extract_labels(viewer_data)
-                facts  = parse_all_facts(viewer_data)
-
-        if facts.empty and json_url:
-            print(f"\n[fallback] Trying OIM JSON ...")
-            oim = download_oim_json(json_url, save_dir=fy_dir)
-            if oim:
-                facts_raw = oim.get("facts", {})
-                records   = []
-                for fid, f in (facts_raw.items() if isinstance(facts_raw, dict) else []):
-                    dims = f.get("dimensions", {})
-                    c    = dims.get("concept", "")
-                    p    = str(dims.get("period", ""))
-                    v    = f.get("value")
-                    if c and v is not None:
-                        try:
-                            records.append({
-                                "concept":     c,
-                                "value_ke":    float(v) / 1000,
-                                "period":      p,
-                                "period_type": "instant" if "/" not in p else "duration",
-                            })
-                        except Exception:
-                            pass
-                if records:
-                    facts = pd.DataFrame(records)
-                    print(f"OIM JSON: {len(facts)} facts")
-
-        if json_url:
-            if not (fy_dir / "report.json").exists():
-                download_oim_json(json_url, save_dir=fy_dir)
-            labels = pyxbrl_enrich_labels(json_url, labels)
-
-        # Merge labels into master map
-        for k, v in labels.items():
-            if k not in label_master:
-                label_master[k] = v
-            else:
-                if not label_master[k]["fr"] and v["fr"]:
-                    label_master[k]["fr"] = v["fr"]
-                if not label_master[k]["en"] and v["en"]:
-                    label_master[k]["en"] = v["en"]
-
-        if facts.empty:
-            print(f"No facts extracted for filing {fy_label}")
-            time.sleep(0.5)
+        report_path = download_report(filing, fy_dir)
+        if not report_path:
+            print(f"  Skipping {fy_label}: no report available")
             continue
 
-        # Split all facts in this filing by the year each fact belongs to.
-        # A FY2025 filing contains both FY2025 and FY2024 comparative facts.
-        year_groups = group_facts_by_year(facts)
-        years_in_filing = sorted(year_groups.keys(), reverse=True)
-        print(f"Years found in this filing: {', '.join(years_in_filing)}")
+        tables = extract_section_tables(report_path, fy_label)
+        if not tables:
+            print(f"  No tables found for {fy_label}")
+            continue
 
-        for yr_label, yr_df in year_groups.items():
-            if yr_label in master_facts:
-                # Append - deduplicate will resolve duplicates later
-                master_facts[yr_label] = pd.concat(
-                    [master_facts[yr_label], yr_df], ignore_index=True)
-            else:
-                master_facts[yr_label] = yr_df.copy()
+        for tbl_name in tables:
+            tables[tbl_name] = _detect_unit_and_normalize(tables[tbl_name])
+            tables[tbl_name] = _add_english_column(tables[tbl_name])
 
-        print(f"Filing summary: {len(facts)} total facts  |  {len(labels)} labels")
+        all_data[fy_label] = tables
+        print(f"  {fy_label}: {len(tables)} tables extracted")
         time.sleep(0.5)
 
-    if not master_facts:
-        print("\n[FATAL] No facts collected from any filing.")
+    if not all_data:
+        print("\n[FATAL] No data extracted from any filing.")
         sys.exit(1)
 
-    # Deduplicate merged facts for each year
-    print(f"\nDeduplicating facts per year ...")
-    for yr_label in master_facts:
-        before = len(master_facts[yr_label])
-        master_facts[yr_label] = deduplicate(master_facts[yr_label])
-        after  = len(master_facts[yr_label])
-        print(f"  {yr_label}: {before} -> {after} rows after dedup")
-
-    all_years_sorted = sorted(master_facts.keys(), reverse=True)
-    print(f"\nYears with data: {', '.join(all_years_sorted)}")
-
-    print(f"\nBuilding financial statement tables")
-    print("-" * 40)
-
-    all_tables = {}
-    for stmt in ["Income Statement", "Cash Flow", "Assets", "Liabilities"]:
-        print(f"\n[BUILD] {stmt}")
-        stmt_data = {}
-        for yr_label in all_years_sorted:
-            yr_facts = master_facts[yr_label]
-            table    = build_table(yr_facts, label_master, stmt)
-            stmt_data[yr_label] = table
-            print(f"  {yr_label}: {len(table)} rows")
-
-            if DEBUG and not table.empty:
-                print(table[["fr_label", "en_label", "value_ke"]].to_string())
-
-        all_tables[stmt] = stmt_data
-
     try:
-        write_excel(all_tables, OUTPUT)
+        write_excel(all_data, OUTPUT)
     except PermissionError:
         alt = OUTPUT.replace(".xlsx", "_new.xlsx")
-        print(f"\n{OUTPUT} is open in Excel - saving as {alt}")
-        write_excel(all_tables, alt)
+        print(f"\n{OUTPUT} is open — saving as {alt}")
+        write_excel(all_data, alt)
 
     print(f"\nRESULTS SUMMARY")
-    print("=" * 40)
-    for stmt in ["Income Statement", "Cash Flow", "Assets", "Liabilities"]:
-        parts = [f"{fy}: {len(all_tables.get(stmt, {}).get(fy, pd.DataFrame()))}"
-                 for fy in all_years_sorted]
-        print(f"  {stmt:<22}  {'  |  '.join(parts)}")
+    print("=" * 62)
+    for fy_label in sorted(all_data.keys(), reverse=True):
+        tables = all_data[fy_label]
+        print(f"  {fy_label}:")
+        for name, rows in tables.items():
+            print(f"    {name}: {len(rows) - 1} data rows")
     print(f"\n  Output: {OUTPUT}\n")
+
+
 
 
 def run(year: int | None = None, lei: str | None = None, api_base: str | None = None) -> dict:
@@ -1350,21 +1085,16 @@ def run(year: int | None = None, lei: str | None = None, api_base: str | None = 
     Callable entry point for the pipeline.
 
     Args:
-        year:     fiscal year to restrict to (e.g. 2025), or None for all years.
-        lei:      LEI identifier from the source document's filters field.
-        api_base: XBRL API base URL from the source document's sourceUrl field.
+        year:     not used (all years are always processed).
+        lei:      LEI identifier from the source document filters field.
+        api_base: XBRL API base URL from the source document sourceUrl field.
 
     Returns:
-        Dict with paths to every file produced:
         {
-            "excel":       "/abs/path/ovhcloud_complete_financials.xlsx" or None,
-            "api_listing": "/abs/path/ovhcloud_filings/api_filings.json" or None,
+            "excel":       absolute path to the Excel output, or None,
+            "api_listing": absolute path to api_filings.json, or None,
             "per_year": {
-                "FY2025": {
-                    "viewer_html": "/abs/path/.../ixbrlviewer.html",
-                    "viewer_json": "/abs/path/.../viewer_data.json",
-                    "oim_json":    "/abs/path/.../report.json",
-                },
+                "FY2025": {"viewer_html": absolute path to report_doc.html},
                 ...
             },
         }
@@ -1391,20 +1121,13 @@ def run(year: int | None = None, lei: str | None = None, api_base: str | None = 
         for fy_dir in sorted(root_dir.iterdir()):
             if not fy_dir.is_dir() or not fy_dir.name.startswith("FY"):
                 continue
-            fy_files = {}
-            for fname, key in [
-                ("ixbrlviewer.html", "viewer_html"),
-                ("viewer_data.json", "viewer_json"),
-                ("report.json",      "oim_json"),
-            ]:
-                p = fy_dir / fname
-                if p.exists():
-                    fy_files[key] = str(p.resolve())
-            if fy_files:
-                result["per_year"][fy_dir.name] = fy_files
+            report_html = fy_dir / "report_doc.html"
+            if report_html.exists():
+                result["per_year"][fy_dir.name] = {
+                    "viewer_html": str(report_html.resolve())
+                }
 
     return result
-
 
 if __name__ == "__main__":
     main()
