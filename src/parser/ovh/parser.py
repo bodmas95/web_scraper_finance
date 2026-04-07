@@ -3,7 +3,7 @@ import io
 import json
 import re
 import time
-import requests
+from src import http_client
 from pathlib import Path
 from datetime import datetime
 
@@ -324,7 +324,7 @@ def _is_number_cell(text: str) -> bool:
 def api_discover(lei: str) -> list[dict]:
     url = f"{API_BASE}/api/filings"
     print(f"\nGET {url}  filter[entity.identifier]={lei}")
-    r = requests.get(
+    r = http_client.get(
         url,
         params={"filter[entity.identifier]": lei, "page[size]": 50},
         headers=HEADERS,
@@ -361,7 +361,7 @@ def download_report(filing: dict, save_dir: Path) -> Path | None:
         return save_path
     full_url = API_BASE + report_url
     print(f"  Downloading report: {report_url.split('/')[-1]} ...")
-    r = requests.get(full_url, headers=HEADERS, timeout=180)
+    r = http_client.get(full_url, headers=HEADERS, timeout=180)
     r.raise_for_status()
     save_path.write_bytes(r.content)
     print(f"  Saved: {save_path.name} ({len(r.content) / 1e6:.1f} MB)")
