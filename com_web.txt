@@ -14,14 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.crawler.ovh.crawler import OVHCrawler
-from src.pipeline.db_utils import (
-    insert_report,
-    insert_ingestion_log,
-    update_ingestion_log,
-    save_bytes_to_gridfs,
-    save_text_to_gridfs,
-)
-from src.pipeline.utils import (
+from src.utils import (
     save_bytes,
     save_text,
     build_article_text,
@@ -32,14 +25,14 @@ from src.logging import get_logger
 
 logger = get_logger(__name__)
 
-_LOCAL_ROOT = Path(get_section("DEFAULT").get("output_path", "/opt/data/raw"))
+_LOCAL_ROOT = Path(get_section("OVH").get("download_dir", "ovh_filings"))
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def run_web_pipeline(db, company: dict, source: dict) -> None:
+def run_web_pipeline(client, company: dict, source: dict) -> None:
     """
     Download financial PDFs for one WEB source record, persist them to GridFS
     and locally, and write the corresponding report + ingestion_log documents.
@@ -73,7 +66,7 @@ def run_web_pipeline(db, company: dict, source: dict) -> None:
             "errorMessage": None,
         },
     }
-    log_id = insert_ingestion_log(db, log_doc)
+    log_id = client.insert_log(log_doc)
     logger.info("WEB pipeline started | companyId=%s sourceId=%s url=%s",
                 company_id, source_id, source_url)
 
@@ -94,8 +87,7 @@ def run_web_pipeline(db, company: dict, source: dict) -> None:
             local_path = _LOCAL_ROOT / f["fiscal_year"] / f["filename"]
             save_bytes(f["bytes"], local_path)
 
-            file_id = save_bytes_to_gridfs(
-                db,
+            file_id = client.save_bytes_to_gridfs(
                 f["bytes"],
                 f["filename"],
                 metadata={
@@ -125,7 +117,7 @@ def run_web_pipeline(db, company: dict, source: dict) -> None:
                     "downloadedAt":   downloaded_at,
                 }],
             }
-            insert_report(db, report_doc)
+            client.insert_report(report_doc)
             logger.debug("Report inserted | sourceFilingId=%s file=%s",
                          f["source_filing_id"], f["filename"])
 
@@ -140,7 +132,7 @@ def run_web_pipeline(db, company: dict, source: dict) -> None:
                 "downloadErrorMessage": None,
             })
 
-        update_ingestion_log(db, log_id, {
+        client.update_log(log_id, {
             "result.status": "success",
             "files":         log_file_records,
         })
@@ -149,7 +141,7 @@ def run_web_pipeline(db, company: dict, source: dict) -> None:
     except Exception as exc:
         logger.error("WEB pipeline failed | companyId=%s sourceId=%s error=%s",
                      company_id, source_id, exc, exc_info=True)
-        update_ingestion_log(db, log_id, {
+        client.update_log(log_id, {
             "result.status":       "error",
             "result.errorCode":    type(exc).__name__,
             "result.errorMessage": str(exc),
@@ -157,7 +149,7 @@ def run_web_pipeline(db, company: dict, source: dict) -> None:
         raise
 
 
-def run_news_pipeline(db, company: dict, source: dict) -> None:
+def run_news_pipeline(client, company: dict, source: dict) -> None:
     """
     Fetch news articles for one NEWS source record, store text directly in GridFS
     (no file conversion), write locally, and create report + ingestion_log documents.
@@ -191,7 +183,7 @@ def run_news_pipeline(db, company: dict, source: dict) -> None:
             "errorMessage": None,
         },
     }
-    log_id = insert_ingestion_log(db, log_doc)
+    log_id = client.insert_log(log_doc)
     logger.info("NEWS pipeline started | companyId=%s sourceId=%s url=%s",
                 company_id, source_id, source_url)
 
@@ -215,8 +207,7 @@ def run_news_pipeline(db, company: dict, source: dict) -> None:
             local_path = _LOCAL_ROOT / "news" / fname
             save_text(text, local_path)
 
-            file_id = save_text_to_gridfs(
-                db,
+            file_id = client.save_text_to_gridfs(
                 text,
                 fname,
                 metadata={
@@ -245,7 +236,7 @@ def run_news_pipeline(db, company: dict, source: dict) -> None:
                     "downloadedAt":   downloaded_at,
                 }],
             }
-            insert_report(db, report_doc)
+            client.insert_report(report_doc)
             logger.debug("News report inserted | sourceFilingId=%s",
                          article.get("source_filing_id"))
 
@@ -261,7 +252,7 @@ def run_news_pipeline(db, company: dict, source: dict) -> None:
                 "downloadErrorMessage": None,
             })
 
-        update_ingestion_log(db, log_id, {
+        client.update_log(log_id, {
             "result.status": "success",
             "files":         log_file_records,
         })
@@ -270,7 +261,7 @@ def run_news_pipeline(db, company: dict, source: dict) -> None:
     except Exception as exc:
         logger.error("NEWS pipeline failed | companyId=%s sourceId=%s error=%s",
                      company_id, source_id, exc, exc_info=True)
-        update_ingestion_log(db, log_id, {
+        client.update_log(log_id, {
             "result.status":       "error",
             "result.errorCode":    type(exc).__name__,
             "result.errorMessage": str(exc),
@@ -287,7 +278,7 @@ def _is_news_url(url: str) -> bool:
     return any(kw in lower for kw in _NEWS_URL_KEYWORDS)
 
 
-def run(db, company: dict, source: dict) -> None:
+def run(client, company: dict, source: dict) -> None:
     """
     Dispatch to WEB (PDF) or NEWS pipeline.
 
@@ -300,8 +291,8 @@ def run(db, company: dict, source: dict) -> None:
     source_url  = source.get("sourceUrl", "")
 
     if source_type == "NEWS" or (source_type == "WEB" and _is_news_url(source_url)):
-        run_news_pipeline(db, company, source)
+        run_news_pipeline(client, company, source)
     elif source_type == "WEB":
-        run_web_pipeline(db, company, source)
+        run_web_pipeline(client, company, source)
     else:
         raise ValueError(f"company_web_pipeline does not handle sourceType={source_type!r}")

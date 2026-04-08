@@ -25,7 +25,7 @@ from config.config import get_section as _get_section
 _OVH_CFG = _get_section("OVH")
 
 DEBUG        = "--debug" in sys.argv
-DOWNLOAD_DIR = _OVH_CFG.get("output_path")
+DOWNLOAD_DIR = _OVH_CFG.get("download_dir")
 OUTPUT       = str(Path(DOWNLOAD_DIR) / "ovhcloud_complete_financials.xlsx")
 LEI          = None
 API_BASE     = None

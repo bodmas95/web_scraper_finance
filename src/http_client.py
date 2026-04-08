@@ -19,17 +19,26 @@ from urllib.parse import urlencode
 import requests
 from requests import HTTPError
 
-from config.config import get_section
+from config.config import get_section, get_proxy_config
+proxy= get_proxy_config()
+
+if proxy:
+    proxies = {
+        "http": f"http://{proxy['host']}:{proxy['port']}",
+        "https": f"https://{proxy['host']}:{proxy['port']}",
+    }
+else:
+    proxies = None
 
 _PROXY_CFG = get_section("PROXY")
 
 PROXY_USE  = _PROXY_CFG.get("proxy_use", "none").strip().lower()
 
-# server-mode (NTLM via pycurl)
-PROXY_HOST = _PROXY_CFG.get("host", "")
-PROXY_PORT = int(_PROXY_CFG.get("port", "8080") or "8080")
-PROXY_USER = _PROXY_CFG.get("user", "")
-PROXY_PASS = _PROXY_CFG.get("pass", "")
+# system-mode (NTLM via pycurl) — reads the renamed corporate_* keys
+PROXY_HOST = _PROXY_CFG.get("corporate_host", "")
+PROXY_PORT = int(_PROXY_CFG.get("corporate_port", "8080") or "8080")
+PROXY_USER = _PROXY_CFG.get("corporate_username", "")
+PROXY_PASS = _PROXY_CFG.get("corporate_password", "")
 
 # system-mode (IP-based, no auth)
 _SYS_HOST  = _PROXY_CFG.get("system_host", "")

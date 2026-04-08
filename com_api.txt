@@ -18,12 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.parser.ovh import parser as ovh_parser
-from src.pipeline.db_utils import (
-    insert_report,
-    insert_ingestion_log,
-    update_ingestion_log,
-    save_bytes_to_gridfs,
-)
 from src.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,14 +38,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _ingest_file(db, local_path: str, stored_name: str, metadata: dict) -> tuple[str, int]:
+def _ingest_file(client, local_path: str, stored_name: str, metadata: dict) -> tuple[str, int]:
     """Read a local file and store it in GridFS. Returns (file_id, size_bytes)."""
     data    = Path(local_path).read_bytes()
-    file_id = save_bytes_to_gridfs(db, data, stored_name, metadata=metadata)
+    file_id = client.save_bytes_to_gridfs(data, stored_name, metadata=metadata)
     return file_id, len(data)
 
 
-def run(db, company: dict, source: dict) -> None:
+def run(client, company: dict, source: dict) -> None:
     """
     Run the XBRL API pipeline for one source record.
 
@@ -91,12 +85,17 @@ def run(db, company: dict, source: dict) -> None:
             "errorMessage": None,
         },
     }
-    log_id = insert_ingestion_log(db, log_doc)
+    log_id = client.insert_log(log_doc)
     logger.info("API pipeline started | companyId=%s sourceId=%s", company_id, source_id)
 
     try:
-        filters  = source.get("filters", [])
-        lei      = filters[0] if isinstance(filters, list) and filters else None
+        lei      = client.get_ovh_lei(company)
+        if not lei:
+            logger.warning(
+                "No LEI found in company tickers for %r — "
+                "check that companies.tickers contains {\"lei\": \"...\"}",
+                company.get("name"),
+            )
         api_base = source.get("sourceUrl") or None
         parser_result = ovh_parser.run(lei=lei, api_base=api_base)
         downloaded_at = _now_iso()
@@ -108,14 +107,14 @@ def run(db, company: dict, source: dict) -> None:
         api_listing_path = parser_result.get("api_listing")
         if api_listing_path and Path(api_listing_path).exists():
             file_id, size = _ingest_file(
-                db, api_listing_path, "api_filings.json",
+                client, api_listing_path, "api_filings.json",
                 metadata={
                     "companyId": company_id,
                     "sourceId":  source_id,
                     "fileType":  "api_listing",
                 },
             )
-            insert_report(db, {
+            client.insert_report({
                 "companyId":      company_id,
                 "sourceId":       source_id,
                 "exchange":       exchange,
@@ -159,7 +158,7 @@ def run(db, company: dict, source: dict) -> None:
                 stored_name        = f"{fy_label}_{display_name}"
 
                 file_id, size = _ingest_file(
-                    db, local_path, stored_name,
+                    client, local_path, stored_name,
                     metadata={
                         "companyId":  company_id,
                         "sourceId":   source_id,
@@ -188,7 +187,7 @@ def run(db, company: dict, source: dict) -> None:
                 })
 
             if fy_report_files:
-                insert_report(db, {
+                client.insert_report({
                     "companyId":      company_id,
                     "sourceId":       source_id,
                     "exchange":       exchange,
@@ -207,14 +206,14 @@ def run(db, company: dict, source: dict) -> None:
         if excel_path and Path(excel_path).exists():
             excel_name = Path(excel_path).name
             file_id, size = _ingest_file(
-                db, excel_path, excel_name,
+                client, excel_path, excel_name,
                 metadata={
                     "companyId":  company_id,
                     "sourceId":   source_id,
                     "reportType": report_type,
                 },
             )
-            insert_report(db, {
+            client.insert_report({
                 "companyId":      company_id,
                 "sourceId":       source_id,
                 "exchange":       exchange,
@@ -246,7 +245,7 @@ def run(db, company: dict, source: dict) -> None:
         # ------------------------------------------------------------------
         # 4. Finalise ingestion log
         # ------------------------------------------------------------------
-        update_ingestion_log(db, log_id, {
+        client.update_log(log_id, {
             "result.status":  "success",
             "parse.status":   "success",
             "parse.parsedAt": downloaded_at,
@@ -257,7 +256,7 @@ def run(db, company: dict, source: dict) -> None:
     except Exception as exc:
         logger.error("API pipeline failed | companyId=%s sourceId=%s error=%s",
                      company_id, source_id, exc, exc_info=True)
-        update_ingestion_log(db, log_id, {
+        client.update_log(log_id, {
             "result.status":       "error",
             "result.errorCode":    type(exc).__name__,
             "result.errorMessage": str(exc),

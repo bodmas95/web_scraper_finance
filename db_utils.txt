@@ -1,13 +1,12 @@
 """
-Common database read/write utilities.
+Common database read utilities.
 
-Read-only collections : companies, sources
-Write collections     : reports, ingestionLogs, fs.files, fs.chunks
+Write operations (insert_report, update_report, insert_log, update_log,
+save_bytes_to_gridfs, save_text_to_gridfs) have been moved to MongoDBClient
+in src/pipeline/db.py.
 """
 
 from datetime import datetime, timezone
-from bson import ObjectId
-import gridfs
 
 
 # ---------------------------------------------------------------------------
@@ -45,86 +44,41 @@ def get_sources_for_company(db, company_id: str, source_type: str = None) -> lis
 
 
 # ---------------------------------------------------------------------------
-# WRITE - reports
+# HKEX — file download utility
 # ---------------------------------------------------------------------------
 
-def insert_report(db, doc: dict) -> str:
-    """
-    Insert a report document.
-    Returns the inserted _id as a string.
-    """
-    now = datetime.now(timezone.utc)
-    doc.setdefault("createdAt", now)
-    doc.setdefault("updatedAt", now)
-    result = db.reports.insert_one(doc)
-    return str(result.inserted_id)
+import os as _os
 
 
-def update_report(db, report_id: str, fields: dict):
-    """
-    Update specific fields of a report document by _id.
-    Always bumps updatedAt.
-    """
-    fields["updatedAt"] = datetime.now(timezone.utc)
-    db.reports.update_one(
-        {"_id": ObjectId(report_id)},
-        {"$set": fields},
-    )
+def download_file(url, folder, db_client=None):
+    _os.makedirs(folder, exist_ok=True)
 
+    filename = url.split("/")[-1]
+    path = _os.path.join(folder, filename)
 
-# ---------------------------------------------------------------------------
-# WRITE - ingestion_logs
-# ---------------------------------------------------------------------------
+    if _os.path.exists(path):
+        print(f"already exists: {filename}")
+        if db_client:
+            try:
+                with open(path, "rb") as f:
+                    file_bytes = f.read()
+                print(f"saving existing local file to MongoDB: {filename}")
+                db_client.save_file(file_bytes, filename)
+            except Exception as e:
+                print(f"failed to save existing file into MongoDB: {filename}, error: {e}")
+        return
 
-def insert_ingestion_log(db, doc: dict) -> str:
-    """
-    Insert an ingestion log document.
-    Returns the inserted _id as a string.
-    """
-    now = datetime.now(timezone.utc)
-    doc.setdefault("createdAt", now)
-    doc.setdefault("updatedAt", now)
-    result = db.ingestionLogs.insert_one(doc)
-    return str(result.inserted_id)
+    from src.crawler.proxy_base import proxy_request
+    print(f"downloading: {filename}")
+    status, headers, body = proxy_request(method="GET", url=url, headers={"User-Agent": "Mozilla/5.0"})
 
+    with open(path, "wb") as f:
+        f.write(body)
+    print(f"saved locally: {filename}")
 
-def update_ingestion_log(db, log_id: str, fields: dict):
-    """
-    Update specific fields of an ingestion log by _id.
-    Always bumps updatedAt.
-    """
-    fields["updatedAt"] = datetime.now(timezone.utc)
-    db.ingestionLogs.update_one(
-        {"_id": ObjectId(log_id)},
-        {"$set": fields},
-    )
-
-
-# ---------------------------------------------------------------------------
-# WRITE - fs.files / fs.chunks (GridFS)
-# ---------------------------------------------------------------------------
-
-def save_bytes_to_gridfs(db, data: bytes, filename: str, metadata: dict = None) -> str:
-    """
-    Store binary content (PDF, Excel, etc.) in GridFS.
-    Returns the file_id as a string.
-    """
-    fs      = gridfs.GridFS(db)
-    file_id = fs.put(data, filename=filename, **(metadata or {}))
-    return str(file_id)
-
-
-def save_text_to_gridfs(db, text: str, filename: str, metadata: dict = None) -> str:
-    """
-    Store plain-text content (news articles, etc.) directly in GridFS
-    without converting to any file format.
-    Returns the file_id as a string.
-    """
-    fs      = gridfs.GridFS(db)
-    file_id = fs.put(
-        text.encode("utf-8"),
-        filename=filename,
-        content_type="text/plain",
-        **(metadata or {}),
-    )
-    return str(file_id)
+    if db_client:
+        try:
+            print(f"saving downloaded file to MongoDB: {filename}")
+            db_client.save_file(body, filename)
+        except Exception as e:
+            print(f"failed to save downloaded file to MongoDB: {filename}, error: {e}")
