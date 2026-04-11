@@ -27,8 +27,8 @@ _OVH_CFG = _get_section("OVH")
 DEBUG        = "--debug" in sys.argv
 DOWNLOAD_DIR = _OVH_CFG.get("download_dir")
 OUTPUT       = str(Path(DOWNLOAD_DIR) / "ovhcloud_complete_financials.xlsx")
-LEI          = None
-API_BASE     = None
+LEI          = _OVH_CFG.get("lei") or None
+API_BASE     = _OVH_CFG.get("api_base") or None
 HEADERS      = {
     "User-Agent": _OVH_CFG.get("user_agent"),
     "Accept":     "application/json,*/*",
@@ -192,16 +192,6 @@ TABLE_SIGNATURES = [
     ("Operating Expenses","Charges externes",               81),
 ]
 
-SHEET_STYLES = {
-    "Income Statement":   {"hdr_bg": "#1A4080", "alt_bg": "#EDF3FC"},
-    "OCI":                {"hdr_bg": "#2E4057", "alt_bg": "#E8EDF2"},
-    "Assets":             {"hdr_bg": "#6E4B00", "alt_bg": "#FEF9E7"},
-    "Liabilities":        {"hdr_bg": "#4A235A", "alt_bg": "#F5EEF8"},
-    "Changes in Equity":  {"hdr_bg": "#1B4332", "alt_bg": "#E9F7EF"},
-    "Cash Flow":          {"hdr_bg": "#145A32", "alt_bg": "#E9F7EF"},
-    "Capex Breakdown":    {"hdr_bg": "#7B3F00", "alt_bg": "#FFF5E6"},
-    "Operating Expenses": {"hdr_bg": "#8B0000", "alt_bg": "#FDE8E8"},
-}
 
 TOTAL_KEYWORDS = [
     "total actif", "total passif", "capitaux propres", "résultat opérationnel",
@@ -824,35 +814,31 @@ def write_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
         return wb.add_format(d)
 
     cov = wb.add_worksheet("Overview")
-    cov.hide_gridlines(2)
     cov.set_column("A:A", 32)
     cov.set_column("B:G", 22)
-    cov.set_row(0, 48)
+    cov.set_row(0, 30)
     cov.merge_range(
         "A1:G1",
         f"{_OVH_CFG.get('company_short_name')} — {_OVH_CFG.get('section_title')} (all filings)",
-        F(bold=True, font_size=17, font_color="#FFFFFF", bg_color="#0D1B2A",
-          align="center", valign="vcenter"),
+        F(bold=True, font_size=14, align="center", valign="vcenter"),
     )
-    cov.set_row(1, 20)
+    cov.set_row(1, 16)
     cov.merge_range(
         "A2:G2",
         f"Source: {API_BASE}  |  LEI: {LEI}  |  Generated: {datetime.now():%Y-%m-%d %H:%M}",
-        F(italic=True, font_size=9, font_color="#CCCCCC", bg_color="#0D1B2A", align="center"),
+        F(italic=True, font_size=9, align="center"),
     )
 
     row = 3
     for fy_label in sorted(all_data.keys(), reverse=True):
         fy_tables = all_data[fy_label]
-        cov.set_row(row, 22)
-        cov.write(row, 0, fy_label,
-            F(bold=True, font_size=12, font_color="#FFFFFF", bg_color="#1A4080"))
-        cov.merge_range(row, 1, row, 6, f"{len(fy_tables)} tables extracted",
-            F(font_color="#FFFFFF", bg_color="#1A4080"))
+        cov.set_row(row, 18)
+        cov.write(row, 0, fy_label, F(bold=True, font_size=11))
+        cov.merge_range(row, 1, row, 6, f"{len(fy_tables)} tables extracted", F())
         row += 1
         for tbl_name, tbl_rows in fy_tables.items():
-            cov.write(row, 0, f"  {tbl_name}", F(font_color="#333333", indent=1))
-            cov.write(row, 1, f"{len(tbl_rows) - 1} data rows", F(font_color="#666666"))
+            cov.write(row, 0, f"  {tbl_name}", F(indent=1))
+            cov.write(row, 1, f"{len(tbl_rows) - 1} data rows", F())
             row += 1
         row += 1
 
@@ -878,12 +864,7 @@ def write_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
     fy_labels_sorted = sorted(all_data.keys(), reverse=True)
 
     for sheet_name in all_sheet_names:
-        base_name = re.sub(r"\s*\(\d+\)$", "", sheet_name)
-        style = SHEET_STYLES.get(base_name, {"hdr_bg": "#333333", "alt_bg": "#F5F5F5"})
-        hdr_bg = style["hdr_bg"]
-        alt_bg = style["alt_bg"]
         ws = wb.add_worksheet(sheet_name[:31])
-        ws.hide_gridlines(2)
         current_row = 0
 
         for fy_label in fy_labels_sorted:
@@ -891,48 +872,44 @@ def write_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
             if not tbl_rows:
                 continue
             n_cols = max(len(r) for r in tbl_rows) if tbl_rows else 4
-            ws.set_row(current_row, 28)
+            ws.set_row(current_row, 22)
             ws.merge_range(
                 current_row, 0, current_row, max(0, n_cols - 1),
                 f"{_OVH_CFG.get('company_short_name')} — {sheet_name}  |  {fy_label}",
-                F(bold=True, font_size=13, font_color="#FFFFFF", bg_color="#0D1B2A",
-                  align="left", indent=2, valign="vcenter"),
+                F(bold=True, font_size=12, align="left", indent=1, valign="vcenter"),
             )
             current_row += 1
 
             if tbl_rows:
                 header = tbl_rows[0]
-                ws.set_row(current_row, 22)
+                ws.set_row(current_row, 20)
                 for ci, h in enumerate(header):
                     col_w = 50 if ci == 0 else (45 if ci == 1 else 20)
                     ws.set_column(ci, ci, col_w)
                     ws.write(current_row, ci, h,
-                        F(bold=True, font_color="#FFFFFF", bg_color=hdr_bg,
-                          align="center", border=1, text_wrap=True))
+                        F(bold=True, align="center", border=1, text_wrap=True))
                 current_row += 1
 
             for ri, row_cells in enumerate(tbl_rows[1:]):
                 label = row_cells[0] if row_cells else ""
                 is_total = _is_total_row(label)
-                bg = "#D5E8D4" if is_total else (alt_bg if ri % 2 == 0 else "#FFFFFF")
-                ws.set_row(current_row, 18 if is_total else 16)
+                ws.set_row(current_row, 16)
                 for ci, cell in enumerate(row_cells):
                     is_label_col = ci <= 1
                     num_val = _parse_french_number(cell) if not is_label_col else None
                     if not is_label_col and num_val is not None:
                         ws.write_number(current_row, ci, num_val,
-                            F(bg_color=bg, border=1, align="right",
+                            F(border=1, align="right",
                               num_format="#,##0;(#,##0);\"-\"",
                               bold=is_total, font_size=9))
                     elif not is_label_col and cell.strip() in ("-", "—", "–", ""):
                         ws.write(current_row, ci, cell.strip() or None,
-                            F(bg_color=bg, border=1, align="center", font_size=9, bold=is_total))
+                            F(border=1, align="center", font_size=9, bold=is_total))
                     else:
                         ws.write(current_row, ci, cell,
-                            F(bg_color=bg, border=1,
+                            F(border=1,
                               indent=1 if (ci == 0 and is_total) else (2 if ci == 0 else 0),
                               text_wrap=True, bold=is_total,
-                              font_color="#0D1B2A" if ci == 0 else "#444444",
                               italic=(ci == 1),
                               font_size=10 if (ci == 0 and is_total) else 9))
                 current_row += 1
@@ -948,7 +925,7 @@ def write_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
 
 def _write_openpyxl(all_data: dict, output: str):
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
     wb = Workbook()
@@ -977,8 +954,7 @@ def _write_openpyxl(all_data: dict, output: str):
             if not tbl_rows:
                 continue
             ws.cell(current_row, 1, f"{sheet_name} — {fy_label}")
-            ws.cell(current_row, 1).font = Font(name="Arial", bold=True, size=13, color="FFFFFF")
-            ws.cell(current_row, 1).fill = PatternFill("solid", fgColor="0D1B2A")
+            ws.cell(current_row, 1).font = Font(name="Arial", bold=True, size=13)
             current_row += 1
             for ri, row_cells in enumerate(tbl_rows):
                 is_header = ri == 0
@@ -988,12 +964,10 @@ def _write_openpyxl(all_data: dict, output: str):
                     c = ws.cell(current_row, ci + 1, cell)
                     c.border = _border()
                     if is_header:
-                        c.font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
-                        c.fill = PatternFill("solid", fgColor="1A4080")
+                        c.font = Font(name="Arial", bold=True, size=10)
                         c.alignment = Alignment(horizontal="center")
                     elif is_total:
                         c.font = Font(name="Arial", bold=True, size=10)
-                        c.fill = PatternFill("solid", fgColor="D5E8D4")
                     else:
                         c.font = Font(name="Arial", size=9)
                     if ci > 0 and not is_header:
@@ -1007,6 +981,383 @@ def _write_openpyxl(all_data: dict, output: str):
 
     wb.save(output)
     print(f"\nSaved (openpyxl): {output}")
+
+
+# ---------------------------------------------------------------------------
+# Multi-year consolidated Excel (natixis-style: one sheet per statement type,
+# years 2021-2025 as columns side by side)
+# ---------------------------------------------------------------------------
+
+TARGET_YEARS = [2021, 2022, 2023, 2024, 2025]
+CONSOLIDATED_SHEET_TYPES = [
+    "Income Statement",
+    "Assets",
+    "Liabilities",
+    "Cash Flow",
+    "Capex Breakdown",
+    "Operating Expenses",
+]
+
+
+def _normalize_label(label: str) -> str:
+    """
+    Normalize a French label for cross-year matching across filings.
+
+    Handles:
+    - Leading year prefixes:      '2022 REVENU'                     -> 'revenu'
+    - Trailing formula letters:   'Capacité d'autofinancement A'
+                                  'Flux de trésorerie D = A + B + C' -> stripped
+    - Trailing note refs:         '...incorporelles 4.10 - 4.11'    -> stripped
+    - Trailing footnote refs:     'EBITDA courant (1)'               -> 'ebitda courant'
+    - Case differences:            UPPERCASE vs Title Case
+    - Apostrophe variants:         \u2019, \u2018, \u2032
+    - Hyphen variants:             \u2011 (non-breaking), \u2013 (en-dash)
+    - Space-padded hyphens:        ' - '                             -> '-'
+    - Typography ligatures:        ﬀ \ufb00 -> ff, ﬁ \ufb01 -> fi, etc.
+    """
+    label = label.strip()
+    # Strip leading 4-digit year prefix: "2022 REVENU" -> "REVENU"
+    label = re.sub(r'^\d{4}\s+', '', label)
+    # Strip trailing formula references used in French cash-flow statements:
+    # " A", " B = ...", " D = A + B + C", " D + E + F + G"
+    label = re.sub(r'\s+[A-G](\s*[=+][A-Z0-9\s+=]*)?$', '', label)
+    # Strip trailing note/article references like " 4.10 - 4.11" or " 4.10"
+    label = re.sub(r'\s+\d+\.\d+(\s*[-\u2013]\s*\d+\.\d+)*\s*$', '', label)
+    # Remove trailing footnote refs: "(1)", "(2)"
+    label = re.sub(r'\s*\(\d+\)\s*$', '', label)
+    # Normalize apostrophe and quote variants to plain apostrophe
+    label = label.replace('\u2019', "'").replace('\u2018', "'").replace('\u2032', "'")
+    # Normalize non-breaking hyphen and en-dash to regular hyphen
+    label = label.replace('\u2011', '-').replace('\u2013', '-')
+    # Normalize typography ligatures to their component letters
+    label = (label
+             .replace('\ufb00', 'ff')   # ﬀ
+             .replace('\ufb01', 'fi')   # ﬁ
+             .replace('\ufb02', 'fl')   # ﬂ
+             .replace('\ufb03', 'ffi')  # ﬃ
+             .replace('\ufb04', 'ffl')  # ﬄ
+             .replace('\ufb05', 'st')   # ﬅ
+             .replace('\ufb06', 'st'))  # ﬆ
+    # Collapse space-padded hyphens: " - " -> "-"
+    label = re.sub(r'\s+-\s+', '-', label)
+    # Normalize whitespace
+    label = re.sub(r'\s+', ' ', label).strip()
+    return label.lower()
+
+
+_NOISE_PATTERNS = [
+    r'document d.enregistrement universel',
+    r'^ovhcloud\s+document',
+    r'www\.ovhcloud\.com',
+    r'informations financi.res et comptables',
+]
+_NOISE_RE = re.compile('|'.join(_NOISE_PATTERNS), re.IGNORECASE)
+
+
+def _is_noise_row(label: str) -> bool:
+    """Return True for rows that are footnotes, document titles, or other garbage."""
+    if not label:
+        return True
+    # Very long labels are footnote text, not financial line items
+    if len(label) > 160:
+        return True
+    if _NOISE_RE.search(label):
+        return True
+    return False
+
+
+def _find_year_col(header_row: list[str], year: int) -> int | None:
+    """Return the column index in a table's header that contains the given year."""
+    for ci, h in enumerate(header_row):
+        if str(year) in str(h):
+            return ci
+    return None
+
+
+def _year_value_map(tbl_rows: list[list[str]], year: int) -> dict[str, str]:
+    """
+    Given a table (rows[0] = header), return a dict mapping
+    normalized_label -> value for the requested year column.
+    First occurrence wins (avoids collision from duplicate labels in same filing).
+    Noise rows (footnotes, document titles) are skipped.
+    """
+    if not tbl_rows or len(tbl_rows) < 2:
+        return {}
+    header = tbl_rows[0]
+    col = _find_year_col(header, year)
+    if col is None:
+        return {}
+    result: dict[str, str] = {}
+    for row in tbl_rows[1:]:
+        if not row or not row[0]:
+            continue
+        raw = row[0].strip()
+        if _is_noise_row(raw):
+            continue
+        norm = _normalize_label(raw)
+        if not norm or norm in result:
+            continue
+        value = row[col].strip() if col < len(row) and row[col] is not None else ""
+        result[norm] = str(value) if value != "" else ""
+    return result
+
+
+def _english_label_map(tbl_rows: list[list[str]]) -> dict[str, str]:
+    """Return dict mapping normalized_label -> english_label from a table."""
+    result: dict[str, str] = {}
+    if not tbl_rows or len(tbl_rows) < 2:
+        return result
+    for row in tbl_rows[1:]:
+        if not row or not row[0]:
+            continue
+        norm = _normalize_label(row[0])
+        if not norm or norm in result:
+            continue
+        en = (row[1].strip() if len(row) > 1 and row[1] else "")
+        if en:
+            result[norm] = en
+    return result
+
+
+def _get_reference_table(all_data: dict, sheet_type: str) -> list[list[str]] | None:
+    """Return the most recent year's table for the given sheet type, for row ordering."""
+    for fy in sorted(all_data.keys(), reverse=True):
+        tbl = all_data[fy].get(sheet_type)
+        if tbl and len(tbl) > 1:
+            return tbl
+    return None
+
+
+def write_consolidated_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
+    """
+    Write a multi-year consolidated Excel file.
+    One sheet per statement type (Income Statement, Assets, Liabilities, Cash Flow, etc.)
+    Columns: Label (French) | Label (English) | 2021 | 2022 | 2023 | 2024 | 2025
+    For each year, the value is taken from the most recent filing that covers that year
+    (FY{year} first, then FY{year+1} as fallback).
+    Labels are matched by normalized form to handle year-over-year formatting differences.
+    """
+    try:
+        import xlsxwriter
+        _write_consolidated_xlsxwriter(all_data, output)
+    except ImportError:
+        _write_consolidated_openpyxl(all_data, output)
+
+
+def _best_table_for_year(all_data: dict, sheet_type: str, year: int) -> list[list[str]] | None:
+    """Return the table rows to use for extracting a given year's column."""
+    for fy_candidate in [f"FY{year}", f"FY{year + 1}"]:
+        tbl = all_data.get(fy_candidate, {}).get(sheet_type)
+        if tbl:
+            col = _find_year_col(tbl[0], year)
+            if col is not None:
+                return tbl
+    return None
+
+
+def _build_consolidated_rows(all_data: dict, sheet_type: str) -> list[list]:
+    """
+    Build consolidated rows for a sheet type across TARGET_YEARS.
+    Returns list of rows where row[0] is the header and subsequent rows are:
+      [fr_label, en_label, val_2021, val_2022, val_2023, val_2024, val_2025]
+
+    Labels are matched across years using normalized forms to handle differences
+    like '2022 REVENU' (FY2022) vs 'Revenu' (FY2025), UPPERCASE vs Title Case, etc.
+    Each unique concept appears exactly once; the display label comes from the most
+    recent filing.
+    """
+    ref_tbl = _get_reference_table(all_data, sheet_type)
+    if not ref_tbl:
+        return []
+
+    # --- ordered_labels: list of (display_label, normalized_key) ---
+    # Start with reference table (most recent year) for ordering and display labels.
+    # Then append any labels from older years whose normalized form isn't seen yet.
+    ordered_labels: list[tuple[str, str]] = []
+    seen_norm: set[str] = set()
+
+    for row in ref_tbl[1:]:
+        if not row or not row[0] or not row[0].strip():
+            continue
+        raw = row[0].strip()
+        if _is_noise_row(raw):
+            continue
+        norm = _normalize_label(raw)
+        if not norm or norm in seen_norm:
+            continue
+        ordered_labels.append((raw, norm))
+        seen_norm.add(norm)
+
+    # Supplement with labels from older filings not covered by reference table
+    for fy in sorted(all_data.keys()):
+        tbl = all_data[fy].get(sheet_type)
+        if not tbl:
+            continue
+        for row in tbl[1:]:
+            if not row or not row[0] or not row[0].strip():
+                continue
+            raw = row[0].strip()
+            if _is_noise_row(raw):
+                continue
+            norm = _normalize_label(raw)
+            if not norm or norm in seen_norm:
+                continue
+            ordered_labels.append((raw, norm))
+            seen_norm.add(norm)
+
+    # Build english label map (normalized_key -> english_label)
+    en_map: dict[str, str] = {}
+    for fy in sorted(all_data.keys(), reverse=True):
+        tbl = all_data[fy].get(sheet_type)
+        if tbl:
+            for k, v in _english_label_map(tbl).items():
+                if k not in en_map:
+                    en_map[k] = v
+
+    # Build year -> normalized_label -> value maps
+    year_maps: dict[int, dict[str, str]] = {}
+    for year in TARGET_YEARS:
+        tbl = _best_table_for_year(all_data, sheet_type, year)
+        year_maps[year] = _year_value_map(tbl, year) if tbl else {}
+
+    # Header row
+    unit_label = ref_tbl[0][0] if ref_tbl[0] else sheet_type
+    header = [unit_label, "Label (English)"] + [str(y) for y in TARGET_YEARS]
+    rows = [header]
+
+    for display_lbl, norm_key in ordered_labels:
+        en = en_map.get(norm_key, "")
+        row: list = [display_lbl, en]
+        for year in TARGET_YEARS:
+            row.append(year_maps[year].get(norm_key, ""))
+        rows.append(row)
+
+    return rows
+
+
+def _write_consolidated_xlsxwriter(all_data: dict, output: str):
+    import xlsxwriter
+
+    print(f"\nWriting consolidated: {output} ...")
+    wb = xlsxwriter.Workbook(output, {"nan_inf_to_errors": True})
+
+    def F(**kw):
+        d = {"font_name": "Arial", "font_size": 10, "valign": "vcenter"}
+        d.update(kw)
+        return wb.add_format(d)
+
+    for sheet_type in CONSOLIDATED_SHEET_TYPES:
+        rows = _build_consolidated_rows(all_data, sheet_type)
+        if not rows or len(rows) < 2:
+            print(f"  Skipping {sheet_type}: no data")
+            continue
+
+        ws = wb.add_worksheet(sheet_type[:31])
+        n_cols = len(rows[0])
+
+        # Title row
+        ws.set_row(0, 22)
+        ws.merge_range(
+            0, 0, 0, n_cols - 1,
+            f"{_OVH_CFG.get('company_short_name')} — {sheet_type}  |  {TARGET_YEARS[0]}–{TARGET_YEARS[-1]}",
+            F(bold=True, font_size=12, align="left", indent=1, valign="vcenter"),
+        )
+
+        # Header row
+        header = rows[0]
+        ws.set_row(1, 20)
+        ws.set_column(0, 0, 52)
+        ws.set_column(1, 1, 48)
+        for ci in range(2, n_cols):
+            ws.set_column(ci, ci, 16)
+        for ci, h in enumerate(header):
+            ws.write(1, ci, h, F(bold=True, align="center", border=1, text_wrap=True))
+
+        # Data rows
+        for ri, row_cells in enumerate(rows[1:]):
+            excel_row = ri + 2
+            label = row_cells[0] if row_cells else ""
+            is_total = _is_total_row(label)
+            ws.set_row(excel_row, 16)
+            for ci, cell in enumerate(row_cells):
+                if ci < 2:
+                    ws.write(excel_row, ci, cell,
+                        F(border=1, indent=1 if (ci == 0 and is_total) else (2 if ci == 0 else 0),
+                          text_wrap=True, bold=is_total,
+                          italic=(ci == 1),
+                          font_size=10 if (ci == 0 and is_total) else 9))
+                else:
+                    num_val = _parse_french_number(cell)
+                    if num_val is not None:
+                        ws.write_number(excel_row, ci, num_val,
+                            F(border=1, align="right",
+                              num_format="#,##0;(#,##0);\"-\"",
+                              bold=is_total, font_size=9))
+                    elif cell.strip() in ("-", "—", "–", ""):
+                        ws.write(excel_row, ci, cell.strip() or None,
+                            F(border=1, align="center", font_size=9, bold=is_total))
+                    else:
+                        ws.write(excel_row, ci, cell,
+                            F(border=1, align="right", font_size=9, bold=is_total))
+
+        ws.freeze_panes(2, 2)
+        print(f"  Consolidated sheet: {sheet_type[:31]}")
+
+    wb.close()
+    print(f"\nSaved consolidated: {output}")
+
+
+def _write_consolidated_openpyxl(all_data: dict, output: str):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    def _border():
+        s = Side(style="thin", color="AAAAAA")
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    for sheet_type in CONSOLIDATED_SHEET_TYPES:
+        rows = _build_consolidated_rows(all_data, sheet_type)
+        if not rows or len(rows) < 2:
+            continue
+
+        ws = wb.create_sheet(sheet_type[:31])
+        n_cols = len(rows[0])
+
+        # Title row
+        title_cell = ws.cell(1, 1,
+            f"{_OVH_CFG.get('company_short_name')} — {sheet_type}  |  {TARGET_YEARS[0]}–{TARGET_YEARS[-1]}")
+        title_cell.font = Font(name="Arial", bold=True, size=12)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+
+        # Header row
+        for ci, h in enumerate(rows[0]):
+            c = ws.cell(2, ci + 1, h)
+            c.font = Font(name="Arial", bold=True, size=10)
+            c.alignment = Alignment(horizontal="center")
+            c.border = _border()
+
+        # Data rows
+        for ri, row_cells in enumerate(rows[1:]):
+            label = row_cells[0] if row_cells else ""
+            is_total = _is_total_row(label)
+            for ci, cell in enumerate(row_cells):
+                c = ws.cell(ri + 3, ci + 1, cell)
+                c.border = _border()
+                c.font = Font(name="Arial", bold=is_total, size=10 if is_total else 9)
+                if ci >= 2:
+                    c.alignment = Alignment(horizontal="right")
+
+        ws.column_dimensions["A"].width = 52
+        ws.column_dimensions["B"].width = 48
+        for ci in range(3, n_cols + 1):
+            ws.column_dimensions[get_column_letter(ci)].width = 16
+
+    wb.save(output)
+    print(f"\nSaved consolidated (openpyxl): {output}")
 
 
 def main():
@@ -1068,6 +1419,14 @@ def main():
         print(f"\n{OUTPUT} is open — saving as {alt}")
         write_excel(all_data, alt)
 
+    consolidated_output = OUTPUT.replace(".xlsx", "_consolidated.xlsx")
+    try:
+        write_consolidated_excel(all_data, consolidated_output)
+    except PermissionError:
+        alt = consolidated_output.replace(".xlsx", "_new.xlsx")
+        print(f"\n{consolidated_output} is open — saving as {alt}")
+        write_consolidated_excel(all_data, alt)
+
     print(f"\nRESULTS SUMMARY")
     print("=" * 62)
     for fy_label in sorted(all_data.keys(), reverse=True):
@@ -1075,7 +1434,8 @@ def main():
         print(f"  {fy_label}:")
         for name, rows in tables.items():
             print(f"    {name}: {len(rows) - 1} data rows")
-    print(f"\n  Output: {OUTPUT}\n")
+    print(f"\n  Output: {OUTPUT}")
+    print(f"  Consolidated: {consolidated_output}\n")
 
 
 
@@ -1107,10 +1467,12 @@ def run(year: int | None = None, lei: str | None = None, api_base: str | None = 
     main()
 
     root_dir = Path(DOWNLOAD_DIR)
+    consolidated_output = OUTPUT.replace(".xlsx", "_consolidated.xlsx")
     result: dict = {
-        "excel":       str(Path(OUTPUT).resolve()) if Path(OUTPUT).exists() else None,
-        "api_listing": None,
-        "per_year":    {},
+        "excel":        str(Path(OUTPUT).resolve()) if Path(OUTPUT).exists() else None,
+        "consolidated": str(Path(consolidated_output).resolve()) if Path(consolidated_output).exists() else None,
+        "api_listing":  None,
+        "per_year":     {},
     }
 
     api_path = root_dir / "api_filings.json"
