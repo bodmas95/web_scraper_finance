@@ -27,6 +27,7 @@ _OVH_CFG = _get_section("OVH")
 DEBUG        = "--debug" in sys.argv
 DOWNLOAD_DIR = _OVH_CFG.get("download_dir")
 OUTPUT       = str(Path(DOWNLOAD_DIR) / "ovhcloud_complete_financials.xlsx")
+XBRL_OUTPUT  = str(Path(DOWNLOAD_DIR) / "ovhcloud_xbrl_facts.xlsx")
 LEI          = _OVH_CFG.get("lei") or None
 API_BASE     = _OVH_CFG.get("api_base") or None
 HEADERS      = {
@@ -355,6 +356,25 @@ def download_report(filing: dict, save_dir: Path) -> Path | None:
     r.raise_for_status()
     save_path.write_bytes(r.content)
     print(f"  Saved: {save_path.name} ({len(r.content) / 1e6:.1f} MB)")
+    return save_path
+
+
+def download_xbrl_json(filing: dict, save_dir: Path) -> Path | None:
+    """Download the OIM xBRL-JSON file (json_url) for a filing and cache it locally."""
+    json_url = filing.get("json_url", "")
+    if not json_url:
+        print("  No json_url in filing metadata")
+        return None
+    save_path = save_dir / "viewer_data.json"
+    if save_path.exists():
+        print(f"  [cache] {save_path.name} ({save_path.stat().st_size / 1e6:.2f} MB)")
+        return save_path
+    full_url = API_BASE + json_url
+    print(f"  Downloading XBRL JSON ...")
+    r = http_client.get(full_url, headers=HEADERS, timeout=120)
+    r.raise_for_status()
+    save_path.write_bytes(r.content)
+    print(f"  Saved: {save_path.name} ({len(r.content) / 1e6:.2f} MB)")
     return save_path
 
 
@@ -1128,20 +1148,20 @@ def _get_reference_table(all_data: dict, sheet_type: str) -> list[list[str]] | N
     return None
 
 
-def write_consolidated_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str):
+def write_consolidated_excel(all_data: dict[str, dict[str, list[list[str]]]], output: str,
+                              concept_map: dict | None = None):
     """
     Write a multi-year consolidated Excel file.
     One sheet per statement type (Income Statement, Assets, Liabilities, Cash Flow, etc.)
-    Columns: Label (French) | Label (English) | 2021 | 2022 | 2023 | 2024 | 2025
-    For each year, the value is taken from the most recent filing that covers that year
-    (FY{year} first, then FY{year+1} as fallback).
-    Labels are matched by normalized form to handle year-over-year formatting differences.
+    Columns: Label (French) | Label (English) | XBRL Concept | 2021 | 2022 | 2023 | 2024 | 2025
+    For each year, the value is taken from the most recent filing that covers that year.
+    If concept_map is provided, each row also gets its XBRL concept name.
     """
     try:
         import xlsxwriter
-        _write_consolidated_xlsxwriter(all_data, output)
+        _write_consolidated_xlsxwriter(all_data, output, concept_map or {})
     except ImportError:
-        _write_consolidated_openpyxl(all_data, output)
+        _write_consolidated_openpyxl(all_data, output, concept_map or {})
 
 
 def _best_table_for_year(all_data: dict, sheet_type: str, year: int) -> list[list[str]] | None:
@@ -1235,7 +1255,7 @@ def _build_consolidated_rows(all_data: dict, sheet_type: str) -> list[list]:
     return rows
 
 
-def _write_consolidated_xlsxwriter(all_data: dict, output: str):
+def _write_consolidated_xlsxwriter(all_data: dict, output: str, concept_map: dict):
     import xlsxwriter
 
     print(f"\nWriting consolidated: {output} ...")
@@ -1252,6 +1272,21 @@ def _write_consolidated_xlsxwriter(all_data: dict, output: str):
             print(f"  Skipping {sheet_type}: no data")
             continue
 
+        sheet_concepts = concept_map.get(sheet_type, {})
+
+        # Inject "XBRL Concept" column at position 2 (after FR label and EN label)
+        # Original header: [unit_label, "Label (English)", "2021", ...]
+        # New header:      [unit_label, "Label (English)", "XBRL Concept", "2021", ...]
+        new_rows = []
+        for ri, row in enumerate(rows):
+            if ri == 0:
+                new_rows.append([row[0], row[1], "XBRL Concept"] + list(row[2:]))
+            else:
+                label = row[0] if row else ""
+                concept = sheet_concepts.get(label, "")
+                new_rows.append([row[0], row[1], concept] + list(row[2:]))
+        rows = new_rows
+
         ws = wb.add_worksheet(sheet_type[:31])
         n_cols = len(rows[0])
 
@@ -1266,9 +1301,10 @@ def _write_consolidated_xlsxwriter(all_data: dict, output: str):
         # Header row
         header = rows[0]
         ws.set_row(1, 20)
-        ws.set_column(0, 0, 52)
-        ws.set_column(1, 1, 48)
-        for ci in range(2, n_cols):
+        ws.set_column(0, 0, 52)   # French label
+        ws.set_column(1, 1, 44)   # English label
+        ws.set_column(2, 2, 52)   # XBRL Concept
+        for ci in range(3, n_cols):
             ws.set_column(ci, ci, 16)
         for ci, h in enumerate(header):
             ws.write(1, ci, h, F(bold=True, align="center", border=1, text_wrap=True))
@@ -1280,10 +1316,11 @@ def _write_consolidated_xlsxwriter(all_data: dict, output: str):
             is_total = _is_total_row(label)
             ws.set_row(excel_row, 16)
             for ci, cell in enumerate(row_cells):
-                if ci < 2:
+                if ci < 3:      # French label, English label, XBRL concept
                     ws.write(excel_row, ci, cell,
-                        F(border=1, indent=1 if (ci == 0 and is_total) else (2 if ci == 0 else 0),
-                          text_wrap=True, bold=is_total,
+                        F(border=1,
+                          indent=1 if (ci == 0 and is_total) else (2 if ci == 0 else 0),
+                          text_wrap=(ci < 2), bold=is_total,
                           italic=(ci == 1),
                           font_size=10 if (ci == 0 and is_total) else 9))
                 else:
@@ -1293,21 +1330,21 @@ def _write_consolidated_xlsxwriter(all_data: dict, output: str):
                             F(border=1, align="right",
                               num_format="#,##0;(#,##0);\"-\"",
                               bold=is_total, font_size=9))
-                    elif cell.strip() in ("-", "—", "–", ""):
-                        ws.write(excel_row, ci, cell.strip() or None,
+                    elif str(cell).strip() in ("-", "—", "–", ""):
+                        ws.write(excel_row, ci, str(cell).strip() or None,
                             F(border=1, align="center", font_size=9, bold=is_total))
                     else:
                         ws.write(excel_row, ci, cell,
                             F(border=1, align="right", font_size=9, bold=is_total))
 
-        ws.freeze_panes(2, 2)
+        ws.freeze_panes(2, 3)
         print(f"  Consolidated sheet: {sheet_type[:31]}")
 
     wb.close()
     print(f"\nSaved consolidated: {output}")
 
 
-def _write_consolidated_openpyxl(all_data: dict, output: str):
+def _write_consolidated_openpyxl(all_data: dict, output: str, concept_map: dict):
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -1324,23 +1361,33 @@ def _write_consolidated_openpyxl(all_data: dict, output: str):
         if not rows or len(rows) < 2:
             continue
 
+        sheet_concepts = concept_map.get(sheet_type, {})
+
+        # Inject XBRL Concept column
+        new_rows = []
+        for ri, row in enumerate(rows):
+            if ri == 0:
+                new_rows.append([row[0], row[1], "XBRL Concept"] + list(row[2:]))
+            else:
+                label = row[0] if row else ""
+                concept = sheet_concepts.get(label, "")
+                new_rows.append([row[0], row[1], concept] + list(row[2:]))
+        rows = new_rows
+
         ws = wb.create_sheet(sheet_type[:31])
         n_cols = len(rows[0])
 
-        # Title row
         title_cell = ws.cell(1, 1,
             f"{_OVH_CFG.get('company_short_name')} — {sheet_type}  |  {TARGET_YEARS[0]}–{TARGET_YEARS[-1]}")
         title_cell.font = Font(name="Arial", bold=True, size=12)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
 
-        # Header row
         for ci, h in enumerate(rows[0]):
             c = ws.cell(2, ci + 1, h)
             c.font = Font(name="Arial", bold=True, size=10)
             c.alignment = Alignment(horizontal="center")
             c.border = _border()
 
-        # Data rows
         for ri, row_cells in enumerate(rows[1:]):
             label = row_cells[0] if row_cells else ""
             is_total = _is_total_row(label)
@@ -1348,16 +1395,322 @@ def _write_consolidated_openpyxl(all_data: dict, output: str):
                 c = ws.cell(ri + 3, ci + 1, cell)
                 c.border = _border()
                 c.font = Font(name="Arial", bold=is_total, size=10 if is_total else 9)
-                if ci >= 2:
+                if ci >= 3:
                     c.alignment = Alignment(horizontal="right")
 
         ws.column_dimensions["A"].width = 52
-        ws.column_dimensions["B"].width = 48
-        for ci in range(3, n_cols + 1):
+        ws.column_dimensions["B"].width = 44
+        ws.column_dimensions["C"].width = 52
+        for ci in range(4, n_cols + 1):
             ws.column_dimensions[get_column_letter(ci)].width = 16
 
     wb.save(output)
     print(f"\nSaved consolidated (openpyxl): {output}")
+
+
+# ---------------------------------------------------------------------------
+# XBRL fact extraction and concept matching
+# ---------------------------------------------------------------------------
+
+def parse_xbrl_facts(json_path: Path, fy_label: str) -> list[dict]:
+    """
+    Parse the OIM xBRL-JSON file and return a flat list of fact records.
+    Each record has: fy_label, concept, namespace, concept_short,
+    period_type, period_start, period_end, year, value_eur, value_thousands, unit, decimals.
+    """
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  [warn] Could not parse XBRL JSON {json_path}: {e}")
+        return []
+
+    facts_raw = data.get("facts", {})
+    records = []
+    for fact_id, fact in facts_raw.items():
+        dims    = fact.get("dimensions", {})
+        concept = dims.get("concept", "")
+        period  = dims.get("period", "")
+        unit    = dims.get("unit", "")
+        value   = fact.get("value", "")
+        decimals = fact.get("decimals", "")
+
+        # Parse period
+        if "/" in period:
+            parts = period.split("/")
+            period_start = parts[0].split("T")[0]
+            period_end   = parts[1].split("T")[0]
+            period_type  = "duration"
+            year = int(period_end[:4])
+        else:
+            period_start = ""
+            period_end   = period.split("T")[0]
+            period_type  = "instant"
+            year = int(period_end[:4]) if period_end else 0
+
+        namespace, concept_short = (concept.split(":", 1) if ":" in concept else ("", concept))
+
+        try:
+            val_eur = float(value)
+            val_thousands = round(val_eur / 1000)
+        except (ValueError, TypeError):
+            val_eur = None
+            val_thousands = None
+
+        records.append({
+            "fy_label":        fy_label,
+            "fact_id":         fact_id,
+            "concept":         concept,
+            "namespace":       namespace,
+            "concept_short":   concept_short,
+            "period_type":     period_type,
+            "period_start":    period_start,
+            "period_end":      period_end,
+            "year":            year,
+            "value_eur":       val_eur,
+            "value_thousands": val_thousands,
+            "unit":            unit,
+            "decimals":        str(decimals),
+        })
+    return records
+
+
+def _match_value(xbrl_thousands, excel_val_str: str) -> bool:
+    """
+    Return True if an XBRL value (already in thousands of EUR) is close enough
+    to a parsed Excel value.  Uses abs comparison with 2% relative tolerance
+    or 200k absolute tolerance for small values.
+    """
+    if xbrl_thousands is None:
+        return False
+    excel_val = _parse_french_number(str(excel_val_str))
+    if excel_val is None:
+        return False
+    a = abs(xbrl_thousands)
+    b = abs(excel_val)
+    if a == 0 and b == 0:
+        return True
+    if max(a, b) == 0:
+        return False
+    # Relative tolerance 2%, or absolute tolerance 200 (= 200k EUR)
+    return abs(a - b) / max(a, b) < 0.02 or abs(a - b) <= 200
+
+
+def _find_concept_for_row(row_values: dict, facts_by_year: dict) -> str:
+    """
+    Given a {year: value_str} dict for one consolidated row, find the best-
+    matching XBRL concept using these rules:
+
+    1. For each year, only consider concepts that appear exactly ONCE for that
+       year (multi-context concepts like ifrs-full:ProfitLoss with 18 facts are
+       excluded — they would generate too many false positives).
+    2. Score = number of years where the concept's value matches the row value
+       within tolerance.
+    3. Require score >= 2  (must match in at least 2 different years).
+    4. On tie, prefer ifrs-full standard concepts over issuer-specific ones.
+    """
+    concept_scores: dict[str, int] = {}
+
+    for year, val_str in row_values.items():
+        if not val_str or str(val_str).strip() in ("", "-", "—", "–", "None"):
+            continue
+        facts_this_year = facts_by_year.get(year, [])
+
+        # Count how many facts each concept has for this year
+        concept_count: dict[str, int] = {}
+        for fact in facts_this_year:
+            concept_count[fact["concept"]] = concept_count.get(fact["concept"], 0) + 1
+
+        for fact in facts_this_year:
+            unit = fact.get("unit", "")
+            if unit and "EUR" not in unit:
+                continue
+            c = fact["concept"]
+            # Skip multi-context concepts (same concept appears > 1 time for this year)
+            if concept_count.get(c, 0) > 1:
+                continue
+            if _match_value(fact.get("value_thousands"), val_str):
+                concept_scores[c] = concept_scores.get(c, 0) + 1
+
+    if not concept_scores:
+        return ""
+
+    # Require match in at least 2 years to avoid single-year coincidences
+    best = max(concept_scores.items(),
+               key=lambda x: (x[1], 1 if x[0].startswith("ifrs-full:") else 0))
+    return best[0] if best[1] >= 2 else ""
+
+
+def build_concept_map(all_data: dict, facts_by_year: dict) -> dict:
+    """
+    Build {sheet_type: {display_label: concept_name}} by value-matching each
+    consolidated row against the XBRL fact index.
+    """
+    concept_map: dict[str, dict[str, str]] = {}
+    for sheet_type in CONSOLIDATED_SHEET_TYPES:
+        concept_map[sheet_type] = {}
+        rows = _build_consolidated_rows(all_data, sheet_type)
+        if not rows or len(rows) < 2:
+            continue
+        header = rows[0]
+        # Map year int -> column index
+        year_cols: dict[int, int] = {}
+        for ci, h in enumerate(header):
+            try:
+                year_cols[int(str(h).strip())] = ci
+            except (ValueError, TypeError):
+                pass
+
+        for row in rows[1:]:
+            display_label = row[0] if row else ""
+            if not display_label:
+                continue
+            row_values = {
+                yr: str(row[ci]) if ci < len(row) and row[ci] not in (None, "") else ""
+                for yr, ci in year_cols.items()
+            }
+            concept = _find_concept_for_row(row_values, facts_by_year)
+            if concept:
+                concept_map[sheet_type][display_label] = concept
+    return concept_map
+
+
+def write_xbrl_facts_excel(all_facts: list[dict], output: str):
+    """
+    Write a dedicated Excel file with all raw XBRL facts from all filings.
+    Sheet 1 - "All Facts": every fact as one row (concept, period, value, unit …)
+    Sheet 2 - "By Concept": pivoted table with years as columns.
+    """
+    try:
+        import xlsxwriter
+        _write_xbrl_facts_xlsxwriter(all_facts, output)
+    except ImportError:
+        _write_xbrl_facts_openpyxl(all_facts, output)
+
+
+def _write_xbrl_facts_xlsxwriter(all_facts: list[dict], output: str):
+    import xlsxwriter
+    print(f"\nWriting XBRL facts: {output} ...")
+    wb = xlsxwriter.Workbook(output, {"nan_inf_to_errors": True})
+
+    def F(**kw):
+        d = {"font_name": "Arial", "font_size": 9, "valign": "vcenter"}
+        d.update(kw)
+        return wb.add_format(d)
+
+    # ---- Sheet 1: All Facts ----
+    ws = wb.add_worksheet("All Facts")
+    hdr_cols = ["Source FY", "Concept (full)", "Namespace", "Concept (short)",
+                "Period Type", "Period Start", "Period End", "FY Year",
+                "Value (EUR)", "Value (thousands EUR)", "Unit", "Decimals"]
+    col_widths = [10, 70, 14, 50, 10, 14, 14, 10, 20, 22, 30, 10]
+    ws.set_row(0, 20)
+    for ci, (h, w) in enumerate(zip(hdr_cols, col_widths)):
+        ws.set_column(ci, ci, w)
+        ws.write(0, ci, h, F(bold=True, align="center", border=1))
+
+    for ri, fact in enumerate(all_facts, start=1):
+        ws.write(ri, 0,  fact["fy_label"],      F(border=1))
+        ws.write(ri, 1,  fact["concept"],        F(border=1))
+        ws.write(ri, 2,  fact["namespace"],      F(border=1))
+        ws.write(ri, 3,  fact["concept_short"],  F(border=1))
+        ws.write(ri, 4,  fact["period_type"],    F(border=1, align="center"))
+        ws.write(ri, 5,  fact["period_start"],   F(border=1, align="center"))
+        ws.write(ri, 6,  fact["period_end"],     F(border=1, align="center"))
+        ws.write(ri, 7,  fact["year"],           F(border=1, align="center"))
+        val_eur = fact["value_eur"]
+        if val_eur is not None:
+            ws.write_number(ri, 8,  val_eur,
+                F(border=1, align="right", num_format="#,##0.##;(#,##0.##)"))
+            ws.write_number(ri, 9,  fact["value_thousands"],
+                F(border=1, align="right", num_format="#,##0;(#,##0)"))
+        else:
+            ws.write(ri, 8,  fact.get("value_eur", ""),   F(border=1))
+            ws.write(ri, 9,  "",  F(border=1))
+        ws.write(ri, 10, fact["unit"],           F(border=1))
+        ws.write(ri, 11, fact["decimals"],       F(border=1, align="center"))
+
+    ws.autofilter(0, 0, len(all_facts), len(hdr_cols) - 1)
+    ws.freeze_panes(1, 0)
+    print(f"  All Facts: {len(all_facts)} rows")
+
+    # ---- Sheet 2: By Concept (pivoted) ----
+    ws2 = wb.add_worksheet("By Concept")
+    # Collect unique (concept, period_type) pairs and year columns
+    all_years = sorted({f["year"] for f in all_facts if f["year"]})
+    concept_year_map: dict[tuple, dict[int, float]] = {}
+    for fact in all_facts:
+        if fact["value_eur"] is None:
+            continue
+        key = (fact["concept"], fact["namespace"], fact["concept_short"], fact["period_type"])
+        if key not in concept_year_map:
+            concept_year_map[key] = {}
+        yr = fact["year"]
+        # Prefer the latest fy_label value for a given concept+year
+        existing = concept_year_map[key].get(yr)
+        if existing is None:
+            concept_year_map[key][yr] = fact["value_thousands"]
+
+    pivot_hdr = ["Concept (full)", "Namespace", "Concept (short)", "Period Type"] + [str(y) for y in all_years]
+    pivot_widths = [70, 14, 50, 10] + [16] * len(all_years)
+    ws2.set_row(0, 20)
+    for ci, (h, w) in enumerate(zip(pivot_hdr, pivot_widths)):
+        ws2.set_column(ci, ci, w)
+        ws2.write(0, ci, h, F(bold=True, align="center", border=1))
+
+    for ri, (key, yr_vals) in enumerate(concept_year_map.items(), start=1):
+        concept, ns, cs, ptype = key
+        ws2.write(ri, 0, concept, F(border=1))
+        ws2.write(ri, 1, ns,      F(border=1))
+        ws2.write(ri, 2, cs,      F(border=1))
+        ws2.write(ri, 3, ptype,   F(border=1, align="center"))
+        for ci, yr in enumerate(all_years, start=4):
+            val = yr_vals.get(yr)
+            if val is not None:
+                ws2.write_number(ri, ci, val,
+                    F(border=1, align="right", num_format="#,##0;(#,##0)"))
+            else:
+                ws2.write(ri, ci, None, F(border=1))
+
+    ws2.autofilter(0, 0, len(concept_year_map), len(pivot_hdr) - 1)
+    ws2.freeze_panes(1, 4)
+    print(f"  By Concept: {len(concept_year_map)} concepts × {len(all_years)} years")
+
+    wb.close()
+    print(f"\nSaved XBRL facts: {output}")
+
+
+def _write_xbrl_facts_openpyxl(all_facts: list[dict], output: str):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, Border, Side
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "All Facts"
+
+    def _border():
+        s = Side(style="thin", color="AAAAAA")
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    hdr = ["Source FY", "Concept (full)", "Namespace", "Concept (short)",
+           "Period Type", "Period Start", "Period End", "FY Year",
+           "Value (EUR)", "Value (thousands EUR)", "Unit", "Decimals"]
+    for ci, h in enumerate(hdr, 1):
+        c = ws.cell(1, ci, h)
+        c.font = Font(name="Arial", bold=True, size=10)
+        c.alignment = Alignment(horizontal="center")
+        c.border = _border()
+
+    for ri, fact in enumerate(all_facts, 2):
+        for ci, val in enumerate([
+            fact["fy_label"], fact["concept"], fact["namespace"], fact["concept_short"],
+            fact["period_type"], fact["period_start"], fact["period_end"], fact["year"],
+            fact["value_eur"], fact["value_thousands"], fact["unit"], fact["decimals"]
+        ], 1):
+            c = ws.cell(ri, ci, val)
+            c.border = _border()
+            c.font = Font(name="Arial", size=9)
+
+    wb.save(output)
+    print(f"\nSaved XBRL facts (openpyxl): {output}")
 
 
 def main():
@@ -1377,6 +1730,7 @@ def main():
     )
 
     all_data: dict[str, dict[str, list[list[str]]]] = {}
+    all_facts: list[dict] = []      # flat list of all XBRL fact records
 
     for filing in all_filings:
         pe = filing.get("period_end", "")
@@ -1406,11 +1760,30 @@ def main():
 
         all_data[fy_label] = tables
         print(f"  {fy_label}: {len(tables)} tables extracted")
+
+        # Download and parse XBRL OIM JSON
+        json_path = download_xbrl_json(filing, fy_dir)
+        if json_path:
+            facts = parse_xbrl_facts(json_path, fy_label)
+            all_facts.extend(facts)
+            print(f"  {fy_label}: {len(facts)} XBRL facts parsed")
+
         time.sleep(0.5)
 
     if not all_data:
         print("\n[FATAL] No data extracted from any filing.")
         sys.exit(1)
+
+    # Build year -> facts index for concept matching
+    facts_by_year: dict[int, list[dict]] = {}
+    for fact in all_facts:
+        yr = fact["year"]
+        facts_by_year.setdefault(yr, []).append(fact)
+
+    print(f"\nBuilding XBRL concept map ...")
+    concept_map = build_concept_map(all_data, facts_by_year)
+    matched = sum(len(v) for v in concept_map.values())
+    print(f"  Matched {matched} rows to XBRL concepts")
 
     try:
         write_excel(all_data, OUTPUT)
@@ -1421,11 +1794,18 @@ def main():
 
     consolidated_output = OUTPUT.replace(".xlsx", "_consolidated.xlsx")
     try:
-        write_consolidated_excel(all_data, consolidated_output)
+        write_consolidated_excel(all_data, consolidated_output, concept_map)
     except PermissionError:
         alt = consolidated_output.replace(".xlsx", "_new.xlsx")
         print(f"\n{consolidated_output} is open — saving as {alt}")
-        write_consolidated_excel(all_data, alt)
+        write_consolidated_excel(all_data, alt, concept_map)
+
+    if all_facts:
+        try:
+            write_xbrl_facts_excel(all_facts, XBRL_OUTPUT)
+        except PermissionError:
+            alt = XBRL_OUTPUT.replace(".xlsx", "_new.xlsx")
+            write_xbrl_facts_excel(all_facts, alt)
 
     print(f"\nRESULTS SUMMARY")
     print("=" * 62)
@@ -1434,8 +1814,9 @@ def main():
         print(f"  {fy_label}:")
         for name, rows in tables.items():
             print(f"    {name}: {len(rows) - 1} data rows")
-    print(f"\n  Output: {OUTPUT}")
-    print(f"  Consolidated: {consolidated_output}\n")
+    print(f"\n  Output:      {OUTPUT}")
+    print(f"  Consolidated:{consolidated_output}")
+    print(f"  XBRL Facts:  {XBRL_OUTPUT}\n")
 
 
 
@@ -1471,6 +1852,7 @@ def run(year: int | None = None, lei: str | None = None, api_base: str | None = 
     result: dict = {
         "excel":        str(Path(OUTPUT).resolve()) if Path(OUTPUT).exists() else None,
         "consolidated": str(Path(consolidated_output).resolve()) if Path(consolidated_output).exists() else None,
+        "xbrl_facts":   str(Path(XBRL_OUTPUT).resolve()) if Path(XBRL_OUTPUT).exists() else None,
         "api_listing":  None,
         "per_year":     {},
     }
