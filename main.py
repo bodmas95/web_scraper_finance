@@ -1,7 +1,7 @@
 """
 Main entry point for the financial data ingestion pipeline.
 
-OVH  usage:  python main.py --company ovh
+OVH usage:   python main.py --company ovh
              python main.py --company all
 HKEX usage:  python main.py company=01929 year=2024
              python main.py company=01929 year_from=2020 year_to=2024
@@ -26,9 +26,9 @@ def main():
         _run_hkex()
 
 
-# =============================================================================
+# ==============================================================================
 # OVH pipeline  (python main.py --company ovh)
-# =============================================================================
+# ==============================================================================
 
 def _run_ovh():
     import argparse
@@ -71,15 +71,18 @@ def _run_ovh():
                 seen.add(key)
                 deduped.append(s)
             else:
-                logger.warning("Skipping duplicate source: type=%s url=%s id=%s",
-                               key[0], key[1], s.get("_id"))
+                logger.warning(
+                    "Skipping duplicate source: type=%s url=%s id=%s",
+                    key[0], key[1], s.get("_id")
+                )
+
         sources = deduped
         logger.info("Found %d active source(s) (%d unique).", total, len(sources))
 
         for source in sources:
             source_type = source.get("sourceType", "UNKNOWN")
             source_url  = source.get("sourceUrl", "")
-            logger.info("Source: %s  |  %s", source_type, source_url)
+            logger.info("Source: %s | %s", source_type, source_url)
             try:
                 pipeline_run = _get_pipeline(source_type)
                 pipeline_run(client, company, source)
@@ -106,107 +109,244 @@ def _run_ovh():
     logger.info("Pipeline complete.")
 
 
-# =============================================================================
+# ==============================================================================
 # HKEX pipeline  (python main.py company=01929 year=2024)
-# =============================================================================
+# ==============================================================================
 
 def _run_hkex():
+    import sys
     import os
-    from datetime import datetime
-    from src.crawler.hkex.crawler import HKEXCrawler
-    from src.parser.hkex.parser import HKEXParser
-    from src.pipeline.hkex.hkex_api_pipeline import (
-        build_gridfs_metadata,
-        download_pdf,
-        build_ingestion_file_entry,
-    )
+    from datetime import datetime, timedelta
+    from src.crawler.hkexnews.crawler import HKEXCrawler
+    from src.parser.hkexnews.parser import HKEXParser
+    from src.pipeline.hkex.hkex_api_pipeline import build_gridfs_metadata, download_pdf, build_ingestion_file_entry
     from src.pipeline.db import MongoDBClient
     from config.config import DOWNLOAD_DIR
     from src.logging import get_logger
 
-    logger = get_logger(__name__)
-
-    # ── argument parsing ──────────────────────────────────────────────────
     def parse_arguments():
+        """
+        Parse command line arguments in the format key=value.
+
+        Returns:
+            dict: Parsed arguments
+        """
         args = {}
+
+        # Default values
         defaults = {
-            "company":     "01929",
-            "source":      "HKEX_NEWS",
-            "report_type": "all",
-            "year":        str(datetime.now().year),
-            "year_from":   None,
-            "year_to":     None,
-            "help":        False,
+            'company': '01929',
+            'source': 'HKEX_NEWS',
+            'report_type': 'all',
+            'year': str(datetime.now().year),
+            'year_from': None,
+            'year_to': None,
+            'help': False
         }
+
+        # Parse command line arguments
         for arg in sys.argv[1:]:
-            if "=" in arg:
-                key, value = arg.split("=", 1)
+            if '=' in arg:
+                key, value = arg.split('=', 1)
                 args[key.strip()] = value.strip()
-            elif arg in ["--help", "-h", "help"]:
-                args["help"] = True
+            elif arg in ['--help', '-h', 'help']:
+                args['help'] = True
             else:
                 print(f"Warning: Invalid argument format '{arg}'. Use key=value format.")
+
+        # Merge with defaults
         for key, default_value in defaults.items():
             if key not in args:
                 args[key] = default_value
+
         return args
 
     def show_help():
-        print("""
+        """Display help information."""
+        help_text = """
 HKEX Data Ingestion Pipeline
 =============================
+
 Usage:
-    python main.py company=<symbol> [year=<year>] [report_type=<type>]
-    python main.py company=<symbol> year_from=<year> year_to=<year>
+    python main.py [arguments]
 
 Arguments:
-    company=<symbol>     HKEX stock symbol (e.g., 01929, 00700)
-    source=<name>        Data source name (default: HKEX_NEWS)
-    report_type=<type>   annual | interim | all  (default: all)
-    year=<year>          Single year (default: current year)
-    year_from=<year>     Start year for range
-    year_to=<year>       End year for range
+    company=<symbol>       HKEX stock symbol (e.g., 01929, 00700)
+    source=<source_name>   Data source name (default: HKEX_NEWS)
+    report_type=<type>     Report type: annual, interim, all (default: all)
+    year=<year>            Single year to fetch data for (default: current year)
+    year_from=<year>       Start year for range (use with year_to)
+    year_to=<year>         End year for range (use with year_from)
 
 Examples:
+    # Single year
     python main.py company=01929 year=2024
-    python main.py company=00288 year_from=2020 year_to=2024
-    python main.py company=00700 report_type=annual year_from=2022 year_to=2024
-""")
+    python main.py company=00700 report_type=annual year=2023
 
-    def get_date_range(year, report_type):
-        year_int = int(year)
-        start_date = f"{year_int}0101"
-        end_date   = f"{year_int}1231"
+    # Year range (NEW!)
+    python main.py company=00288 year_from=2020 year_to=2024
+    python main.py company=00700 report_type=interim year_from=2022 year_to=2024
+    python main.py company=01929 report_type=annual year_from=2019 year_to=2023
+
+    # Default (current year)
+    python main.py company=01929
+    python main.py  # Uses defaults
+
+Supported Companies:
+    01929 - Chow Tai Fook Jewellery Group Limited
+    00700 - Tencent Holdings Limited
+    00005 - HSBC Holdings plc
+    00941 - China Mobile Limited
+    (Add your company to the database first)
+
+Report Types:
+    annual   - Annual reports only
+    interim  - Interim/quarterly reports only
+    all      - All available reports
+
+Year Range Features:
+    - Maximum 10 years per run (to prevent overload)
+    - Processes years sequentially
+    - Shows progress for each year
+    - Comprehensive summary at the end
+    - Continues processing even if one year fails
+
+Notes:
+    - Make sure the company exists in your MongoDB database
+    - Ensure the source configuration is set up properly
+    - The pipeline will create necessary directories automatically
+    - Year ranges are inclusive (year_from and year_to are both included)
+"""
+        print(help_text)
+
+    def get_date_range(year: str, report_type: str):
+        """
+        Get start and end dates based on year and report type.
+
+        Args:
+            year: Year as string
+            report_type: Type of report (annual, interim, all)
+
+        Returns:
+            tuple: (start_date, end_date) in YYYYMMDD format
+        """
+        try:
+            year_int = int(year)
+        except ValueError:
+            raise ValueError(f"Invalid year format: {year}")
+
+        if report_type.lower() == 'annual':
+            # For annual reports, typically look at the full year
+            start_date = f"{year_int}0101"
+            end_date   = f"{year_int}1231"
+        elif report_type.lower() == 'interim':
+            # For interim reports, focus on mid-year periods
+            start_date = f"{year_int}0101"
+            end_date   = f"{year_int}1231"
+        else:  # 'all' or any other value
+            # Get all reports for the year
+            start_date = f"{year_int}0101"
+            end_date   = f"{year_int}1231"
+
         return start_date, end_date
 
     def validate_arguments(args):
-        company = args["company"]
+        """
+        Validate the parsed arguments.
+
+        Args:
+            args: Dictionary of parsed arguments
+
+        Raises:
+            ValueError: If arguments are invalid
+        """
+        # Validate company format (should be 5 digits for HKEX)
+        company = args['company']
         if not company.isdigit() or len(company) != 5:
             raise ValueError(
                 f"Invalid company format: {company}. Expected 5-digit HKEX code (e.g., 01929)"
             )
+
+        # Check if using year range or single year
+        using_range  = args.get('year_from') and args.get('year_to')
         current_year = datetime.now().year
-        using_range  = args.get("year_from") and args.get("year_to")
+
         if using_range:
-            yf, yt = int(args["year_from"]), int(args["year_to"])
-            if yf > yt:
-                raise ValueError(f"year_from ({yf}) cannot be greater than year_to ({yt})")
-            if yt - yf > 9:
-                raise ValueError(f"Year range too large ({yt - yf + 1} years). Maximum is 10.")
+            # Validate year range
+            try:
+                year_from = int(args['year_from'])
+                year_to   = int(args['year_to'])
+
+                if year_from < 2000 or year_from > current_year + 1:
+                    raise ValueError(
+                        f"Invalid year_from: {year_from}. Must be between 2000 and {current_year + 1}"
+                    )
+
+                if year_to < 2000 or year_to > current_year + 1:
+                    raise ValueError(
+                        f"Invalid year_to: {year_to}. Must be between 2000 and {current_year + 1}"
+                    )
+
+                if year_from > year_to:
+                    raise ValueError(
+                        f"year_from ({year_from}) cannot be greater than year_to ({year_to})"
+                    )
+
+                if year_to - year_from > 9:  # 10 years max
+                    raise ValueError(
+                        f"Year range too large ({year_to - year_from + 1} years). Maximum allowed is 10 years."
+                    )
+
+            except ValueError as e:
+                if "invalid literal" in str(e):
+                    raise ValueError(
+                        f"Invalid year format in range: {args.get('year_from', '')} or {args.get('year_to', '')}"
+                    )
+                raise
         else:
-            year_int = int(args["year"])
-            if year_int < 2000 or year_int > current_year + 1:
-                raise ValueError(f"Invalid year: {year_int}.")
-        valid_types = ["annual", "interim", "all"]
-        if args["report_type"].lower() not in valid_types:
+            # Validate single year
+            try:
+                year_int = int(args['year'])
+                if year_int < 2000 or year_int > current_year + 1:
+                    raise ValueError(
+                        f"Invalid year: {year_int}. Must be between 2000 and {current_year + 1}"
+                    )
+            except ValueError as e:
+                if "invalid literal" in str(e):
+                    raise ValueError(f"Invalid year format: {args['year']}")
+                raise
+
+        # Validate report type
+        valid_report_types = ['annual', 'interim', 'all']
+        if args['report_type'].lower() not in valid_report_types:
             raise ValueError(
-                f"Invalid report_type: {args['report_type']}. Must be one of: {', '.join(valid_types)}"
+                f"Invalid report_type: {args['report_type']}. Must be one of: {', '.join(valid_report_types)}"
             )
 
-    def run_pipeline(company, source, report_type, year):
+    def run_pipeline(company: str, source: str, report_type: str, year: str) -> tuple:
+        """
+        Run HKEX ingestion pipeline with specified parameters.
+
+        Args:
+            company: HKEX stock symbol (e.g., "01929")
+            source: Source name (e.g., "HKEX_NEWS")
+            report_type: Report type (annual, interim, all)
+            year: Year to fetch data for
+
+        Returns:
+            tuple: (reports_found, processed_count, failed_count)
+        """
+        logger = get_logger(__name__)
+
+        # Get date range based on parameters
         start_date, end_date = get_date_range(year, report_type)
-        logger.info("Starting HKEX pipeline: company=%s report_type=%s year=%s",
-                    company, report_type, year)
+
+        logger.info("Starting HKEX pipeline with parameters:")
+        logger.info(f"  Company: {company}")
+        logger.info(f"  Source: {source}")
+        logger.info(f"  Report Type: {report_type}")
+        logger.info(f"  Year: {year}")
+        logger.info(f"  Date Range: {start_date} to {end_date}")
 
         db_client = MongoDBClient()
         crawler   = HKEXCrawler()
@@ -215,23 +355,40 @@ Examples:
         try:
             db_client.connect()
 
+            # Get company document
             company_doc = db_client.get_company_by_symbol(symbol=company, exchange="HKEX")
             if not company_doc:
-                raise ValueError(f"Company not found for symbol: {company}")
+                raise ValueError(
+                    f"Company not found for symbol: {company}. Please ensure the company exists in the database."
+                )
 
+            # Get HKEX ticker information
             ticker     = db_client.get_hkex_ticker(company_doc)
             stock_code = ticker["symbol"]
             stock_id   = ticker["stockId"]
 
+            # Get source configuration
             source_doc = db_client.get_source_for_company(
                 company_id=company_doc["_id"],
                 source_name=source,
             )
+
             if not source_doc:
-                raise ValueError(f"Source '{source}' not found for company: {company_doc['name']}")
+                raise ValueError(
+                    f"Source '{source}' not found for company: {company_doc['name']}. Please check source configuration."
+                )
 
-            print(f"Company: {company_doc.get('name')}  stock_code={stock_code}")
+            # Log company information
+            print("Company Information:")
+            print(f"  Name: {company_doc.get('name')}")
+            print(f"  Stock Code: {stock_code}")
+            print(f"  Stock ID: {stock_id}")
+            print(f"  Source: {source_doc.get('source')}")
+            print(f"  Report Type Filter: {report_type}")
+            print(f"  Year: {year}")
 
+            # Fetch data from HKEX
+            print("Fetching data from HKEX...")
             html = crawler.fetch_data(
                 source_url=source_doc["sourceUrl"],
                 source_filters=source_doc.get("filters", {}),
@@ -240,31 +397,51 @@ Examples:
                 end_date=end_date,
             )
 
+            # Parse reports from HTML
+            print("Parsing reports from HTML...")
             report_items = parser.extract_reports(html)
 
-            if report_type.lower() != "all":
+            # Filter reports by type if specified
+            if report_type.lower() != 'all':
+                original_count = len(report_items)
                 report_items = [
                     item for item in report_items
-                    if report_type.lower() in item.get("reportType", "").lower()
+                    if report_type.lower() in item.get('reportType', '').lower()
                 ]
+                print(f"  Filtered from {original_count} to {len(report_items)} reports based on type '{report_type}'")
 
-            print(f"Total reports found: {len(report_items)}")
+            print(f"  Total reports found: {len(report_items)}")
+
             if not report_items:
-                return 0, 0, 0
+                print("No reports found for the specified criteria")
+                return
 
+            # Create download folder
             folder = f"{DOWNLOAD_DIR}/{stock_code}"
             os.makedirs(folder, exist_ok=True)
 
-            processed_count = failed_count = 0
+            # Process each report
+            processed_count = 0
+            failed_count    = 0
+
+            print(f"Processing {len(report_items)} reports...")
 
             for i, report_item in enumerate(report_items, 1):
-                print(f"  [{i}/{len(report_items)}] {report_item.get('title', 'Unknown')}")
+                report_title = report_item.get('title', 'Unknown')
+                print(f"  [{i}/{len(report_items)}] {report_title}")
+
                 ingestion_files = []
-                result = {"status": "success", "errorCode": None, "errorMessage": None}
+                result = {
+                    "status": "success",
+                    "errorCode": None,
+                    "errorMessage": None,
+                }
 
                 try:
+                    # Download PDF file
                     filename, file_bytes = download_pdf(report_item["url"], folder)
 
+                    # Build GridFS metadata
                     gridfs_metadata = build_gridfs_metadata(
                         company_doc=company_doc,
                         source_doc=source_doc,
@@ -273,12 +450,14 @@ Examples:
                         report_item=report_item,
                     )
 
+                    # Save file to GridFS
                     source_file_id = db_client.save_file_to_gridfs(
                         file_bytes=file_bytes,
                         filename=filename,
                         metadata=gridfs_metadata,
                     )
 
+                    # Build file entry
                     file_entry = build_ingestion_file_entry(
                         file_id=source_file_id,
                         filename=filename,
@@ -288,8 +467,10 @@ Examples:
                         download_status="success",
                         downloader_error_message=None,
                     )
+
                     ingestion_files.append(file_entry)
 
+                    # Upsert report to database
                     db_client.upsert_report(
                         company_id=company_doc["_id"],
                         source_id=source_doc["_id"],
@@ -301,12 +482,20 @@ Examples:
                         fiscal_year=report_item["fiscalYear"],
                         file_entry=file_entry,
                     )
+
                     processed_count += 1
-                    print(f"    ✓ {filename}")
+                    print(f"Success: {filename}")
 
                 except Exception as e:
                     failed_count += 1
-                    result = {"status": "failed", "errorCode": "DOWNLOAD_ERROR", "errorMessage": str(e)}
+                    print(f"Failed: {str(e)}")
+
+                    result = {
+                        "status": "failed",
+                        "errorCode": "DOWNLOAD_ERROR",
+                        "errorMessage": str(e),
+                    }
+
                     file_entry = build_ingestion_file_entry(
                         file_id=None,
                         filename=report_item.get("filename", "unknown"),
@@ -316,9 +505,10 @@ Examples:
                         download_status="failed",
                         downloader_error_message=str(e),
                     )
-                    ingestion_files.append(file_entry)
-                    print(f"    ✗ {e}")
 
+                    ingestion_files.append(file_entry)
+
+                # Insert ingestion log
                 db_client.insert_ingestion_log(
                     company_id=company_doc["_id"],
                     source_id=source_doc["_id"],
@@ -333,57 +523,146 @@ Examples:
                     parser_error_message=None,
                 )
 
-            print(f"Done — processed={processed_count}  failed={failed_count}")
+            # Final summary
+            print("Pipeline completed successfully!")
+            print(f"  Company: {company_doc.get('name')} ({stock_code})")
+            print(f"  Report Type: {report_type}")
+            print(f"  Year: {year}")
+            print(f"  Reports Found: {len(report_items)}")
+            print(f"  Successfully Processed: {processed_count}")
+            print(f"  Failed: {failed_count}")
+            print(f"  Download Folder: {folder}")
+
+            logger.info("HKEX pipeline completed successfully")
+
             return len(report_items), processed_count, failed_count
 
+        except Exception as e:
+            logger.error(f"Pipeline execution failed: {e}")
+            print(f"Pipeline failed: {e}")
+            raise
         finally:
             db_client.close()
 
-    def run_pipeline_for_years(company, source, report_type, years):
-        total_reports = total_processed = total_failed = 0
-        successful_years = failed_years = 0
-        print(f"HKEX Multi-Year Pipeline  company={company}  years={years}")
+    def run_pipeline_for_years(company: str, source: str, report_type: str, years: list) -> None:
+        """
+        Run HKEX ingestion pipeline for multiple years.
+
+        Args:
+            company: HKEX stock symbol (e.g., "01929")
+            source: Source name (e.g., "HKEX_NEWS")
+            report_type: Report type (annual, interim, all)
+            years: List of years to process
+        """
+        logger = get_logger(__name__)
+
+        total_reports    = 0
+        total_processed  = 0
+        total_failed     = 0
+        successful_years = 0
+        failed_years     = 0
+
+        print("HKEX Data Ingestion Pipeline - Multi-Year")
         print("=" * 60)
+        print(f"Company: {company}")
+        print(f"Source: {source}")
+        print(f"Report Type: {report_type}")
+        print(f"Years: {', '.join(map(str, years))} ({len(years)} years)")
+        print("=" * 60)
+
         for i, year in enumerate(years, 1):
             try:
-                print(f"Year {i}/{len(years)}: {year}")
-                yr, yp, yf = run_pipeline(company, source, report_type, str(year))
-                total_reports    += yr
-                total_processed  += yp
-                total_failed     += yf
+                print(f"Processing Year {i}/{len(years)}: {year}")
+                print("-" * 40)
+
+                year_reports, year_processed, year_failed = run_pipeline(
+                    company, source, report_type, str(year)
+                )
+
+                total_reports    += year_reports
+                total_processed  += year_processed
+                total_failed     += year_failed
                 successful_years += 1
+
+                print(f"Year {year} Summary: {year_processed} processed, {year_failed} failed")
+
             except Exception as e:
-                logger.error("Error processing year %s: %s", year, e)
+                logger.error(f"Error processing year {year}: {e}")
+                print(f"  \u274c Year {year} failed: {e}")
                 failed_years += 1
-        print(f"Summary: {successful_years} years OK, {failed_years} failed, "
-              f"{total_processed}/{total_reports} reports downloaded")
 
-    # ── entrypoint ────────────────────────────────────────────────────────
-    try:
-        args = parse_arguments()
-        if args.get("help"):
-            show_help()
-            return
-        validate_arguments(args)
+        # Final summary
+        print("Multi-Year Pipeline Completed!")
+        print("=" * 60)
+        print(f"Years Requested: {len(years)}")
+        print(f"Years Successfully Processed: {successful_years}")
+        print(f"Years Failed: {failed_years}")
+        print(f"Total Reports Found: {total_reports}")
+        print(f"Successfully Downloaded: {total_processed}")
+        print(f"Failed Downloads: {total_failed}")
+        if total_reports > 0:
+            print(f"Success Rate: {(total_processed / total_reports) * 100:.1f}%")
+        print("=" * 60)
 
-        if args.get("year_from") and args.get("year_to"):
-            years = list(range(int(args["year_from"]), int(args["year_to"]) + 1))
-            run_pipeline_for_years(args["company"], args["source"], args["report_type"], years)
-        else:
-            reports_found, processed, failed = run_pipeline(
-                args["company"], args["source"], args["report_type"], args["year"]
-            )
-            print(f"Pipeline complete — found={reports_found}  processed={processed}  failed={failed}")
+    def main():
+        """Main entry point."""
+        try:
+            # Parse arguments
+            args = parse_arguments()
 
-    except KeyboardInterrupt:
-        print("Pipeline interrupted by user")
-        sys.exit(1)
-    except ValueError as e:
-        print(f"Invalid arguments: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Pipeline failed: {e}")
-        sys.exit(1)
+            # Show help if requested
+            if args.get('help'):
+                show_help()
+                return
+
+            # Validate arguments
+            validate_arguments(args)
+
+            # Determine if using year range or single year
+            if args.get('year_from') and args.get('year_to'):
+                # Year range mode
+                year_from = int(args['year_from'])
+                year_to   = int(args['year_to'])
+                years     = list(range(year_from, year_to + 1))
+
+                run_pipeline_for_years(
+                    company=args['company'],
+                    source=args['source'],
+                    report_type=args['report_type'],
+                    years=years
+                )
+            else:
+                # Single year mode
+                print("HKEX Data Ingestion Pipeline")
+                print("=" * 50)
+
+                reports_found, processed_count, failed_count = run_pipeline(
+                    company=args['company'],
+                    source=args['source'],
+                    report_type=args['report_type'],
+                    year=args['year']
+                )
+
+                # Single year summary
+                print("Pipeline completed successfully!")
+                print(f"  Year: {args['year']}")
+                print(f"  Reports Found: {reports_found}")
+                print(f"  Successfully Processed: {processed_count}")
+                print(f"  Failed: {failed_count}")
+
+        except KeyboardInterrupt:
+            print("Pipeline interrupted by user")
+            sys.exit(1)
+        except ValueError as e:
+            print(f"Invalid arguments: {e}")
+            print("\nUse 'python main.py help' for usage information")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Pipeline failed: {e}")
+            sys.exit(1)
+
+    # Execute the HKEX main function
+    main()
 
 
 if __name__ == "__main__":

@@ -247,3 +247,25 @@ def get(
     if PROXY_USE == "system":
         return _pycurl_get(url, headers=headers, params=params, timeout=timeout)
     return _requests_get(url, headers=headers, params=params, timeout=timeout)
+
+
+def post(
+    url: str,
+    headers: dict = None,
+    json: Any = None,
+    data: Any = None,
+    timeout: int = 30,
+) -> HttpResponse:
+    """
+    Perform an HTTP POST request using the backend from config.ini [PROXY] proxy_use.
+    """
+    if PROXY_USE == "system":
+        status, resp_headers, body = proxy_request(
+            "POST", url, headers=headers, json=json, data=data, timeout=timeout
+        )
+        return HttpResponse(status, body, resp_headers)
+    proxies = _system_proxies() if PROXY_USE == "server" else None
+    resp = requests.post(
+        url, headers=headers, json=json, data=data, timeout=timeout, proxies=proxies
+    )
+    return HttpResponse(resp.status_code, resp.content, dict(resp.headers))

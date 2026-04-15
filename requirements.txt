@@ -9,3 +9,4 @@ lxml
 pdfplumber
 py-xbrl
 xlsxwriter
+edgartools==5.28.4
