@@ -571,6 +571,49 @@ def _get_sec_ticker(company_doc):
     return ""
 
 
+def _patch_httpx_proxy_app(proxy_url: str) -> None:
+    """
+    Force edgartools' httpx client to use proxy_url, regardless of whether
+    edgar cached its client at module import time.
+    """
+    import os
+    import httpx
+
+    if proxy_url:
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ[var] = proxy_url
+    else:
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ.pop(var, None)
+        return
+
+    _sentinel = "_edgar_proxy_patched"
+    _orig_init = httpx.Client.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        if "proxy" not in kwargs and "proxies" not in kwargs:
+            try:
+                kwargs["proxy"] = proxy_url
+            except Exception:
+                pass
+        _orig_init(self, *args, **kwargs)
+
+    if not getattr(httpx.Client, _sentinel, False):
+        httpx.Client.__init__ = _patched_init
+        setattr(httpx.Client, _sentinel, True)
+
+    # Also attempt to replace transport on edgar's existing module-level client
+    try:
+        import edgar.httprequests as _ehr
+        for attr in ("client", "_client", "http_client", "session"):
+            obj = getattr(_ehr, attr, None)
+            if isinstance(obj, httpx.Client):
+                obj._transport = httpx.HTTPTransport(proxy=httpx.Proxy(proxy_url))
+                break
+    except Exception:
+        pass
+
+
 def _fetch_edgar_financials(ticker: str, year: int, identity: str):
     """
     Fetch and parse financial statements for ticker+year using the given SEC identity.
@@ -591,6 +634,10 @@ def _fetch_edgar_financials(ticker: str, year: int, identity: str):
         https_proxy=base_cfg.https_proxy,
         max_filings=base_cfg.max_filings,
     )
+
+    # Ensure edgar's httpx client uses the proxy before any SEC call
+    _patch_httpx_proxy_app(cfg.http_proxy)
+
     try:
         crawler = EdgarCrawler(cfg)
         raw = crawler.fetch_company_financials(ticker, year)

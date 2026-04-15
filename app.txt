@@ -1374,11 +1374,13 @@ def _get_edgar_proxy_urls():
 
       proxy_use = none     → direct, no proxy  (return "", "")
       proxy_use = server   → IP-based proxy at system_host:system_port, no auth
-      proxy_use = system   → corporate NTLM proxy at corporate_host:corporate_port
-                             Best-effort: encodes credentials in the URL so that
-                             tools that respect HTTP_PROXY env vars pick them up.
+      proxy_use = system   → corporate proxy at corporate_host:corporate_port
+                             Credentials are fully percent-encoded so special
+                             characters in username/password (@ \ : etc.) do not
+                             break URL parsing.
     """
     from config.config import load_config
+    from urllib.parse import quote as _quote
     cfg = load_config()
     proxy_use = cfg.get("PROXY", "proxy_use", fallback="none").strip().lower()
 
@@ -1394,13 +1396,15 @@ def _get_edgar_proxy_urls():
         user = cfg.get("PROXY", "corporate_username", fallback="").strip()
         pwd  = cfg.get("PROXY", "corporate_password", fallback="").strip()
         if host:
-            # Percent-encode backslash in domain\username  (e.g. cib.net\user)
-            safe_user = user.replace("\\", "%5C")
-            url = (
-                f"http://{safe_user}:{pwd}@{host}:{port}"
-                if (user and pwd)
-                else f"http://{host}:{port}"
-            )
+            if user and pwd:
+                # Percent-encode ALL special chars in user/pass so URL parsing
+                # is not tricked by backslash, @, colon, etc.
+                # safe="" → encode everything except unreserved chars
+                safe_user = _quote(user, safe="")
+                safe_pwd  = _quote(pwd,  safe="")
+                url = f"http://{safe_user}:{safe_pwd}@{host}:{port}"
+            else:
+                url = f"http://{host}:{port}"
             return url, url
         return "", ""
 
@@ -1429,6 +1433,74 @@ def extract_sec_ticker_from_company(company):
     return None
 
 
+def _patch_httpx_proxy(proxy_url: str) -> None:
+    """
+    Force-inject proxy_url into httpx so that edgartools (which uses httpx
+    internally and may cache its client at module level) routes all requests
+    through the configured proxy.
+
+    Strategy:
+      1. Set HTTP_PROXY / HTTPS_PROXY env vars (picked up by new httpx clients).
+      2. Monkey-patch httpx.Client.__init__ so every client created after this
+         call — including edgar's cached singleton — will use the proxy.
+      3. Replace the transport on any already-instantiated edgar httprequests
+         client if edgar exposes it as a module attribute.
+    """
+    import os
+    import httpx
+
+    if proxy_url:
+        # 1. Env vars — picked up by any fresh httpx.Client()
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ[var] = proxy_url
+    else:
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ.pop(var, None)
+        return  # direct mode — nothing to patch
+
+    # 2. Monkey-patch httpx.Client so edgar's lazily-created clients pick it up
+    _sentinel = "_edgar_proxy_patched"
+    if not getattr(httpx.Client, _sentinel, False):
+        _orig_init = httpx.Client.__init__
+
+        def _patched_init(self, *args, **kwargs):
+            # Inject proxy only when the caller didn't already set one
+            if "proxy" not in kwargs and "proxies" not in kwargs:
+                try:
+                    kwargs["proxy"] = proxy_url
+                except Exception:
+                    pass
+            _orig_init(self, *args, **kwargs)
+
+        httpx.Client.__init__ = _patched_init
+        setattr(httpx.Client, _sentinel, True)
+    else:
+        # Already patched — update the closure variable via re-patching
+        _orig_init = httpx.Client.__init__.__wrapped__ if hasattr(
+            httpx.Client.__init__, "__wrapped__") else httpx.Client.__init__
+
+        def _patched_init(self, *args, **kwargs):
+            if "proxy" not in kwargs and "proxies" not in kwargs:
+                try:
+                    kwargs["proxy"] = proxy_url
+                except Exception:
+                    pass
+            _orig_init(self, *args, **kwargs)
+
+        httpx.Client.__init__ = _patched_init
+
+    # 3. Attempt to replace transport on edgar's existing module-level client
+    try:
+        import edgar.httprequests as _ehr
+        for attr in ("client", "_client", "http_client", "session"):
+            obj = getattr(_ehr, attr, None)
+            if isinstance(obj, httpx.Client):
+                obj._transport = httpx.HTTPTransport(proxy=httpx.Proxy(proxy_url))
+                break
+    except Exception:
+        pass  # edgar may not expose its client — that's fine
+
+
 def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
     """
     Fetch financial statements from SEC EDGAR for ticker+year.
@@ -1444,6 +1516,10 @@ def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
         return st.session_state[cache_key]
 
     http_proxy, https_proxy = _get_edgar_proxy_urls()
+
+    # Ensure edgartools' httpx client respects the proxy BEFORE any SEC call
+    _patch_httpx_proxy(http_proxy)
+
     cfg = _types.SimpleNamespace(
         identity=identity,
         http_proxy=http_proxy,
