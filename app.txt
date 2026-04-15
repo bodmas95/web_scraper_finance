@@ -1541,13 +1541,13 @@ def _patch_httpx_proxy(proxy_url: str) -> None:
                     continue
                 _mounts = getattr(_obj, "_mounts", None)
                 if isinstance(_mounts, dict):
-                    # Replace / add proxy entries; insertion at front gives
-                    # highest priority for plain prefix matching.
-                    _new = {
-                        "http://":  _make_proxy_transport(),
-                        "https://": _make_proxy_transport(),
-                    }
-                    _new.update(_mounts)   # keep existing specific patterns
+                    # Our proxy entries go in first (highest priority), then
+                    # existing specific patterns are merged after.  We then
+                    # overwrite "http://" and "https://" keys to ensure our
+                    # proxy is always used for those schemes.
+                    _new = dict(_mounts)   # copy existing first
+                    _new["http://"]  = _make_proxy_transport()
+                    _new["https://"] = _make_proxy_transport()
                     _obj._mounts = _new
                 else:
                     # Fallback: replace transport entirely
@@ -1565,17 +1565,20 @@ def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
     Returns parsed dict or None.
     Caches result in session_state to avoid repeated API calls.
     """
+    # ── CRITICAL: patch httpx BEFORE importing edgar ──────────────────────
+    # edgar creates its module-level httpx.Client the moment it is first
+    # imported.  If we patch after the import, the client is already built
+    # without proxy.  Setting env vars + injecting mounts here, before the
+    # import statement below, ensures the client is born with proxy support.
+    http_proxy, https_proxy = _get_edgar_proxy_urls()
+    _patch_httpx_proxy(http_proxy)
+
     from src.crawler.edgar.crawler import EdgarCrawler
     from src.parser.edgar.parser import EdgarParser
 
     cache_key = f"_edgar_{ticker}_{year}_{identity}"
     if cache_key in st.session_state:
         return st.session_state[cache_key]
-
-    http_proxy, https_proxy = _get_edgar_proxy_urls()
-
-    # Ensure edgartools' httpx client respects the proxy BEFORE any SEC call
-    _patch_httpx_proxy(http_proxy)
 
     cfg = _types.SimpleNamespace(
         identity=identity,
