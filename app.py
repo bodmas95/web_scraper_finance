@@ -565,51 +565,79 @@ def _get_companies_for(companies, region, country):
 
 
 def _get_sec_ticker(company_doc):
+    """
+    Return the best SEC identifier from the company document.
+    Prefers the 'CIK' field (e.g. 'CIK0000753308') over 'symbol' (e.g. 'NEE').
+    Returns a normalized string ready for edgartools' Company().
+    """
     for t in company_doc.get("tickers", []):
         if t.get("exchange") == "SEC":
-            return t.get("symbol", "")
+            raw = t.get("CIK", "").strip() or t.get("symbol", "").strip()
+            return _normalize_sec_id(raw)
     return ""
 
 
+def _normalize_sec_id(raw: str) -> str:
+    """'CIK0000753308' → '0000753308',  'NEE' → 'NEE',  '753308' → '0000753308'"""
+    if not raw:
+        return raw
+    s = raw.strip()
+    if s.upper().startswith("CIK"):
+        return s[3:].lstrip("0").zfill(10)
+    if s.isdigit():
+        return s.zfill(10)
+    return s
+
+
 def _patch_httpx_proxy_app(proxy_url: str) -> None:
-    """
-    Force edgartools' httpx client to use proxy_url, regardless of whether
-    edgar cached its client at module import time.
-    """
+    """Same three-layer proxy fix as _patch_httpx_proxy in streamlit_app.py."""
     import os
     import httpx
 
     if proxy_url:
-        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-            os.environ[var] = proxy_url
+        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ[v] = proxy_url
     else:
-        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-            os.environ.pop(var, None)
+        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ.pop(v, None)
         return
 
-    _sentinel = "_edgar_proxy_patched"
+    _proxy = httpx.Proxy(proxy_url)
+
+    def _make_proxy_transport():
+        return httpx.HTTPTransport(proxy=_proxy)
+
+    # Patch __init__ via mounts= (works even when edgar passes transport=)
     _orig_init = httpx.Client.__init__
 
     def _patched_init(self, *args, **kwargs):
-        if "proxy" not in kwargs and "proxies" not in kwargs:
-            try:
-                kwargs["proxy"] = proxy_url
-            except Exception:
-                pass
+        if not any(k in kwargs for k in ("proxy", "proxies", "mounts")):
+            kwargs["mounts"] = {
+                "http://":  _make_proxy_transport(),
+                "https://": _make_proxy_transport(),
+            }
         _orig_init(self, *args, **kwargs)
 
-    if not getattr(httpx.Client, _sentinel, False):
-        httpx.Client.__init__ = _patched_init
-        setattr(httpx.Client, _sentinel, True)
+    httpx.Client.__init__ = _patched_init
+    setattr(httpx.Client, "_edgar_proxy_patched", True)
 
-    # Also attempt to replace transport on edgar's existing module-level client
+    # Inject into edgar's already-created module-level client
     try:
         import edgar.httprequests as _ehr
-        for attr in ("client", "_client", "http_client", "session"):
-            obj = getattr(_ehr, attr, None)
-            if isinstance(obj, httpx.Client):
-                obj._transport = httpx.HTTPTransport(proxy=httpx.Proxy(proxy_url))
-                break
+        for _attr in dir(_ehr):
+            try:
+                _obj = getattr(_ehr, _attr, None)
+                if not isinstance(_obj, httpx.Client):
+                    continue
+                _mounts = getattr(_obj, "_mounts", None)
+                if isinstance(_mounts, dict):
+                    _new = {"http://": _make_proxy_transport(), "https://": _make_proxy_transport()}
+                    _new.update(_mounts)
+                    _obj._mounts = _new
+                else:
+                    _obj._transport = _make_proxy_transport()
+            except Exception:
+                pass
     except Exception:
         pass
 

@@ -1413,7 +1413,19 @@ def _get_edgar_proxy_urls():
 
 
 def extract_sec_ticker_from_company(company):
-    """Extract SEC ticker symbol from company document (exchange='SEC')."""
+    """
+    Extract the best SEC identifier from the company document.
+
+    Looks for a ticker entry with exchange='SEC'.  Within that entry, prefers
+    the 'CIK' field (e.g. 'CIK0000753308') over 'symbol' (e.g. 'NEE') because
+    CIK is unambiguous with edgartools.
+
+    Expected MongoDB structure:
+        { "tickers": [{ "symbol": "NEE", "exchange": "SEC", "CIK": "CIK0000753308" }] }
+
+    Returns the raw string from MongoDB.  Call normalize_sec_identifier() on
+    the result before passing it to edgartools' Company().
+    """
     tickers = company.get("tickers", [])
     if isinstance(tickers, list):
         for ticker in tickers:
@@ -1421,84 +1433,129 @@ def extract_sec_ticker_from_company(company):
                 continue
             td = ticker.get("0", ticker) if "0" in ticker else ticker
             if str(td.get("exchange", "")).upper() == "SEC":
-                sym = td.get("symbol", "")
+                # Prefer CIK field; fall back to symbol
+                cik = td.get("CIK", "").strip()
+                if cik:
+                    return cik
+                sym = td.get("symbol", "").strip()
                 if sym:
                     return sym
     if isinstance(tickers, dict):
         for td in tickers.values():
             if isinstance(td, dict) and str(td.get("exchange", "")).upper() == "SEC":
-                sym = td.get("symbol", "")
+                cik = td.get("CIK", "").strip()
+                if cik:
+                    return cik
+                sym = td.get("symbol", "").strip()
                 if sym:
                     return sym
     return None
 
 
+def normalize_sec_identifier(raw: str) -> str:
+    """
+    Convert the raw symbol stored in MongoDB into the identifier that
+    edgartools' Company() accepts.
+
+    'CIK0000753308' → '0000753308'   (strip 'CIK' prefix)
+    'NEE'           → 'NEE'           (plain ticker, pass through)
+    '753308'        → '0000753308'   (bare numeric CIK, zero-pad to 10 digits)
+    """
+    if not raw:
+        return raw
+    s = raw.strip()
+    if s.upper().startswith("CIK"):
+        return s[3:].lstrip("0").zfill(10)   # drop prefix, normalise padding
+    if s.isdigit():
+        return s.zfill(10)
+    return s  # plain ticker symbol
+
+
 def _patch_httpx_proxy(proxy_url: str) -> None:
     """
-    Force-inject proxy_url into httpx so that edgartools (which uses httpx
-    internally and may cache its client at module level) routes all requests
-    through the configured proxy.
+    Force edgar (httpx-based) to route through proxy_url.
 
-    Strategy:
-      1. Set HTTP_PROXY / HTTPS_PROXY env vars (picked up by new httpx clients).
-      2. Monkey-patch httpx.Client.__init__ so every client created after this
-         call — including edgar's cached singleton — will use the proxy.
-      3. Replace the transport on any already-instantiated edgar httprequests
-         client if edgar exposes it as a module attribute.
+    Why env vars alone don't work
+    ─────────────────────────────
+    • httpx uses HTTP_PROXY only for http:// URLs and HTTPS_PROXY for https://.
+      SEC EDGAR is HTTPS, so only HTTPS_PROXY matters.
+    • edgar creates its httpx.Client at module-import time (before our env vars
+      are set), so the already-cached client never sees them.
+    • edgar passes transport=<throttlecache> to httpx.Client(); when transport=
+      is given httpx silently ignores proxy= — so patching __init__ with proxy=
+      has no effect.
+
+    Three-layer fix
+    ───────────────
+    1. Set HTTPS_PROXY (+ HTTP_PROXY) for any future bare httpx.Client() calls.
+    2. Patch httpx.Client.__init__ using mounts= instead of proxy=.
+       httpx always checks mounts BEFORE the default transport, so mounts work
+       even when edgar passes transport=throttlecache.
+    3. Inject proxy mounts directly into _mounts on edgar's already-created
+       module-level client (found by scanning every attribute of
+       edgar.httprequests for httpx.Client instances).
     """
     import os
     import httpx
 
     if proxy_url:
-        # 1. Env vars — picked up by any fresh httpx.Client()
-        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-            os.environ[var] = proxy_url
+        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ[v] = proxy_url
     else:
-        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-            os.environ.pop(var, None)
+        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            os.environ.pop(v, None)
         return  # direct mode — nothing to patch
 
-    # 2. Monkey-patch httpx.Client so edgar's lazily-created clients pick it up
+    _proxy = httpx.Proxy(proxy_url)
+
+    def _make_proxy_transport():
+        return httpx.HTTPTransport(proxy=_proxy)
+
+    # ── 2. Patch httpx.Client.__init__ ──────────────────────────────────────
+    # Use mounts= so the proxy applies even when transport= is already given.
+    # httpx evaluates mounts before _transport in _transport_for_url().
     _sentinel = "_edgar_proxy_patched"
-    if not getattr(httpx.Client, _sentinel, False):
-        _orig_init = httpx.Client.__init__
+    _orig_init = httpx.Client.__init__
 
-        def _patched_init(self, *args, **kwargs):
-            # Inject proxy only when the caller didn't already set one
-            if "proxy" not in kwargs and "proxies" not in kwargs:
-                try:
-                    kwargs["proxy"] = proxy_url
-                except Exception:
-                    pass
-            _orig_init(self, *args, **kwargs)
+    def _patched_init(self, *args, **kwargs):
+        if not any(k in kwargs for k in ("proxy", "proxies", "mounts")):
+            kwargs["mounts"] = {
+                "http://":  _make_proxy_transport(),
+                "https://": _make_proxy_transport(),
+            }
+        _orig_init(self, *args, **kwargs)
 
-        httpx.Client.__init__ = _patched_init
-        setattr(httpx.Client, _sentinel, True)
-    else:
-        # Already patched — update the closure variable via re-patching
-        _orig_init = httpx.Client.__init__.__wrapped__ if hasattr(
-            httpx.Client.__init__, "__wrapped__") else httpx.Client.__init__
+    httpx.Client.__init__ = _patched_init
+    setattr(httpx.Client, _sentinel, True)
 
-        def _patched_init(self, *args, **kwargs):
-            if "proxy" not in kwargs and "proxies" not in kwargs:
-                try:
-                    kwargs["proxy"] = proxy_url
-                except Exception:
-                    pass
-            _orig_init(self, *args, **kwargs)
-
-        httpx.Client.__init__ = _patched_init
-
-    # 3. Attempt to replace transport on edgar's existing module-level client
+    # ── 3. Patch edgar's existing module-level client ────────────────────────
+    # Scan ALL attributes — edgar's client may have any name.
+    # Inject into _mounts so it takes precedence over the throttlecache
+    # transport without removing it.
     try:
         import edgar.httprequests as _ehr
-        for attr in ("client", "_client", "http_client", "session"):
-            obj = getattr(_ehr, attr, None)
-            if isinstance(obj, httpx.Client):
-                obj._transport = httpx.HTTPTransport(proxy=httpx.Proxy(proxy_url))
-                break
+        for _attr in dir(_ehr):
+            try:
+                _obj = getattr(_ehr, _attr, None)
+                if not isinstance(_obj, httpx.Client):
+                    continue
+                _mounts = getattr(_obj, "_mounts", None)
+                if isinstance(_mounts, dict):
+                    # Replace / add proxy entries; insertion at front gives
+                    # highest priority for plain prefix matching.
+                    _new = {
+                        "http://":  _make_proxy_transport(),
+                        "https://": _make_proxy_transport(),
+                    }
+                    _new.update(_mounts)   # keep existing specific patterns
+                    _obj._mounts = _new
+                else:
+                    # Fallback: replace transport entirely
+                    _obj._transport = _make_proxy_transport()
+            except Exception:
+                pass
     except Exception:
-        pass  # edgar may not expose its client — that's fine
+        pass
 
 
 def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
@@ -1688,14 +1745,17 @@ def render_sec_edgar_section(company):
     st.markdown("---")
     st.header("📈 SEC EDGAR — Financial Statements")
 
-    ticker = extract_sec_ticker_from_company(company)
-    company_name = company.get("name", ticker)
+    raw_identifier = extract_sec_ticker_from_company(company)
+    company_name = company.get("name", raw_identifier)
 
-    if not ticker:
-        st.error("No SEC ticker found for this company.")
+    if not raw_identifier:
+        st.error("No SEC identifier (ticker or CIK) found for this company.")
         return
 
-    st.info(f"Company: **{company_name}**  |  Ticker: `{ticker}`")
+    ticker = normalize_sec_identifier(raw_identifier)
+    # Show raw CIK from MongoDB and the normalized value passed to edgartools
+    cik_display = raw_identifier if raw_identifier != ticker else ticker
+    st.info(f"Company: **{company_name}**  |  CIK: `{cik_display}`")
 
     # ── Proxy status pill ─────────────────────────────────────────────────
     from config.config import load_config
@@ -1727,7 +1787,7 @@ def render_sec_edgar_section(company):
     col_btn, _ = st.columns([1, 3])
     with col_btn:
         fetch = st.button(
-            f"🔄 Fetch {ticker} FY{fiscal_year}",
+            f"🔄 Fetch {company_name} FY{fiscal_year}",
             disabled=not identity_ok,
             key="sec_fetch_btn",
         )
@@ -1741,7 +1801,7 @@ def render_sec_edgar_section(company):
         st.session_state.edgar_mongo_saved = False
         st.session_state.edgar_excel_bytes = None
 
-        with st.spinner(f"Fetching {ticker} FY{fiscal_year} from SEC EDGAR …"):
+        with st.spinner(f"Fetching {company_name} (CIK {ticker}) FY{fiscal_year} from SEC EDGAR …"):
             result = _fetch_and_parse_edgar(ticker, int(fiscal_year), identity)
 
         if result:
@@ -1752,7 +1812,7 @@ def render_sec_edgar_section(company):
             saved = _save_edgar_report_to_mongo(company, ticker, int(fiscal_year), result)
             st.session_state.edgar_mongo_saved = saved
         else:
-            st.error(f"No financial data returned for {ticker} FY{fiscal_year}.")
+            st.error(f"No financial data returned for {company_name} (CIK {ticker}) FY{fiscal_year}.")
 
     # ── Display results ───────────────────────────────────────────────────
     result = st.session_state.get("edgar_financials")
