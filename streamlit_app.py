@@ -1376,7 +1376,7 @@ def _get_edgar_proxy_urls():
       proxy_use = server   → IP-based proxy at system_host:system_port, no auth
       proxy_use = system   → corporate proxy at corporate_host:corporate_port
                              Credentials are fully percent-encoded so special
-                             characters in username/password (@ \ : etc.) do not
+                             characters in username/password (@ \\ : etc.) do not
                              break URL parsing.
     """
     from config.config import load_config
@@ -1471,91 +1471,55 @@ def normalize_sec_identifier(raw: str) -> str:
     return s  # plain ticker symbol
 
 
-def _patch_httpx_proxy(proxy_url: str) -> None:
+def _patch_edgar_for_proxy(proxy_url: str, identity: str) -> None:
     """
-    Force edgar (httpx-based) to route through proxy_url.
+    Route all edgar HTTP calls through the configured proxy by replacing
+    edgar.httprequests.download_file with a requests-based version.
 
-    Why env vars alone don't work
-    ─────────────────────────────
-    • httpx uses HTTP_PROXY only for http:// URLs and HTTPS_PROXY for https://.
-      SEC EDGAR is HTTPS, so only HTTPS_PROXY matters.
-    • edgar creates its httpx.Client at module-import time (before our env vars
-      are set), so the already-cached client never sees them.
-    • edgar passes transport=<throttlecache> to httpx.Client(); when transport=
-      is given httpx silently ignores proxy= — so patching __init__ with proxy=
-      has no effect.
+    Why previous approaches (env vars, httpx mounts, __init__ patching) failed
+    ────────────────────────────────────────────────────────────────────────────
+    edgar uses httpxthrottlecache as its transport wrapper.  The transport chain
+    is:  httpx.Client._transport → FileCache → RateLimiter → HTTPTransport
+    httpx evaluates mounts ONLY on the client level — but edgar's throttlecache
+    sits directly at client._transport, bypassing the mounts lookup entirely.
+    Mounts, env vars, and __init__ patches all operate above this level and are
+    therefore ineffective.
 
-    Three-layer fix
-    ───────────────
-    1. Set HTTPS_PROXY (+ HTTP_PROXY) for any future bare httpx.Client() calls.
-    2. Patch httpx.Client.__init__ using mounts= instead of proxy=.
-       httpx always checks mounts BEFORE the default transport, so mounts work
-       even when edgar passes transport=throttlecache.
-    3. Inject proxy mounts directly into _mounts on edgar's already-created
-       module-level client (found by scanning every attribute of
-       edgar.httprequests for httpx.Client instances).
+    The fix
+    ───────
+    Replace edgar.httprequests.download_file (the single function every edgar
+    HTTP call goes through, as confirmed by the traceback) with a version that
+    uses requests.Session — the same library that successfully routes OVH and
+    HKEX traffic through this proxy.
     """
     import os
-    import httpx
+    import requests as _rq
 
-    if proxy_url:
-        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    # Always sync env vars so other http calls in the process see the proxy too
+    for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        if proxy_url:
             os.environ[v] = proxy_url
-    else:
-        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        else:
             os.environ.pop(v, None)
-        return  # direct mode — nothing to patch
 
-    _proxy = httpx.Proxy(proxy_url)
+    if not proxy_url:
+        return
 
-    def _make_proxy_transport():
-        return httpx.HTTPTransport(proxy=_proxy)
+    import edgar.httprequests as _ehr
 
-    # ── 2. Patch httpx.Client.__init__ ──────────────────────────────────────
-    # Use mounts= so the proxy applies even when transport= is already given.
-    # httpx evaluates mounts before _transport in _transport_for_url().
-    _sentinel = "_edgar_proxy_patched"
-    _orig_init = httpx.Client.__init__
+    # Build a reusable requests session with the proxy and SEC identity header
+    _session = _rq.Session()
+    _session.proxies = {"http": proxy_url, "https": proxy_url}
+    if identity:
+        _session.headers["User-Agent"] = identity
 
-    def _patched_init(self, *args, **kwargs):
-        if not any(k in kwargs for k in ("proxy", "proxies", "mounts")):
-            kwargs["mounts"] = {
-                "http://":  _make_proxy_transport(),
-                "https://": _make_proxy_transport(),
-            }
-        _orig_init(self, *args, **kwargs)
+    def _requests_download_file(url, *args, as_text=False, **kwargs):
+        """Drop-in for edgar.httprequests.download_file via requests."""
+        resp = _session.get(url, timeout=60)
+        resp.raise_for_status()
+        return resp.text if as_text else resp.content
 
-    httpx.Client.__init__ = _patched_init
-    setattr(httpx.Client, _sentinel, True)
-
-    # ── 3. Patch edgar's existing module-level client ────────────────────────
-    # Scan ALL attributes — edgar's client may have any name.
-    # Inject into _mounts so it takes precedence over the throttlecache
-    # transport without removing it.
-    try:
-        import edgar.httprequests as _ehr
-        for _attr in dir(_ehr):
-            try:
-                _obj = getattr(_ehr, _attr, None)
-                if not isinstance(_obj, httpx.Client):
-                    continue
-                _mounts = getattr(_obj, "_mounts", None)
-                if isinstance(_mounts, dict):
-                    # Our proxy entries go in first (highest priority), then
-                    # existing specific patterns are merged after.  We then
-                    # overwrite "http://" and "https://" keys to ensure our
-                    # proxy is always used for those schemes.
-                    _new = dict(_mounts)   # copy existing first
-                    _new["http://"]  = _make_proxy_transport()
-                    _new["https://"] = _make_proxy_transport()
-                    _obj._mounts = _new
-                else:
-                    # Fallback: replace transport entirely
-                    _obj._transport = _make_proxy_transport()
-            except Exception:
-                pass
-    except Exception:
-        pass
+    _ehr.download_file = _requests_download_file
 
 
 def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
@@ -1565,13 +1529,12 @@ def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
     Returns parsed dict or None.
     Caches result in session_state to avoid repeated API calls.
     """
-    # ── CRITICAL: patch httpx BEFORE importing edgar ──────────────────────
-    # edgar creates its module-level httpx.Client the moment it is first
-    # imported.  If we patch after the import, the client is already built
-    # without proxy.  Setting env vars + injecting mounts here, before the
-    # import statement below, ensures the client is born with proxy support.
     http_proxy, https_proxy = _get_edgar_proxy_urls()
-    _patch_httpx_proxy(http_proxy)
+
+    # Replace edgar's download_file with a requests-based version BEFORE any
+    # edgar call.  This is the only reliable way to route edgar's traffic
+    # through the proxy — httpx-level patching is bypassed by httpxthrottlecache.
+    _patch_edgar_for_proxy(http_proxy, identity)
 
     from src.crawler.edgar.crawler import EdgarCrawler
     from src.parser.edgar.parser import EdgarParser
