@@ -26,6 +26,7 @@ from src.pipeline.db import MongoDBClient
 # OVH IMPORTS
 # ==============================================================================
 from src.parser.ovh import parser as ovh_parser
+from src.parser.xbrl import parser as xbrl_parser
 
 # ==============================================================================
 # HKEX IMPORTS
@@ -477,13 +478,94 @@ def load_raw_api_data_from_mongodb(lei):
 
 
 def load_filings_from_api(lei, api_base):
-    """Load filings list from API"""
+    """Load filings list from API, save locally and to MongoDB. Returns list of filing dicts."""
     try:
-        filings = ovh_parser.api_discover(lei)
+        _OVH_CFG = _get_section("OVH")
+        download_dir = Path(_OVH_CFG.get("download_dir", "ovh_filings"))
+        download_dir.mkdir(parents=True, exist_ok=True)
+        local_file = download_dir / f"filings_{lei}.json"
+
+        ua = _OVH_CFG.get("user_agent", "XBRL-Research/1.0 research@example.com")
+        headers = {"User-Agent": ua, "Accept": "application/json,*/*"}
+
+        filings = xbrl_parser.fetch_filings(lei, api_base, headers=headers)
+
+        if filings:
+            # Save locally
+            local_file.write_text(
+                json.dumps(filings, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
         return filings
     except Exception as e:
         st.error(f"Error loading filings: {str(e)}")
         return []
+
+
+def save_xbrl_json_to_mongodb(lei, filing_id, period_end, json_bytes: bytes):
+    """Save viewer_data.json bytes to MongoDB GridFS. Returns GridFS file_id str or None."""
+    try:
+        with MongoDBClient() as client:
+            fy_label = f"FY{period_end[:4]}" if period_end else "UNKNOWN"
+            # Remove old copy if exists
+            existing = client.db.reports.find_one({
+                "lei": lei,
+                "filingId": filing_id,
+                "dataType": "xbrl_viewer_json",
+            })
+            if existing:
+                old_fid = existing.get("gridfsFileId")
+                if old_fid:
+                    try:
+                        from bson import ObjectId
+                        client.fs.delete(ObjectId(old_fid))
+                    except Exception:
+                        pass
+                client.db.reports.delete_one({"_id": existing["_id"]})
+
+            file_id = client.save_bytes_to_gridfs(
+                json_bytes,
+                filename=f"{filing_id}_{period_end}_viewer_data.json",
+                metadata={
+                    "lei": lei,
+                    "filingId": filing_id,
+                    "periodEnd": period_end,
+                    "fiscalYear": fy_label,
+                    "contentType": "application/json",
+                    "fileType": "xbrl_viewer_json",
+                },
+            )
+            client.db.reports.insert_one({
+                "lei": lei,
+                "filingId": filing_id,
+                "periodEnd": period_end,
+                "fiscalYear": fy_label,
+                "dataType": "xbrl_viewer_json",
+                "gridfsFileId": file_id,
+                "createdAt": datetime.utcnow(),
+            })
+            return file_id
+    except Exception as e:
+        st.warning(f"Could not save XBRL JSON to MongoDB: {e}")
+        return None
+
+
+def load_xbrl_json_from_mongodb(lei, filing_id) -> bytes:
+    """Load viewer_data.json bytes from MongoDB GridFS. Returns bytes or None."""
+    try:
+        with MongoDBClient() as client:
+            doc = client.db.reports.find_one({
+                "lei": lei,
+                "filingId": filing_id,
+                "dataType": "xbrl_viewer_json",
+            })
+            if not doc:
+                return None
+            from bson import ObjectId
+            grid_out = client.fs.get(ObjectId(doc["gridfsFileId"]))
+            return grid_out.read()
+    except Exception:
+        return None
 
 
 def save_viewer_data_to_mongodb(lei, filing_id, period_end, viewer_json_path, report_html_path=None):
@@ -755,6 +837,133 @@ def parse_filing_data(filing, lei, api_base, silent=False):
     except Exception as e:
         if not silent:
             st.error(f"Error parsing filing: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+        return None, None
+
+
+def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = False):
+    """
+    Parse a filing using the general XBRL-only approach (no HTML download).
+
+    Cache strategy:
+      1. Local file  → {download_dir}/{fy_label}/viewer_data.json
+      2. MongoDB GridFS
+      3. Download from API (then save locally + to MongoDB)
+
+    Returns:
+        (statements_dict, facts_list)
+        statements_dict: {statement_type: pd.DataFrame}  columns = FR | EN | Concept | FY... columns
+        facts_list: raw list of fact dicts
+    """
+    try:
+        filing_id  = filing.get("_id", "")
+        period_end = filing.get("period_end", "")
+        fy_label   = f"FY{period_end[:4]}" if period_end else "UNKNOWN"
+
+        _OVH_CFG   = _get_section("OVH")
+        ua         = _OVH_CFG.get("user_agent", "XBRL-Research/1.0 research@example.com")
+        headers    = {"User-Agent": ua, "Accept": "application/json,*/*"}
+        download_dir = Path(_OVH_CFG.get("download_dir", "ovh_filings"))
+        fy_dir     = download_dir / fy_label
+        local_path = fy_dir / "viewer_data.json"
+
+        json_bytes = None
+
+        # 1. Check local cache
+        if local_path.exists():
+            if not silent:
+                st.info(f"Loading {fy_label} from local cache...")
+            json_bytes = local_path.read_bytes()
+
+        # 2. Check MongoDB GridFS
+        if json_bytes is None and filing_id:
+            if not silent:
+                st.info(f"Checking MongoDB for {fy_label}...")
+            json_bytes = load_xbrl_json_from_mongodb(lei, filing_id)
+            if json_bytes and not silent:
+                st.info(f"Loaded {fy_label} from MongoDB cache")
+
+        # 3. Download from API
+        if json_bytes is None:
+            if not silent:
+                st.info(f"Downloading XBRL data for {fy_label} from API...")
+            from src import http_client as _hc
+            json_url = filing.get("json_url", "")
+            if not json_url:
+                if not silent:
+                    st.error(f"No json_url in filing for {fy_label}")
+                return None, None
+            full_url = api_base + json_url if not json_url.startswith("http") else json_url
+            resp = _hc.get(full_url, headers=headers, timeout=120)
+            resp.raise_for_status()
+            json_bytes = resp.content
+
+            # Save locally
+            fy_dir.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(json_bytes)
+            if not silent:
+                st.success(f"Saved viewer_data.json locally: {local_path}")
+
+            # Save to MongoDB GridFS
+            save_xbrl_json_to_mongodb(lei, filing_id, period_end, json_bytes)
+            if not silent:
+                st.success(f"Saved viewer_data.json to MongoDB GridFS")
+
+        # Parse facts from JSON bytes
+        import json as _json
+        data = _json.loads(json_bytes.decode("utf-8", errors="replace"))
+        facts_raw = data.get("facts", {})
+
+        facts = []
+        for _fid, fact in facts_raw.items():
+            dims    = fact.get("dimensions", {})
+            concept = dims.get("concept", "")
+            period  = dims.get("period", "")
+            unit    = dims.get("unit", "")
+            raw_val = fact.get("value", "")
+            decimals = fact.get("decimals", "")
+            if not concept:
+                continue
+            p_type, p_start, p_end, fy_year = xbrl_parser._parse_period(period)
+            numeric = xbrl_parser._to_numeric(raw_val)
+            facts.append({
+                "concept_full":  concept,
+                "concept_short": xbrl_parser._concept_short(concept),
+                "period_type":   p_type,
+                "period_start":  p_start,
+                "period_end":    p_end,
+                "fy_year":       fy_year,
+                "unit":          unit,
+                "value_raw":     raw_val,
+                "value_numeric": numeric,
+                "decimals":      decimals,
+            })
+
+        if not facts:
+            if not silent:
+                st.warning(f"No XBRL facts found for {fy_label}")
+            return None, None
+
+        if not silent:
+            st.success(f"{len(facts)} facts extracted for {fy_label}")
+
+        # Build view with all years from this filing (current + comparative)
+        statements = xbrl_parser.build_filing_view(facts)
+
+        if not statements:
+            if not silent:
+                st.warning(f"No known IFRS concepts matched for {fy_label}")
+            return None, facts
+
+        if not silent:
+            st.success(f"Built {len(statements)} statement(s) for {fy_label}")
+
+        return statements, facts
+
+    except Exception as e:
+        if not silent:
+            st.error(f"Error parsing XBRL filing: {e}")
             import traceback
             st.error(traceback.format_exc())
         return None, None
@@ -1376,7 +1585,7 @@ def _get_edgar_proxy_urls():
       proxy_use = server   → IP-based proxy at system_host:system_port, no auth
       proxy_use = system   → corporate proxy at corporate_host:corporate_port
                              Credentials are fully percent-encoded so special
-                             characters in username/password (@ \\ : etc.) do not
+                             characters in username/password (@ \ : etc.) do not
                              break URL parsing.
     """
     from config.config import load_config
@@ -1385,8 +1594,8 @@ def _get_edgar_proxy_urls():
     proxy_use = cfg.get("PROXY", "proxy_use", fallback="none").strip().lower()
 
     if proxy_use == "server":
-        host = cfg.get("PROXY", "system_host", fallback="").strip()
-        port = cfg.get("PROXY", "system_port", fallback="3125").strip()
+        host = cfg.get("PROXY", "server_host", fallback="").strip()
+        port = cfg.get("PROXY", "server_port", fallback="3125").strip()
         url  = f"http://{host}:{port}" if host else ""
         return url, url
 
@@ -1471,55 +1680,91 @@ def normalize_sec_identifier(raw: str) -> str:
     return s  # plain ticker symbol
 
 
-def _patch_edgar_for_proxy(proxy_url: str, identity: str) -> None:
+def _patch_httpx_proxy(proxy_url: str) -> None:
     """
-    Route all edgar HTTP calls through the configured proxy by replacing
-    edgar.httprequests.download_file with a requests-based version.
+    Force edgar (httpx-based) to route through proxy_url.
 
-    Why previous approaches (env vars, httpx mounts, __init__ patching) failed
-    ────────────────────────────────────────────────────────────────────────────
-    edgar uses httpxthrottlecache as its transport wrapper.  The transport chain
-    is:  httpx.Client._transport → FileCache → RateLimiter → HTTPTransport
-    httpx evaluates mounts ONLY on the client level — but edgar's throttlecache
-    sits directly at client._transport, bypassing the mounts lookup entirely.
-    Mounts, env vars, and __init__ patches all operate above this level and are
-    therefore ineffective.
+    Why env vars alone don't work
+    ─────────────────────────────
+    • httpx uses HTTP_PROXY only for http:// URLs and HTTPS_PROXY for https://.
+      SEC EDGAR is HTTPS, so only HTTPS_PROXY matters.
+    • edgar creates its httpx.Client at module-import time (before our env vars
+      are set), so the already-cached client never sees them.
+    • edgar passes transport=<throttlecache> to httpx.Client(); when transport=
+      is given httpx silently ignores proxy= — so patching __init__ with proxy=
+      has no effect.
 
-    The fix
-    ───────
-    Replace edgar.httprequests.download_file (the single function every edgar
-    HTTP call goes through, as confirmed by the traceback) with a version that
-    uses requests.Session — the same library that successfully routes OVH and
-    HKEX traffic through this proxy.
+    Three-layer fix
+    ───────────────
+    1. Set HTTPS_PROXY (+ HTTP_PROXY) for any future bare httpx.Client() calls.
+    2. Patch httpx.Client.__init__ using mounts= instead of proxy=.
+       httpx always checks mounts BEFORE the default transport, so mounts work
+       even when edgar passes transport=throttlecache.
+    3. Inject proxy mounts directly into _mounts on edgar's already-created
+       module-level client (found by scanning every attribute of
+       edgar.httprequests for httpx.Client instances).
     """
     import os
-    import requests as _rq
+    import httpx
 
-    # Always sync env vars so other http calls in the process see the proxy too
-    for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-        if proxy_url:
+    if proxy_url:
+        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             os.environ[v] = proxy_url
-        else:
+    else:
+        for v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             os.environ.pop(v, None)
+        return  # direct mode — nothing to patch
 
-    if not proxy_url:
-        return
+    _proxy = httpx.Proxy(proxy_url)
 
-    import edgar.httprequests as _ehr
+    def _make_proxy_transport():
+        return httpx.HTTPTransport(proxy=_proxy)
 
-    # Build a reusable requests session with the proxy and SEC identity header
-    _session = _rq.Session()
-    _session.proxies = {"http": proxy_url, "https": proxy_url}
-    if identity:
-        _session.headers["User-Agent"] = identity
+    # ── 2. Patch httpx.Client.__init__ ──────────────────────────────────────
+    # Use mounts= so the proxy applies even when transport= is already given.
+    # httpx evaluates mounts before _transport in _transport_for_url().
+    _sentinel = "_edgar_proxy_patched"
+    _orig_init = httpx.Client.__init__
 
-    def _requests_download_file(url, *args, as_text=False, **kwargs):
-        """Drop-in for edgar.httprequests.download_file via requests."""
-        resp = _session.get(url, timeout=60)
-        resp.raise_for_status()
-        return resp.text if as_text else resp.content
+    def _patched_init(self, *args, **kwargs):
+        if not any(k in kwargs for k in ("proxy", "proxies", "mounts")):
+            kwargs["mounts"] = {
+                "http://":  _make_proxy_transport(),
+                "https://": _make_proxy_transport(),
+            }
+        _orig_init(self, *args, **kwargs)
 
-    _ehr.download_file = _requests_download_file
+    httpx.Client.__init__ = _patched_init
+    setattr(httpx.Client, _sentinel, True)
+
+    # ── 3. Patch edgar's existing module-level client ────────────────────────
+    # Scan ALL attributes — edgar's client may have any name.
+    # Inject into _mounts so it takes precedence over the throttlecache
+    # transport without removing it.
+    try:
+        import edgar.httprequests as _ehr
+        for _attr in dir(_ehr):
+            try:
+                _obj = getattr(_ehr, _attr, None)
+                if not isinstance(_obj, httpx.Client):
+                    continue
+                _mounts = getattr(_obj, "_mounts", None)
+                if isinstance(_mounts, dict):
+                    # Our proxy entries go in first (highest priority), then
+                    # existing specific patterns are merged after.  We then
+                    # overwrite "http://" and "https://" keys to ensure our
+                    # proxy is always used for those schemes.
+                    _new = dict(_mounts)   # copy existing first
+                    _new["http://"]  = _make_proxy_transport()
+                    _new["https://"] = _make_proxy_transport()
+                    _obj._mounts = _new
+                else:
+                    # Fallback: replace transport entirely
+                    _obj._transport = _make_proxy_transport()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
@@ -1529,12 +1774,13 @@ def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
     Returns parsed dict or None.
     Caches result in session_state to avoid repeated API calls.
     """
+    # ── CRITICAL: patch httpx BEFORE importing edgar ──────────────────────
+    # edgar creates its module-level httpx.Client the moment it is first
+    # imported.  If we patch after the import, the client is already built
+    # without proxy.  Setting env vars + injecting mounts here, before the
+    # import statement below, ensures the client is born with proxy support.
     http_proxy, https_proxy = _get_edgar_proxy_urls()
-
-    # Replace edgar's download_file with a requests-based version BEFORE any
-    # edgar call.  This is the only reliable way to route edgar's traffic
-    # through the proxy — httpx-level patching is bypassed by httpxthrottlecache.
-    _patch_edgar_for_proxy(http_proxy, identity)
+    _patch_httpx_proxy(http_proxy)
 
     from src.crawler.edgar.crawler import EdgarCrawler
     from src.parser.edgar.parser import EdgarParser
@@ -2191,7 +2437,8 @@ def main():
     # OVH SECTION
     # ==============================================================================
     if company_type == 'OVH':
-        st.header("OVH Data Source")
+        company_display_name = company.get('name', 'XBRL')
+        st.header(f"{company_display_name} Data Source")
 
         # Sources are already loaded automatically when company is selected
         st.session_state.ovh_sources = st.session_state.company_sources
@@ -2421,66 +2668,38 @@ def main():
         with col1:
             if st.button("Parse Filing", type="primary"):
                 if st.session_state.lei and st.session_state.api_base:
-                    with st.spinner("Parsing filing data..."):
-                        tables, xbrl_facts = parse_filing_data(
+                    with st.spinner("Parsing XBRL data..."):
+                        statements, xbrl_facts = parse_xbrl_filing(
                             selected_filing,
                             st.session_state.lei,
                             st.session_state.api_base
                         )
 
-                    if tables:
-                        filing_id = selected_filing.get('_id')
+                    if statements:
                         pe = selected_filing.get('period_end', '')
                         fy_label = f"FY{pe[:4]}" if pe else "UNKNOWN"
 
-                        # Get file paths
-                        _OVH_CFG = _get_section("OVH")
-                        download_dir = Path(_OVH_CFG.get("download_dir"))
-                        fy_dir = download_dir / fy_label
-                        report_html_path = fy_dir / "report_doc.html"
-                        viewer_json_path = fy_dir / "viewer_data.json"
-
-                        # Save viewer data and HTML to MongoDB GridFS
-                        if viewer_json_path.exists() or report_html_path.exists():
-                            save_viewer_data_to_mongodb(
-                                st.session_state.lei,
-                                filing_id,
-                                pe,
-                                viewer_json_path if viewer_json_path.exists() else None,
-                                report_html_path if report_html_path.exists() else None
-                            )
-
-                        # Check if already parsed to avoid duplicates
                         if fy_label not in st.session_state.parsed_labels:
-                            # Store tables
-                            st.session_state.financial_data[fy_label] = tables
+                            # Store DataFrames keyed by FY label
+                            st.session_state.financial_data[fy_label] = statements
 
-                            # Store XBRL facts (avoid duplicates)
+                            # Store raw facts (tagged with fy_label)
                             if xbrl_facts:
-                                # Remove existing facts for this FY to avoid duplicates
+                                tagged = [{**f, "fy_label": fy_label} for f in xbrl_facts]
                                 st.session_state.all_facts = [
                                     f for f in st.session_state.all_facts
-                                    if f.get('fy_label') != fy_label
+                                    if f.get("fy_label") != fy_label
                                 ]
-                                st.session_state.all_facts.extend(xbrl_facts)
+                                st.session_state.all_facts.extend(tagged)
 
-                            # Mark as parsed
                             st.session_state.parsed_labels.add(fy_label)
-
-                            # Store filing metadata for tracking
                             st.session_state.filing_metadata[fy_label] = f"{fy_label} (from {pe} filing)"
 
-                        # Always rebuild concept map after parsing
-                        _rebuild_concept_map()
-
-                        # Set flag to show individual filing data
                         st.session_state.show_individual_filing = True
-
-                        # Show simple success message
-                        st.success(f"✅ Successfully parsed {fy_label}")
+                        st.success(f"Parsed {fy_label}: {', '.join(statements.keys())}")
                         st.rerun()
                     else:
-                        st.error("Failed to parse filing")
+                        st.error("Failed to parse filing — no XBRL facts matched known concepts")
                 else:
                     st.error("LEI or API Base URL not set")
 
@@ -2492,55 +2711,25 @@ def main():
             st.markdown("---")
             st.header("Financial Statements")
 
-            tables = st.session_state.financial_data[fy_label]
-
-            # Create tabs for different statement types
-            tab_names = list(tables.keys())
+            statements = st.session_state.financial_data[fy_label]
+            tab_names = list(statements.keys())
             tabs = st.tabs(tab_names)
 
-            for tab, table_name in zip(tabs, tab_names):
+            for tab, stmt_type in zip(tabs, tab_names):
                 with tab:
-                    st.markdown(f"### {table_name}")
-
-                    # Get concept map for this sheet type
-                    concept_map_for_sheet = st.session_state.concept_map.get(table_name, {})
-
-                    # Debug: Check concept map
-                    print(f"[DEBUG] Table: {table_name}")
-                    print(f"[DEBUG] Concept map has {len(concept_map_for_sheet)} entries")
-                    if concept_map_for_sheet:
-                        print(f"[DEBUG] Sample concepts: {list(concept_map_for_sheet.items())[:3]}")
-
-                    # Convert to dataframe with XBRL concepts
-                    df = convert_table_to_dataframe(
-                        tables[table_name],
-                        filing_label=None,
-                        concept_map_for_sheet=concept_map_for_sheet
-                    )
-
-                    # Debug: Check if XBRL Concept column was added
-                    print(f"[DEBUG] DataFrame columns: {list(df.columns)}")
-                    if "XBRL Concept" in df.columns:
-                        n_concepts = df["XBRL Concept"].astype(bool).sum()
-                        print(f"[DEBUG] XBRL Concept column present with {n_concepts} non-empty values")
-                    else:
-                        print(f"[DEBUG] WARNING: XBRL Concept column NOT present!")
-
-                    if not df.empty:
-                        # Display dataframe directly without filters
-                        st.dataframe(df, width='stretch', height=min(600, 40 + 35 * len(df)))
-
-                        # Download button for individual table
-                        csv = df.to_csv(index=False).encode('utf-8')
+                    df = statements[stmt_type]
+                    if df is not None and not df.empty:
+                        st.dataframe(df, width="stretch", height=min(600, 40 + 35 * len(df)), hide_index=True)
+                        csv = df.to_csv(index=False).encode("utf-8")
                         st.download_button(
-                            label=f"Download {table_name} as CSV",
+                            label=f"Download {stmt_type} as CSV",
                             data=csv,
-                            file_name=f"{table_name}_{period_end}.csv",
+                            file_name=f"{stmt_type.replace(' ', '_')}_{fy_label}.csv",
                             mime="text/csv",
-                            key=f"download_{table_name}"
+                            key=f"dl_single_{stmt_type}",
                         )
                     else:
-                        st.warning("No data available for this table")
+                        st.info(f"No data available for {stmt_type}")
 
     # Consolidate all filings - PARSE AND CONSOLIDATE ALL AVAILABLE FILINGS
     if st.session_state.filings and st.session_state.company_type == 'OVH' and st.session_state.show_filings:
@@ -2578,164 +2767,105 @@ def main():
                             pe = filing.get('period_end', '')
                             fy_label = f"FY{pe[:4]}" if pe else "UNKNOWN"
 
-                            progress.progress((i) / len(unparsed_filings), text=f"Parsing {fy_label}...")
+                            progress.progress(i / len(unparsed_filings), text=f"Parsing {fy_label}...")
 
-                            # Parse this filing silently
-                            tables, xbrl_facts = parse_filing_data(
+                            statements, xbrl_facts = parse_xbrl_filing(
                                 filing,
                                 st.session_state.lei,
                                 st.session_state.api_base,
-                                silent=True
+                                silent=True,
                             )
 
-                            if tables:
-                                # Get file paths for saving to MongoDB
-                                _OVH_CFG = _get_section("OVH")
-                                download_dir = Path(_OVH_CFG.get("download_dir"))
-                                fy_dir = download_dir / fy_label
-                                report_html_path = fy_dir / "report_doc.html"
-                                viewer_json_path = fy_dir / "viewer_data.json"
-
-                                # Save viewer data and HTML to MongoDB GridFS
-                                if viewer_json_path.exists() or report_html_path.exists():
-                                    save_viewer_data_to_mongodb(
-                                        st.session_state.lei,
-                                        filing.get('_id'),
-                                        pe,
-                                        viewer_json_path if viewer_json_path.exists() else None,
-                                        report_html_path if report_html_path.exists() else None
-                                    )
-
-                                # Check if already parsed to avoid duplicates
-                                if fy_label not in st.session_state.parsed_labels:
-                                    st.session_state.financial_data[fy_label] = tables
-                                    if xbrl_facts:
-                                        # Remove existing facts for this FY to avoid duplicates
-                                        st.session_state.all_facts = [
-                                            f for f in st.session_state.all_facts
-                                            if f.get('fy_label') != fy_label
-                                        ]
-                                        st.session_state.all_facts.extend(xbrl_facts)
-                                    st.session_state.parsed_labels.add(fy_label)
+                            if statements and fy_label not in st.session_state.parsed_labels:
+                                st.session_state.financial_data[fy_label] = statements
+                                if xbrl_facts:
+                                    tagged = [{**f, "fy_label": fy_label} for f in xbrl_facts]
+                                    st.session_state.all_facts = [
+                                        f for f in st.session_state.all_facts
+                                        if f.get("fy_label") != fy_label
+                                    ]
+                                    st.session_state.all_facts.extend(tagged)
+                                st.session_state.parsed_labels.add(fy_label)
+                                st.session_state.filing_metadata[fy_label] = f"{fy_label} (from {pe} filing)"
 
                         progress.progress(1.0, text="Done!")
 
-                    # Rebuild concept map from all parsed data
-                    _rebuild_concept_map()
+                    # Build consolidated view across all parsed FYs
+                    all_facts_by_fy = {}
+                    for fy_lbl in st.session_state.parsed_labels:
+                        all_facts_by_fy[fy_lbl] = [
+                            f for f in st.session_state.all_facts
+                            if f.get("fy_label") == fy_lbl
+                        ]
 
-                    # Build consolidated data
-                    all_data = st.session_state.financial_data
-                    filing_metadata = st.session_state.filing_metadata
+                    consolidated = xbrl_parser.build_consolidated(all_facts_by_fy)
+                    st.session_state.consolidated_data = consolidated
 
-                    st.session_state.consolidated_data = all_data
-
-                    st.success(f"✅ Successfully consolidated {len(all_data)} fiscal years")
+                    st.success(f"Consolidated {len(st.session_state.parsed_labels)} fiscal year(s)")
                     st.rerun()
-
-    if st.session_state.consolidated_data:
-        # Download buttons section
-        st.markdown("### Download Options")
-        col_dl1, col_dl2 = st.columns(2)
-
-        with col_dl1:
-            # Create Excel file
-            excel_file = create_consolidated_excel(
-                st.session_state.consolidated_data,
-                st.session_state.filing_metadata
-            )
-
-            if excel_file:
-                st.download_button(
-                    label="📊 Download Consolidated Excel",
-                    data=excel_file,
-                    file_name=f"consolidated_financials_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    width="stretch"
-                )
-
-        with col_dl2:
-            # Create XBRL Facts Excel file
-            if st.session_state.all_facts:
-                xbrl_excel_file = create_xbrl_facts_excel(st.session_state.all_facts)
-
-                if xbrl_excel_file:
-                    st.download_button(
-                        label="◇ Download XBRL Facts & Concepts Excel",
-                        data=xbrl_excel_file,
-                        file_name=f"xbrl_facts_concepts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="secondary",
-                        width="stretch"
-                    )
-            else:
-                st.info("No XBRL facts available. Parse filings first.")
-
 
     # Display consolidated summary — OVH only, and only when data is available
     if (st.session_state.get("company_type") == "OVH"
             and st.session_state.get("consolidated_data")):
 
         st.markdown("---")
-        st.markdown("### Consolidated Data Summary")
+        st.markdown("### Consolidated Financial Statements — All Years")
 
-        table_types = set()
-        for tables in st.session_state.consolidated_data.values():
-            table_types.update(tables.keys())
+        consolidated_data = st.session_state.consolidated_data
+        stmt_types = [s for s in xbrl_parser.STATEMENT_TYPES if s in consolidated_data]
 
-        if table_types:
-            tabs = st.tabs(list(table_types))
-
-            for tab, table_name in zip(tabs, table_types):
+        if stmt_types:
+            tabs = st.tabs(stmt_types)
+            for tab, stmt_type in zip(tabs, stmt_types):
                 with tab:
-                    st.markdown(f"#### {table_name} - All Years")
-
-                    # Show debug info about available filings
-                    with st.expander("Debug: View Filing Details", expanded=False):
-                        for fy_label in sorted(st.session_state.consolidated_data.keys(), reverse=True):
-                            tables = st.session_state.consolidated_data[fy_label]
-                            if table_name in tables:
-                                table_rows = tables[table_name]
-                                if table_rows and len(table_rows) > 0:
-                                    header = table_rows[0]
-                                    st.write(f"**{fy_label}**: {len(table_rows)-1} rows")
-                                    st.write(f"Header columns: {header}")
-                                    # Show first few data rows for debugging
-                                    st.write("First 3 data rows:")
-                                    for i, row in enumerate(table_rows[1:4]):
-                                        st.write(f"  Row {i+1}: {row[:5]}...")  # Show first 5 columns
-
-                    # Create business-friendly dataframe with years as columns
-                    consolidated_df = create_business_friendly_dataframe(
-                        st.session_state.consolidated_data,
-                        st.session_state.filing_metadata,
-                        table_name
-                    )
-
-                    if not consolidated_df.empty:
-                        # Display the consolidated dataframe with custom styling
-                        st.dataframe(
-                            consolidated_df,
-                            width="stretch",
-                            height=500,
-                            hide_index=True
-                        )
-
-                        # Show summary info
-                        years = [col for col in consolidated_df.columns if col not in ['Label (French)', 'Label (English)']]
-                        st.caption(f"Showing data for {len(years)} years: {', '.join(sorted(years, reverse=True))}")
-
-                        # Download button for this consolidated table
-                        csv = consolidated_df.to_csv(index=False).encode('utf-8')
+                    df = consolidated_data[stmt_type]
+                    if df is not None and not df.empty:
+                        fy_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                        st.caption(f"{len(df)} concepts · {len(fy_cols)} year(s): {', '.join(fy_cols)}")
+                        st.dataframe(df, width="stretch", height=500, hide_index=True)
+                        csv = df.to_csv(index=False).encode("utf-8")
                         st.download_button(
-                            label=f"Download {table_name} (All Years) as CSV",
+                            label=f"Download {stmt_type} (All Years) as CSV",
                             data=csv,
-                            file_name=f"{table_name}_consolidated_{datetime.now().strftime('%Y%m%d')}.csv",
+                            file_name=f"{stmt_type.replace(' ', '_')}_consolidated_{datetime.now().strftime('%Y%m%d')}.csv",
                             mime="text/csv",
-                            key=f"download_consolidated_{table_name}"
+                            key=f"dl_cons_{stmt_type}",
                         )
                     else:
-                        st.info(f"No data available for {table_name}")
+                        st.info(f"No data available for {stmt_type}")
+
+            # Download row — Statements Excel + XBRL Facts Excel side by side
+            st.markdown("---")
+            dl_col1, dl_col2 = st.columns(2)
+
+            with dl_col1:
+                excel_bytes = xbrl_parser.generate_excel_bytes(consolidated_data)
+                st.download_button(
+                    label="Download All Statements as Excel",
+                    data=excel_bytes,
+                    file_name=f"xbrl_consolidated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    width="stretch",
+                )
+
+            with dl_col2:
+                all_facts = st.session_state.get("all_facts", [])
+                if all_facts:
+                    try:
+                        facts_excel = xbrl_parser.create_xbrl_facts_excel(all_facts)
+                        st.download_button(
+                            label="Download XBRL Concepts & Facts Excel",
+                            data=facts_excel,
+                            file_name=f"xbrl_facts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="secondary",
+                            width="stretch",
+                        )
+                    except Exception as _exc:
+                        st.warning(f"Could not build XBRL facts Excel: {_exc}")
+                else:
+                    st.info("No raw XBRL facts available — parse filings first.")
 
     # Footer
     st.markdown("---")
