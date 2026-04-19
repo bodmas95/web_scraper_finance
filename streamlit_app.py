@@ -842,6 +842,124 @@ def parse_filing_data(filing, lei, api_base, silent=False):
         return None, None
 
 
+def save_raw_xbrl_to_mongodb(lei: str, filing_id: str, period_end: str, fy_label: str, raw_data: dict):
+    """Save raw XBRL JSON (facts dict) to MongoDB reports collection as a queryable document."""
+    try:
+        with MongoDBClient() as client:
+            doc = {
+                "lei": lei,
+                "filingId": filing_id,
+                "periodEnd": period_end,
+                "fiscalYear": fy_label,
+                "dataType": "xbrl_raw_json",
+                "rawData": raw_data,
+                "savedAt": datetime.utcnow(),
+            }
+            existing = client.db.reports.find_one({
+                "lei": lei,
+                "filingId": filing_id,
+                "dataType": "xbrl_raw_json",
+            })
+            if existing:
+                client.db.reports.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {"rawData": raw_data, "savedAt": datetime.utcnow()}},
+                )
+                return str(existing["_id"])
+            else:
+                result = client.db.reports.insert_one(doc)
+                return str(result.inserted_id)
+    except Exception as e:
+        st.warning(f"Could not save raw XBRL JSON to MongoDB: {e}")
+        return None
+
+
+def _load_viewer_labels(filing: dict, api_base: str, fy_dir: Path, headers: dict, silent: bool = False):
+    """
+    Load ixbrlviewer.html (cache locally) and extract concept labels.
+    Returns {concept_short: (fr_label, en_label)} or empty dict on failure.
+    """
+    viewer_url = filing.get("viewer_url", "")
+    if not viewer_url:
+        return {}
+
+    viewer_local = fy_dir / "ixbrlviewer.html"
+
+    viewer_content = None
+    if viewer_local.exists():
+        try:
+            viewer_content = viewer_local.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    if viewer_content is None:
+        try:
+            full_url = api_base + viewer_url if not viewer_url.startswith("http") else viewer_url
+            from src import http_client as _hc
+            resp = _hc.get(full_url, headers={**headers, "Accept": "text/html,*/*"}, timeout=60)
+            resp.raise_for_status()
+            viewer_content = resp.content.decode("utf-8", errors="replace")
+            fy_dir.mkdir(parents=True, exist_ok=True)
+            viewer_local.write_text(viewer_content, encoding="utf-8")
+            if not silent:
+                st.success(f"Saved ixbrlviewer.html locally: {viewer_local}")
+        except Exception as e:
+            if not silent:
+                st.warning(f"Could not fetch ixbrlviewer.html: {e}")
+            return {}
+
+    labels = xbrl_parser.extract_labels_from_ixbrl_viewer(viewer_content)
+    return labels
+
+
+def _save_labeled_json_locally(fy_dir: Path, lei: str, filing_id: str, fy_label: str,
+                               facts: list, labels_dict: dict):
+    """
+    Save a JSON file locally with concepts, their labels, and fact values.
+    File: {fy_dir}/xbrl_facts_labeled.json
+    """
+    try:
+        from src.parser.xbrl import parser as _xp
+        labeled = {}
+        for fact in facts:
+            cs = fact.get("concept_short", "")
+            cf = fact.get("concept_full", "")
+            if not cs:
+                continue
+            fr, en = labels_dict.get(cs, _xp.IFRS_CONCEPT_LABELS.get(cs, (cs, cs)))
+            key = cs
+            if key not in labeled:
+                labeled[key] = {
+                    "concept": cf,
+                    "concept_short": cs,
+                    "fr_label": fr,
+                    "en_label": en,
+                    "facts": [],
+                }
+            labeled[key]["facts"].append({
+                "period": f"{fact.get('period_start', '')}/{fact.get('period_end', '')}" if fact.get("period_start") else fact.get("period_end", ""),
+                "fy_year": fact.get("fy_year", ""),
+                "value": fact.get("value_numeric"),
+                "unit": fact.get("unit", ""),
+                "decimals": fact.get("decimals", ""),
+            })
+
+        output = {
+            "lei": lei,
+            "filing_id": filing_id,
+            "fy_label": fy_label,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "total_concepts": len(labeled),
+            "concepts": labeled,
+        }
+        out_path = fy_dir / "xbrl_facts_labeled.json"
+        out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(out_path)
+    except Exception as e:
+        st.warning(f"Could not save labeled JSON: {e}")
+        return None
+
+
 def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = False):
     """
     Parse a filing using the general XBRL-only approach (no HTML download).
@@ -850,6 +968,11 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
       1. Local file  → {download_dir}/{fy_label}/viewer_data.json
       2. MongoDB GridFS
       3. Download from API (then save locally + to MongoDB)
+
+    Also:
+      - Downloads ixbrlviewer.html to extract official EN/FR labels
+      - Saves raw JSON to MongoDB as a queryable document
+      - Saves xbrl_facts_labeled.json locally
 
     Returns:
         (statements_dict, facts_list)
@@ -864,8 +987,10 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
         _OVH_CFG   = _get_section("OVH")
         ua         = _OVH_CFG.get("user_agent", "XBRL-Research/1.0 research@example.com")
         headers    = {"User-Agent": ua, "Accept": "application/json,*/*"}
-        download_dir = Path(_OVH_CFG.get("download_dir", "ovh_filings"))
-        fy_dir     = download_dir / fy_label
+        download_dir = Path(_OVH_CFG.get("download_dir", "xbrl_filings"))
+        # Isolate cache per company using LEI so different companies never share files
+        lei_slug   = (lei or "unknown").replace("/", "_").replace("\\", "_")
+        fy_dir     = download_dir / lei_slug / fy_label
         local_path = fy_dir / "viewer_data.json"
 
         json_bytes = None
@@ -910,10 +1035,21 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
             if not silent:
                 st.success(f"Saved viewer_data.json to MongoDB GridFS")
 
-        # Parse facts from JSON bytes
+        # Parse raw JSON
         import json as _json
         data = _json.loads(json_bytes.decode("utf-8", errors="replace"))
         facts_raw = data.get("facts", {})
+
+        # Save raw JSON to MongoDB as a queryable document (always, on every parse)
+        save_raw_xbrl_to_mongodb(lei, filing_id, period_end, fy_label, data)
+        if not silent:
+            st.success(f"Saved raw XBRL JSON to MongoDB (dataType: xbrl_raw_json)")
+
+        # Load labels from ixbrlviewer.html
+        fy_dir.mkdir(parents=True, exist_ok=True)
+        labels_dict = _load_viewer_labels(filing, api_base, fy_dir, headers, silent=silent)
+        if labels_dict and not silent:
+            st.success(f"Loaded {len(labels_dict)} concept labels from ixbrlviewer.html")
 
         facts = []
         for _fid, fact in facts_raw.items():
@@ -948,8 +1084,13 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
         if not silent:
             st.success(f"{len(facts)} facts extracted for {fy_label}")
 
+        # Save labeled JSON locally
+        labeled_path = _save_labeled_json_locally(fy_dir, lei, filing_id, fy_label, facts, labels_dict)
+        if labeled_path and not silent:
+            st.success(f"Saved labeled facts JSON: {labeled_path}")
+
         # Build view with all years from this filing (current + comparative)
-        statements = xbrl_parser.build_filing_view(facts)
+        statements = xbrl_parser.build_filing_view(facts, labels_dict=labels_dict or None)
 
         if not statements:
             if not silent:
@@ -2719,17 +2860,43 @@ def main():
                 with tab:
                     df = statements[stmt_type]
                     if df is not None and not df.empty:
+                        # Detect unit from first numeric value column
+                        val_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                        unit_label = "€ millions"
+                        if val_cols:
+                            facts_for_unit = [
+                                f for f in st.session_state.all_facts
+                                if f.get("fy_label") == fy_label and f.get("value_numeric") is not None
+                            ]
+                            if facts_for_unit:
+                                sample_decimals = facts_for_unit[0].get("decimals", "")
+                                unit_label = xbrl_parser.get_value_unit_label(sample_decimals)
+                        st.caption(f"Values in {unit_label}")
                         st.dataframe(df, width="stretch", height=min(600, 40 + 35 * len(df)), hide_index=True)
-                        csv = df.to_csv(index=False).encode("utf-8")
+                        # Per-sheet Excel download
+                        _buf = io.BytesIO()
+                        with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
+                            df.to_excel(_w, sheet_name=stmt_type[:31], index=False)
                         st.download_button(
-                            label=f"Download {stmt_type} as CSV",
-                            data=csv,
-                            file_name=f"{stmt_type.replace(' ', '_')}_{fy_label}.csv",
-                            mime="text/csv",
+                            label=f"Download {stmt_type} as Excel",
+                            data=_buf.getvalue(),
+                            file_name=f"{stmt_type.replace(' ', '_')}_{fy_label}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key=f"dl_single_{stmt_type}",
                         )
                     else:
                         st.info(f"No data available for {stmt_type}")
+
+            # Download all statements in one Excel workbook
+            st.markdown("---")
+            _all_excel = xbrl_parser.generate_excel_bytes(statements)
+            st.download_button(
+                label=f"Download All Statements ({fy_label}) as Excel",
+                data=_all_excel,
+                file_name=f"Financial_Statements_{fy_label}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_single_all_excel",
+            )
 
     # Consolidate all filings - PARSE AND CONSOLIDATE ALL AVAILABLE FILINGS
     if st.session_state.filings and st.session_state.company_type == 'OVH' and st.session_state.show_filings:
@@ -2821,14 +2988,23 @@ def main():
                     df = consolidated_data[stmt_type]
                     if df is not None and not df.empty:
                         fy_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
-                        st.caption(f"{len(df)} concepts · {len(fy_cols)} year(s): {', '.join(fy_cols)}")
+                        # Detect unit label from parsed facts
+                        _unit_label_cons = "€ millions"
+                        _all_facts_flat = [f for fy_facts in st.session_state.get("all_facts_by_fy", {}).values() for f in fy_facts if f.get("value_numeric") is not None]
+                        if not _all_facts_flat and st.session_state.get("all_facts"):
+                            _all_facts_flat = [f for f in st.session_state.all_facts if f.get("value_numeric") is not None]
+                        if _all_facts_flat:
+                            _unit_label_cons = xbrl_parser.get_value_unit_label(_all_facts_flat[0].get("decimals", ""))
+                        st.caption(f"{len(df)} concepts · {len(fy_cols)} year(s): {', '.join(fy_cols)} · Values in {_unit_label_cons}")
                         st.dataframe(df, width="stretch", height=500, hide_index=True)
-                        csv = df.to_csv(index=False).encode("utf-8")
+                        _cons_buf = io.BytesIO()
+                        with pd.ExcelWriter(_cons_buf, engine="openpyxl") as _cw:
+                            df.to_excel(_cw, sheet_name=stmt_type[:31], index=False)
                         st.download_button(
-                            label=f"Download {stmt_type} (All Years) as CSV",
-                            data=csv,
-                            file_name=f"{stmt_type.replace(' ', '_')}_consolidated_{datetime.now().strftime('%Y%m%d')}.csv",
-                            mime="text/csv",
+                            label=f"Download {stmt_type} (All Years) as Excel",
+                            data=_cons_buf.getvalue(),
+                            file_name=f"{stmt_type.replace(' ', '_')}_consolidated_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key=f"dl_cons_{stmt_type}",
                         )
                     else:
