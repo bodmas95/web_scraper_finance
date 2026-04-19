@@ -804,15 +804,15 @@ def _format_value(value: Optional[float], decimals) -> str:
     """
     Format a numeric value for display, scaling by decimals precision.
 
-    decimals <= -5  → display in millions  (e.g. 993,100,000 → 993.1)
-    decimals <= -3  → display in thousands (e.g. 993,100     → 993.1)
+    decimals <= -6  → display in millions  (e.g. 993,100,000,000 → 993.1)
+    decimals <= -3  → display in thousands (e.g. 993,100,000     → 993,100)
     otherwise       → display raw integer
     """
     if value is None:
         return ""
     try:
         dec = int(decimals)
-        if dec <= -5:
+        if dec <= -6:
             return _fmt_number(value / 1_000_000)
         elif dec <= -3:
             return _fmt_number(value / 1_000)
@@ -826,7 +826,7 @@ def get_value_unit_label(decimals) -> str:
     """Return a human-readable unit label for the given XBRL decimals value."""
     try:
         dec = int(decimals)
-        if dec <= -5:
+        if dec <= -6:
             return "€ millions"
         elif dec <= -3:
             return "€ thousands"
