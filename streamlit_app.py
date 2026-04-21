@@ -1008,8 +1008,12 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
             if not silent:
                 st.info(f"Checking MongoDB for {fy_label}...")
             json_bytes = load_xbrl_json_from_mongodb(lei, filing_id)
-            if json_bytes and not silent:
-                st.info(f"Loaded {fy_label} from MongoDB cache")
+            if json_bytes:
+                # Save locally so it's available as a file too
+                fy_dir.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(json_bytes)
+                if not silent:
+                    st.info(f"Loaded {fy_label} from MongoDB cache — saved locally: {local_path}")
 
         # 3. Download from API
         if json_bytes is None:

@@ -1010,11 +1010,12 @@ def build_statements(
 
             fr_label, en_label = _resolve_labels(concept_short, labels_dict)
             value_str = _format_value(fact.get("value_numeric"), fact.get("decimals", ""))
+            concept_full = fact.get("concept_full", concept_short)
 
             rows.append({
                 "French Label":   fr_label,
                 "English Label":  en_label,
-                "Concept":        concept_short,
+                "Concept":        concept_full,
                 "Value":          value_str,
             })
 
@@ -1048,6 +1049,15 @@ def build_consolidated(
         fy_year = fy_label.replace("FY", "") if fy_label.startswith("FY") else fy_label
         per_fy[fy_label] = build_statements(all_facts_by_fy[fy_label], fy_year=fy_year, labels_dict=labels_dict)
 
+    # Build concept_short → concept_full mapping from all available facts
+    concept_full_map: Dict[str, str] = {}
+    for facts in all_facts_by_fy.values():
+        for f in facts:
+            cs = f.get("concept_short", "")
+            cf = f.get("concept_full", "")
+            if cs and cf and cs not in concept_full_map:
+                concept_full_map[cs] = cf
+
     result = {}
 
     for stmt_type in STATEMENT_TYPES:
@@ -1060,16 +1070,17 @@ def build_consolidated(
             if STATEMENT_MAP.get(concept_short) != stmt_type:
                 continue
             fr_label, en_label = _resolve_labels(concept_short, labels_dict)
+            concept_full = concept_full_map.get(concept_short, concept_short)
             row = {
                 "French Label":  fr_label,
                 "English Label": en_label,
-                "Concept":       concept_short,
+                "Concept":       concept_full,
             }
             has_any = False
             for fy_label in fy_labels:
                 df = per_fy.get(fy_label, {}).get(stmt_type)
                 if df is not None and not df.empty:
-                    match = df[df["Concept"] == concept_short]
+                    match = df[df["Concept"] == concept_full]
                     if not match.empty:
                         row[fy_label] = match.iloc[0]["Value"]
                         has_any = True
