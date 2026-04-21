@@ -13,6 +13,7 @@ import streamlit as st
 import pandas as pd
 import io
 import json
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 import sys
@@ -960,7 +961,7 @@ def _save_labeled_json_locally(fy_dir: Path, lei: str, filing_id: str, fy_label:
         return None
 
 
-def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = False):
+def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = False, company_name: str = ""):
     """
     Parse a filing using the general XBRL-only approach (no HTML download).
 
@@ -988,9 +989,10 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
         ua         = _OVH_CFG.get("user_agent", "XBRL-Research/1.0 research@example.com")
         headers    = {"User-Agent": ua, "Accept": "application/json,*/*"}
         download_dir = Path(_OVH_CFG.get("download_dir", "xbrl_filings"))
-        # Isolate cache per company using LEI so different companies never share files
-        lei_slug   = (lei or "unknown").replace("/", "_").replace("\\", "_")
-        fy_dir     = download_dir / lei_slug / fy_label
+        # Use company name as directory (fallback to LEI if name not provided)
+        raw_name   = company_name.strip() if company_name and company_name.strip() else (lei or "unknown")
+        company_slug = re.sub(r'[\\/:*?"<>|]', "_", raw_name).strip()
+        fy_dir     = download_dir / company_slug / fy_label
         local_path = fy_dir / "viewer_data.json"
 
         json_bytes = None
@@ -1099,6 +1101,30 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
 
         if not silent:
             st.success(f"Built {len(statements)} statement(s) for {fy_label}")
+
+        # Save parsed statements as JSON locally
+        try:
+            statements_out = {
+                "lei": lei,
+                "filing_id": filing_id,
+                "fy_label": fy_label,
+                "generated_at": datetime.utcnow().isoformat(),
+                "statements": {
+                    stmt_type: df.to_dict(orient="records")
+                    for stmt_type, df in statements.items()
+                    if df is not None and not df.empty
+                },
+            }
+            stmts_path = fy_dir / "parsed_statements.json"
+            stmts_path.write_text(
+                json.dumps(statements_out, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            if not silent:
+                st.success(f"Saved parsed statements JSON: {stmts_path}")
+        except Exception as _e:
+            if not silent:
+                st.warning(f"Could not save parsed_statements.json: {_e}")
 
         return statements, facts
 
@@ -2810,10 +2836,12 @@ def main():
             if st.button("Parse Filing", type="primary"):
                 if st.session_state.lei and st.session_state.api_base:
                     with st.spinner("Parsing XBRL data..."):
+                        _cname = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else ""
                         statements, xbrl_facts = parse_xbrl_filing(
                             selected_filing,
                             st.session_state.lei,
-                            st.session_state.api_base
+                            st.session_state.api_base,
+                            company_name=_cname,
                         )
 
                     if statements:
@@ -2936,11 +2964,13 @@ def main():
 
                             progress.progress(i / len(unparsed_filings), text=f"Parsing {fy_label}...")
 
+                            _cname_batch = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else ""
                             statements, xbrl_facts = parse_xbrl_filing(
                                 filing,
                                 st.session_state.lei,
                                 st.session_state.api_base,
                                 silent=True,
+                                company_name=_cname_batch,
                             )
 
                             if statements and fy_label not in st.session_state.parsed_labels:
