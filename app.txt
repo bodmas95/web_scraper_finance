@@ -408,10 +408,10 @@ def detect_company_type(company):
     if sec_sym:
         return 'SEC', None, None
 
-    # Check for LEI (OVH)
+    # Check for LEI (any XBRL company via filings.xbrl.org)
     lei = extract_lei_from_company(company)
     if lei:
-        return 'OVH', lei, None
+        return 'XBRL', lei, None
 
     # Check for HKEX ticker
     hkex_ticker = extract_hkex_ticker_from_company(company)
@@ -2512,7 +2512,8 @@ def main():
         st.markdown("### Company Information")
         st.write(f"**Name:** {company.get('name', 'N/A')}")
         st.write(f"**Company ID:** {company.get('_id', 'N/A')}")
-        st.write(f"**Data Source:** {company_type if company_type else 'N/A'}")
+        _ds_label = {"XBRL": "XBRL (filings.xbrl.org)", "SEC": "SEC EDGAR", "HKEX": "HKEX"}.get(company_type, company_type or "N/A")
+        st.write(f"**Data Source:** {_ds_label}")
 
         # Display LEI if available
         if lei:
@@ -2605,9 +2606,9 @@ def main():
     st.markdown("---")
 
     # ==============================================================================
-    # OVH SECTION
+    # XBRL SECTION (any company with an LEI — OVH, Engie, Total, etc.)
     # ==============================================================================
-    if company_type == 'OVH':
+    if company_type == 'XBRL':
         company_display_name = company.get('name', 'XBRL')
         st.header(f"{company_display_name} Data Source")
 
@@ -2801,7 +2802,7 @@ def main():
         st.warning("Could not detect company data source. Please ensure the company has LEI (OVH), HKEX ticker, or SEC ticker (exchange='SEC').")
 
     # Display OVH filings if available
-    if st.session_state.filings and st.session_state.company_type == 'OVH' and st.session_state.show_filings:
+    if st.session_state.filings and st.session_state.company_type == 'XBRL' and st.session_state.show_filings:
         st.markdown("---")
         st.header("Available Filings")
 
@@ -2931,7 +2932,7 @@ def main():
             )
 
     # Consolidate all filings - PARSE AND CONSOLIDATE ALL AVAILABLE FILINGS
-    if st.session_state.filings and st.session_state.company_type == 'OVH' and st.session_state.show_filings:
+    if st.session_state.filings and st.session_state.company_type == 'XBRL' and st.session_state.show_filings:
         st.markdown("---")
         st.header("Consolidate All Filings")
 
@@ -3006,7 +3007,7 @@ def main():
                     st.rerun()
 
     # Display consolidated summary — OVH only, and only when data is available
-    if (st.session_state.get("company_type") == "OVH"
+    if (st.session_state.get("company_type") == "XBRL"
             and st.session_state.get("consolidated_data")):
 
         st.markdown("---")
