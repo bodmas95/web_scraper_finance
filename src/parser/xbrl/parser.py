@@ -42,11 +42,19 @@ from src import http_client
 
 def extract_labels_from_ixbrl_viewer(html_content: str) -> Dict[str, Tuple[str, str]]:
     """
-    Parse the ixbrlviewer.html script tag and return {concept_short: (fr_label, en_label)}.
+    Parse the ixbrlviewer.html script tag and return
+    {concept_short: (local_label, en_label)}.
 
     The viewer embeds a large JSON in a <script> tag with structure:
-      sourceReports[0].targetReports[0].concepts[concept_full].labels.{std|ns0|ns1}.{en, fr}
+      sourceReports[0].targetReports[0].concepts[concept_full].labels.{std|ns0|ns1}.{en, fr, it, de, ...}
+
+    local_label: the best non-English label available (any language), falling back to English.
+    en_label:    the English label, falling back to local_label.
     """
+    # Language preference order for the "local" (non-English) label.
+    # English is always tried separately as the en_label.
+    _LOCAL_LANGS = ('fr', 'it', 'de', 'es', 'nl', 'pt', 'ja', 'zh')
+
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
     for script in scripts:
         stripped = script.strip()
@@ -64,13 +72,21 @@ def extract_labels_from_ixbrl_viewer(html_content: str) -> Dict[str, Tuple[str, 
         for concept_full, cdata in concepts.items():
             labels = cdata.get('labels', {})
             for role in ('ns0', 'ns1', 'std'):
-                if role in labels and isinstance(labels[role], dict):
-                    en = (labels[role].get('en') or '').strip()
-                    fr = (labels[role].get('fr') or '').strip()
-                    if en or fr:
-                        concept_short = concept_full.split(':')[-1]
-                        result[concept_short] = (fr or en, en or fr)
+                if role not in labels or not isinstance(labels[role], dict):
+                    continue
+                role_labels = labels[role]
+                en = (role_labels.get('en') or '').strip()
+                # Pick best local-language label (first match in preference list)
+                local = ''
+                for lang in _LOCAL_LANGS:
+                    candidate = (role_labels.get(lang) or '').strip()
+                    if candidate:
+                        local = candidate
                         break
+                if en or local:
+                    concept_short = concept_full.split(':')[-1]
+                    result[concept_short] = (local or en, en or local)
+                    break
         return result
     return {}
 
@@ -936,7 +952,7 @@ def _select_best_fact(facts_for_concept: List[dict]) -> Optional[dict]:
 
 
 def _resolve_labels(concept_short: str, labels_dict: Optional[Dict[str, Tuple[str, str]]] = None) -> Tuple[str, str]:
-    """Return (fr_label, en_label) for a concept, preferring labels_dict over IFRS_CONCEPT_LABELS."""
+    """Return (local_label, en_label) for a concept, preferring labels_dict over IFRS_CONCEPT_LABELS."""
     if labels_dict and concept_short in labels_dict:
         return labels_dict[concept_short]
     return IFRS_CONCEPT_LABELS.get(concept_short, (concept_short, concept_short))
@@ -951,7 +967,7 @@ def build_statements(
     Build financial statement DataFrames from a list of facts (single filing).
 
     If fy_year is provided, only facts for that year are included.
-    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    labels_dict: optional {concept_short: (local_label, en_label)} from ixbrlviewer.html.
                  Takes precedence over IFRS_CONCEPT_LABELS when provided.
     Returns dict: {statement_type: DataFrame}
     Columns: French Label | English Label | Concept | Value
@@ -1008,12 +1024,12 @@ def build_statements(
             if fact is None:
                 continue
 
-            fr_label, en_label = _resolve_labels(concept_short, labels_dict)
+            local_label, en_label = _resolve_labels(concept_short, labels_dict)
             value_str = _format_value(fact.get("value_numeric"), fact.get("decimals", ""))
             concept_full = fact.get("concept_full", concept_short)
 
             rows.append({
-                "French Label":   fr_label,
+                "Local Label":   local_label,
                 "English Label":  en_label,
                 "Concept":        concept_full,
                 "Value":          value_str,
@@ -1033,7 +1049,7 @@ def build_consolidated(
     Build consolidated financial statement DataFrames with all years as columns.
 
     all_facts_by_fy: {fy_label: [facts_list]}  e.g. {'FY2024': [...], 'FY2023': [...]}
-    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    labels_dict: optional {concept_short: (local_label, en_label)} from ixbrlviewer.html.
 
     Returns dict: {statement_type: DataFrame}
     Columns: French Label | English Label | Concept | FY2024 | FY2023 | ...
@@ -1069,10 +1085,10 @@ def build_consolidated(
         for concept_short in order:
             if STATEMENT_MAP.get(concept_short) != stmt_type:
                 continue
-            fr_label, en_label = _resolve_labels(concept_short, labels_dict)
+            local_label, en_label = _resolve_labels(concept_short, labels_dict)
             concept_full = concept_full_map.get(concept_short, concept_short)
             row = {
-                "French Label":  fr_label,
+                "Local Label":  local_label,
                 "English Label": en_label,
                 "Concept":       concept_full,
             }
@@ -1093,7 +1109,7 @@ def build_consolidated(
                 concept_data[concept_short] = row
 
         if concept_data:
-            columns = ["French Label", "English Label", "Concept"] + fy_labels
+            columns = ["Local Label", "English Label", "Concept"] + fy_labels
             df = pd.DataFrame(list(concept_data.values()), columns=columns)
             result[stmt_type] = df
 
@@ -1112,7 +1128,7 @@ def build_filing_view(
     prevents spurious extra years (e.g. equity-statement opening balances) from
     appearing as extra columns.
 
-    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    labels_dict: optional {concept_short: (local_label, en_label)} from ixbrlviewer.html.
 
     Returns dict: {statement_type: DataFrame}
     Columns: French Label | English Label | Concept | FY2025 | FY2024
@@ -1204,7 +1220,7 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
     ws1 = wb.add_worksheet("All Facts")
     hdr = [
         "FY Label", "Concept (full)", "Namespace", "Concept (short)",
-        "French Label", "English Label",
+        "Local Label", "English Label",
         "Period Type", "Period Start", "Period End", "FY Year",
         "Value (raw)", "Value (thousands)", "Unit", "Decimals",
     ]
@@ -1273,7 +1289,7 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
             except Exception:
                 pass
 
-    p_hdr = ["Concept (full)", "Concept (short)", "French Label", "English Label",
+    p_hdr = ["Concept (full)", "Concept (short)", "Local Label", "English Label",
              "Period Type"] + [str(y) for y in all_years]
     p_w   = [70, 50, 50, 50, 10] + [16] * len(all_years)
     ws2.set_row(0, 20)

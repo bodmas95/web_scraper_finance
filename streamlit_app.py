@@ -878,7 +878,7 @@ def save_raw_xbrl_to_mongodb(lei: str, filing_id: str, period_end: str, fy_label
 def _load_viewer_labels(filing: dict, api_base: str, fy_dir: Path, headers: dict, silent: bool = False):
     """
     Load ixbrlviewer.html (cache locally) and extract concept labels.
-    Returns {concept_short: (fr_label, en_label)} or empty dict on failure.
+    Returns {concept_short: (local_label, en_label)} or empty dict on failure.
     """
     viewer_url = filing.get("viewer_url", "")
     if not viewer_url:
@@ -909,6 +909,28 @@ def _load_viewer_labels(filing: dict, api_base: str, fy_dir: Path, headers: dict
                 st.warning(f"Could not fetch ixbrlviewer.html: {e}")
             return {}
 
+    # Save the raw JSON extracted from the <script> tag as-is (no transformation)
+    try:
+        import re as _re, json as _json2
+        scripts = _re.findall(r'<script[^>]*>(.*?)</script>', viewer_content, _re.DOTALL | _re.IGNORECASE)
+        for _s in scripts:
+            _stripped = _s.strip()
+            if _stripped.startswith('{'):
+                try:
+                    _raw_viewer_json = _json2.loads(_stripped)
+                    _out = fy_dir / "ixbrl_viewer_data.json"
+                    _out.write_text(
+                        _json2.dumps(_raw_viewer_json, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    if not silent:
+                        st.success(f"Saved raw ixbrl viewer JSON: {_out}")
+                    break
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     labels = xbrl_parser.extract_labels_from_ixbrl_viewer(viewer_content)
     return labels
 
@@ -933,7 +955,7 @@ def _save_labeled_json_locally(fy_dir: Path, lei: str, filing_id: str, fy_label:
                 labeled[key] = {
                     "concept": cf,
                     "concept_short": cs,
-                    "fr_label": fr,
+                    "local_label": fr,
                     "en_label": en,
                     "facts": [],
                 }
@@ -990,35 +1012,44 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
         headers    = {"User-Agent": ua, "Accept": "application/json,*/*"}
         download_dir = Path(_OVH_CFG.get("download_dir", "xbrl_filings"))
         # Use company name as directory (fallback to LEI if name not provided)
-        raw_name   = company_name.strip() if company_name and company_name.strip() else (lei or "unknown")
+        raw_name     = company_name.strip() if company_name and company_name.strip() else (lei or "unknown")
         company_slug = re.sub(r'[\\/:*?"<>|]', "_", raw_name).strip()
-        fy_dir     = download_dir / company_slug / fy_label
-        local_path = fy_dir / "viewer_data.json"
+        fy_dir       = download_dir / company_slug / fy_label
+        local_path   = fy_dir / "viewer_data.json"
+        meta_path    = fy_dir / "cache_meta.json"
+
+        def _cache_is_valid() -> bool:
+            """Return True only if local cache exists AND belongs to this exact filing."""
+            if not local_path.exists():
+                return False
+            if not meta_path.exists():
+                return False          # old cache written without metadata → treat as miss
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                return meta.get("filing_id") == filing_id and meta.get("lei") == lei
+            except Exception:
+                return False
+
+        def _write_cache(data_bytes: bytes):
+            fy_dir.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(data_bytes)
+            meta_path.write_text(
+                json.dumps({"lei": lei, "filing_id": filing_id, "period_end": period_end}, indent=2),
+                encoding="utf-8",
+            )
 
         json_bytes = None
 
-        # 1. Check local cache
-        if local_path.exists():
+        # 1. Check validated local cache (must have matching cache_meta.json)
+        if _cache_is_valid():
             if not silent:
-                st.info(f"Loading {fy_label} from local cache...")
+                st.info(f"Loading {fy_label} for {company_slug} from local cache...")
             json_bytes = local_path.read_bytes()
 
-        # 2. Check MongoDB GridFS
-        if json_bytes is None and filing_id:
-            if not silent:
-                st.info(f"Checking MongoDB for {fy_label}...")
-            json_bytes = load_xbrl_json_from_mongodb(lei, filing_id)
-            if json_bytes:
-                # Save locally so it's available as a file too
-                fy_dir.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(json_bytes)
-                if not silent:
-                    st.info(f"Loaded {fy_label} from MongoDB cache — saved locally: {local_path}")
-
-        # 3. Download from API
+        # 2. Download from API — skip MongoDB as read-cache to avoid stale cross-company data
         if json_bytes is None:
             if not silent:
-                st.info(f"Downloading XBRL data for {fy_label} from API...")
+                st.info(f"Downloading XBRL data for {fy_label} ({company_slug}) from API...")
             from src import http_client as _hc
             json_url = filing.get("json_url", "")
             if not json_url:
@@ -1030,21 +1061,42 @@ def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = Fals
             resp.raise_for_status()
             json_bytes = resp.content
 
-            # Save locally
-            fy_dir.mkdir(parents=True, exist_ok=True)
-            local_path.write_bytes(json_bytes)
+            _write_cache(json_bytes)
             if not silent:
-                st.success(f"Saved viewer_data.json locally: {local_path}")
+                st.success(f"Downloaded and cached: {fy_dir}")
 
-            # Save to MongoDB GridFS
             save_xbrl_json_to_mongodb(lei, filing_id, period_end, json_bytes)
             if not silent:
                 st.success(f"Saved viewer_data.json to MongoDB GridFS")
 
-        # Parse raw JSON
+        # Parse raw JSON — keep completely unmodified
         import json as _json
         data = _json.loads(json_bytes.decode("utf-8", errors="replace"))
         facts_raw = data.get("facts", {})
+
+        # Save raw facts exactly as they come from the API (no mapping, no filtering)
+        try:
+            _raw_facts_path = fy_dir / "xbrl_facts_raw.json"
+            _raw_facts_path.write_text(
+                _json.dumps(
+                    {
+                        "source": "viewer_data.json",
+                        "lei": lei,
+                        "filing_id": filing_id,
+                        "period_end": period_end,
+                        "fy_label": fy_label,
+                        "facts": facts_raw,   # verbatim from API
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            if not silent:
+                st.success(f"Saved raw XBRL facts (unmodified): {_raw_facts_path}")
+        except Exception as _e:
+            if not silent:
+                st.warning(f"Could not save xbrl_facts_raw.json: {_e}")
 
         # Save raw JSON to MongoDB as a queryable document (always, on every parse)
         save_raw_xbrl_to_mongodb(lei, filing_id, period_end, fy_label, data)
@@ -2453,9 +2505,11 @@ def main():
                             st.session_state.company_sources = get_company_sources(company.get('_id'))
                             st.session_state.is_company_validated = True
 
-                            # Reset other states
+                            # Reset all company-specific state — must happen before rerun
+                            st.session_state.lei = None
                             st.session_state.filings = []
                             st.session_state.show_filings = False
+                            st.session_state.api_base = None
                             st.session_state.hkex_reports = []
                             st.session_state.hkex_reports_loaded = False
                             st.session_state.consolidated_data = None
@@ -2851,24 +2905,27 @@ def main():
 
                     if statements:
                         pe = selected_filing.get('period_end', '')
+                        filing_id_parsed = selected_filing.get('_id', '')
                         fy_label = f"FY{pe[:4]}" if pe else "UNKNOWN"
+                        # Key by filing_id so the same year from different companies never collides
+                        cache_key = filing_id_parsed or fy_label
 
-                        if fy_label not in st.session_state.parsed_labels:
-                            # Store DataFrames keyed by FY label
-                            st.session_state.financial_data[fy_label] = statements
+                        # Store keyed by filing_id (primary, unique) + fy_label (display alias)
+                        # Wrap with lei so the display section can verify ownership
+                        entry = {"statements": statements, "lei": st.session_state.lei, "filing_id": filing_id_parsed}
+                        st.session_state.financial_data[filing_id_parsed or fy_label] = entry
+                        st.session_state.financial_data[fy_label] = entry
 
-                            # Store raw facts (tagged with fy_label)
-                            if xbrl_facts:
-                                tagged = [{**f, "fy_label": fy_label} for f in xbrl_facts]
-                                st.session_state.all_facts = [
-                                    f for f in st.session_state.all_facts
-                                    if f.get("fy_label") != fy_label
-                                ]
-                                st.session_state.all_facts.extend(tagged)
+                        if xbrl_facts:
+                            tagged = [{**f, "fy_label": fy_label} for f in xbrl_facts]
+                            st.session_state.all_facts = [
+                                f for f in st.session_state.all_facts
+                                if f.get("fy_label") != fy_label
+                            ]
+                            st.session_state.all_facts.extend(tagged)
 
-                            st.session_state.parsed_labels.add(fy_label)
-                            st.session_state.filing_metadata[fy_label] = f"{fy_label} (from {pe} filing)"
-
+                        st.session_state.parsed_labels.add(fy_label)
+                        st.session_state.filing_metadata[fy_label] = f"{fy_label} (from {pe} filing)"
                         st.session_state.show_individual_filing = True
                         st.success(f"Parsed {fy_label}: {', '.join(statements.keys())}")
                         st.rerun()
@@ -2880,12 +2937,20 @@ def main():
         # Display financial data ONLY if user clicked "Parse Filing" button
         period_end = selected_filing.get('period_end', '')
         fy_label = f"FY{period_end[:4]}" if period_end else "UNKNOWN"
+        _sel_filing_id = selected_filing.get('_id', '')
+        _cur_lei = st.session_state.lei
 
-        if st.session_state.show_individual_filing and fy_label in st.session_state.financial_data:
+        _entry = st.session_state.financial_data.get(_sel_filing_id or fy_label) or \
+                 st.session_state.financial_data.get(fy_label)
+        # Ownership check: only show data that was parsed for the current company
+        if _entry and isinstance(_entry, dict) and _entry.get("lei") != _cur_lei:
+            _entry = None  # belongs to a different company — ignore
+
+        if st.session_state.show_individual_filing and _entry:
             st.markdown("---")
             st.header("Financial Statements")
 
-            statements = st.session_state.financial_data[fy_label]
+            statements = _entry["statements"]
             tab_names = list(statements.keys())
             tabs = st.tabs(tab_names)
 
@@ -2894,7 +2959,7 @@ def main():
                     df = statements[stmt_type]
                     if df is not None and not df.empty:
                         # Detect unit from first numeric value column
-                        val_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                        val_cols = [c for c in df.columns if c not in ("Local Label", "English Label", "Concept")]
                         unit_label = "€ millions"
                         if val_cols:
                             facts_for_unit = [
@@ -2978,8 +3043,11 @@ def main():
                                 company_name=_cname_batch,
                             )
 
-                            if statements and fy_label not in st.session_state.parsed_labels:
-                                st.session_state.financial_data[fy_label] = statements
+                            if statements:
+                                _batch_fid = filing.get('_id', '')
+                                _batch_entry = {"statements": statements, "lei": st.session_state.lei, "filing_id": _batch_fid}
+                                st.session_state.financial_data[_batch_fid or fy_label] = _batch_entry
+                                st.session_state.financial_data[fy_label] = _batch_entry
                                 if xbrl_facts:
                                     tagged = [{**f, "fy_label": fy_label} for f in xbrl_facts]
                                     st.session_state.all_facts = [
@@ -3022,7 +3090,7 @@ def main():
                 with tab:
                     df = consolidated_data[stmt_type]
                     if df is not None and not df.empty:
-                        fy_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                        fy_cols = [c for c in df.columns if c not in ("Local Label", "English Label", "Concept")]
                         # Detect unit label from parsed facts
                         _unit_label_cons = "€ millions"
                         _all_facts_flat = [f for fy_facts in st.session_state.get("all_facts_by_fy", {}).values() for f in fy_facts if f.get("value_numeric") is not None]

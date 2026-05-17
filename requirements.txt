@@ -10,3 +10,9 @@ pdfplumber
 py-xbrl
 xlsxwriter
 edgartools==5.28.4
+
+# PDF Extraction dependencies
+PyMuPDF>=1.23.0
+openai>=1.0.0
+pdfplumber
+Pillow>=10.0.0
