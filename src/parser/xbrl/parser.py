@@ -29,6 +29,7 @@ generate_excel_bytes(statements_dict)
 import io
 import json
 import re
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -42,19 +43,11 @@ from src import http_client
 
 def extract_labels_from_ixbrl_viewer(html_content: str) -> Dict[str, Tuple[str, str]]:
     """
-    Parse the ixbrlviewer.html script tag and return
-    {concept_short: (local_label, en_label)}.
+    Parse the ixbrlviewer.html script tag and return {concept_short: (fr_label, en_label)}.
 
     The viewer embeds a large JSON in a <script> tag with structure:
-      sourceReports[0].targetReports[0].concepts[concept_full].labels.{std|ns0|ns1}.{en, fr, it, de, ...}
-
-    local_label: the best non-English label available (any language), falling back to English.
-    en_label:    the English label, falling back to local_label.
+      sourceReports[0].targetReports[0].concepts[concept_full].labels.{std|ns0|ns1}.{en, fr}
     """
-    # Language preference order for the "local" (non-English) label.
-    # English is always tried separately as the en_label.
-    _LOCAL_LANGS = ('fr', 'it', 'de', 'es', 'nl', 'pt', 'ja', 'zh')
-
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
     for script in scripts:
         stripped = script.strip()
@@ -72,21 +65,13 @@ def extract_labels_from_ixbrl_viewer(html_content: str) -> Dict[str, Tuple[str, 
         for concept_full, cdata in concepts.items():
             labels = cdata.get('labels', {})
             for role in ('ns0', 'ns1', 'std'):
-                if role not in labels or not isinstance(labels[role], dict):
-                    continue
-                role_labels = labels[role]
-                en = (role_labels.get('en') or '').strip()
-                # Pick best local-language label (first match in preference list)
-                local = ''
-                for lang in _LOCAL_LANGS:
-                    candidate = (role_labels.get(lang) or '').strip()
-                    if candidate:
-                        local = candidate
+                if role in labels and isinstance(labels[role], dict):
+                    en = (labels[role].get('en') or '').strip()
+                    fr = (labels[role].get('fr') or '').strip()
+                    if en or fr:
+                        concept_short = concept_full.split(':')[-1]
+                        result[concept_short] = (fr or en, en or fr)
                         break
-                if en or local:
-                    concept_short = concept_full.split(':')[-1]
-                    result[concept_short] = (local or en, en or local)
-                    break
         return result
     return {}
 
@@ -461,7 +446,11 @@ STATEMENT_MAP: Dict[str, str] = {
     # ── Income Statement ─────────────────────────────────────────────────────
     "Revenue":                              "Income Statement",
     "RevenueFromContractsWithCustomers":    "Income Statement",
+    # VINCI-specific revenue concepts
+    "Revenuefromcontractswithcustomersotherthanrevenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies": "Income Statement",
+    "Revenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies": "Income Statement",
     "OtherIncome":                          "Income Statement",
+    "OtherRevenue":                         "Income Statement",
     "OtherOperatingIncome":                 "Income Statement",
     "MiscellaneousOtherOperatingIncome":    "Income Statement",
     "MiscellaneousOtherOperatingExpense":   "Income Statement",
@@ -485,8 +474,20 @@ STATEMENT_MAP: Dict[str, str] = {
     "OperatingExpensesOtherThanPersonnelExpenses": "Income Statement",
     "CurrentEbitda":                        "Income Statement",
     "CurrentOperatingIncome":               "Income Statement",
+    # VINCI-specific operating income concepts
+    "Profitlossfromordinaryoperatingactivities": "Income Statement",
+    "Otheroperatingincomeexpenserecurring": "Income Statement",
+    "Profitlossfromoperatingactivitiesrecurring": "Income Statement",
+    "Otheroperatingincomeexpensenonrecurring": "Income Statement",
     "ProfitLossFromOperatingActivities":    "Income Statement",
+    "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": "Income Statement",
     "FinanceCosts":                         "Income Statement",
+    "ExpenseFromSharebasedPaymentTransactionsWithEmployees": "Income Statement",
+    # VINCI-specific finance costs
+    "Grossfinancecosts":                    "Income Statement",
+    "InterestIncomeOnCashAndCashEquivalents": "Income Statement",
+    "Netfinancecosts":                      "Income Statement",
+    "OtherFinanceIncomeCost": "Income Statement",
     "FinanceIncome":                        "Income Statement",
     "FinanceIncomeExpense":                 "Income Statement",
     "FinanceCostsRecognisedInProfitOrLoss": "Income Statement",
@@ -504,6 +505,9 @@ STATEMENT_MAP: Dict[str, str] = {
     "ProfitLossBeforeTax":                  "Income Statement",
     "IncomeTaxExpenseContinuingOperations": "Income Statement",
     "ProfitLoss":                           "Income Statement",
+    "Othercomprehensiveincomebeforetaxcashflowhedgesandothercomprehensiveincomebeforetaxhedgesofnetinvestmentsinforeignoperations": "Income Statement",
+    "Othercomprehensiveincomebeforetaxcostofhedging":"Income Statement",
+    "Incometaxrelatedtochangesinthefairvalueofcashflowshedginginstrumentsandhedgingcosts":"Income Statement",
     "ProfitLossAttributableToOwnersOfParent": "Income Statement",
     "ProfitLossAttributableToNoncontrollingInterests": "Income Statement",
     "BasicEarningsLossPerShare":            "Income Statement",
@@ -512,6 +516,9 @@ STATEMENT_MAP: Dict[str, str] = {
     "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax": "Income Statement",
     "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax": "Income Statement",
     "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation": "Income Statement",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesFromInvestmentsInEquityInstruments": "Income Statement",
+    "IncomeTaxRelatingToRemeasurementsOfDefinedBenefitPlansOfOtherComprehensiveIncome":"Income Statement",
+    "ShareOfOtherComprehensiveIncomeOfAssociatesAndJointVenturesAccountedForUsingEquityMethodThatWillBeReclassifiedToProfitOrLossNetOfTax": "Income Statement",
     "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans": "Income Statement",
     "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss": "Income Statement",
     "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss": "Income Statement",
@@ -520,8 +527,13 @@ STATEMENT_MAP: Dict[str, str] = {
     "Assets":                               "Assets",
     "NoncurrentAssets":                     "Assets",
     "CurrentAssets":                        "Assets",
-    "Goodwill":                             "Assets",
+        "Goodwill":                             "Assets",
+        "OtherIntangibleAssets": "Assets",
     "IntangibleAssetsOtherThanGoodwill":    "Assets",
+    "PropertyPlantAndEquipmentIncludingRightofuseAssets": "Assets",
+    # VINCI-specific assets
+    "Serviceconcessionrights":              "Assets",
+    "Currentcashmanagementfinancialassets": "Assets",
     "PropertyPlantAndEquipment":            "Assets",
     "RightOfUseAssets":                     "Assets",
     "RightofuseAssets":                     "Assets",
@@ -530,6 +542,7 @@ STATEMENT_MAP: Dict[str, str] = {
     "DeferredTaxAssets":                    "Assets",
     "NoncurrentFinancialAssets":            "Assets",
     "OtherNoncurrentFinancialAssets":       "Assets",
+    "InvestmentAccountedForUsingEquityMethod":"Assets",
     "NoncurrentDerivativeFinancialAssets":  "Assets",
     "OtherNoncurrentAssets":                "Assets",
     "OtherNoncurrentReceivables":           "Assets",
@@ -540,19 +553,26 @@ STATEMENT_MAP: Dict[str, str] = {
     "CurrentTaxAssets":                     "Assets",
     "CurrentTaxAssetsCurrent":              "Assets",
     "CurrentFinancialAssets":               "Assets",
+    "OtherCurrentFinancialAssets":  "Assets",
     "CurrentDerivativeFinancialAssets":     "Assets",
     "OtherCurrentAssets":                   "Assets",
     "OtherReceivablesAndCurrentAssets":     "Assets",
     "CashAndCashEquivalents":               "Assets",
+    "CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners":  "Assets",
+    "NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale":  "Assets",
     # ── Liabilities & Equity ─────────────────────────────────────────────────
     "EquityAndLiabilities":                 "Liabilities",
     "Equity":                               "Liabilities",
+    "AccumulatedOtherComprehensiveIncome": "Liabilities",
     "EquityAttributableToOwnersOfParent":   "Liabilities",
     "NoncontrollingInterests":              "Liabilities",
     "IssuedCapital":                        "Liabilities",
     "SharePremium":                         "Liabilities",
     "RetainedEarnings":                     "Liabilities",
     "ReservesAndRetainedEarnings":          "Liabilities",
+    # VINCI-specific equity
+    "Otherreservesandretainedearningsexcludingprofitlossforreportingperiod": "Liabilities",
+    "ReserveOfExchangeDifferencesOnTranslation":"Liabilities",
     "RetainedEarningsProfitLossForReportingPeriod": "Liabilities",
     "OtherReserves":                        "Liabilities",
     "ReserveOfSharebasedPayments":          "Liabilities",
@@ -562,6 +582,10 @@ STATEMENT_MAP: Dict[str, str] = {
     "CurrentLiabilities":                   "Liabilities",
     "NoncurrentBorrowings":                 "Liabilities",
     "LongtermBorrowings":                   "Liabilities",
+    "OtherLongtermProvisions":              "Liabilities",
+    "NoncurrentProvisionsForEmployeeBenefits": "Liabilities",
+    "NoncurrentPortionOfNoncurrentBondsIssued": "Liabilities",
+    "NoncurrentPortionOfOtherNoncurrentBorrowings":"Liabilities",
     "NoncurrentLeaseLiabilities":           "Liabilities",
     "DeferredTaxLiabilities":               "Liabilities",
     "NoncurrentProvisions":                 "Liabilities",
@@ -572,32 +596,48 @@ STATEMENT_MAP: Dict[str, str] = {
     "CurrentBorrowings":                    "Liabilities",
     "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "Liabilities",
     "CurrentLeaseLiabilities":              "Liabilities",
+    "CurrentDerivativeFinancialLiabilities": "Liabilities",
+    "ShorttermBorrowings": "Liabilities",
     "CurrentProvisions":                    "Liabilities",
     "TradeAndOtherCurrentPayables":         "Liabilities",
     "TradeAndOtherCurrentPayablesToTradeSuppliers": "Liabilities",
     "TradePayables":                        "Liabilities",
     "CurrentTaxLiabilities":               "Liabilities",
     "CurrentTaxLiabilitiesCurrent":         "Liabilities",
-    "CurrentDerivativeFinancialLiabilities": "Liabilities",
+    "CurrentLiabilitiesOtherThanLiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale": "Liabilities",
+    "LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale":"Liabilities",
+    "TradeAndOtherPayablesToTradeSuppliers":"Liabilities",
     "OtherCurrentLiabilities":              "Liabilities",
+    "CurrentLeaseLiabilities":"Liabilities",
     # ── Cash Flow ────────────────────────────────────────────────────────────
+    "ProfitLoss": "Cash Flow",
     "CashFlowsFromUsedInOperatingActivities":   "Cash Flow",
     "CashFlowsFromUsedInOperations":            "Cash Flow",
     "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital": "Cash Flow",
     "CashFlowsFromUsedInInvestingActivities":   "Cash Flow",
     "CashFlowsFromUsedInFinancingActivities":   "Cash Flow",
+    "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie":"Cash Flow",
     "ProfitLossAdjustedForNoncashItems":        "Cash Flow",
-    "AdjustmentsForDepreciationAndAmortisationExpense": "Cash Flow",
+        "AdjustmentsForDepreciationAndAmortisationExpense": "Cash Flow",
     "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Cash Flow",
     "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Cash Flow",
     "AdjustmentsForProvisions":             "Cash Flow",
+    # VINCI-specific cash flow adjustments
+    "Adjustmentsforprovisionsandadjustmentsforimpairmentlossreversalofimpairmentlossrecognisedinprofitorloss": "Cash Flow",
+    "Adjustmentsfornetfinancecosts":        "Cash Flow",
+    "FinanceCostsPaidClassifiedAsOperatingActivities": "Cash Flow",
+    "Adjustmentsforinterestexpenseonleaseliabilities": "Cash Flow",
     "AdjustmentsForIncomeTaxExpense":       "Cash Flow",
+    "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital":"Cash Flow",
     "AdjustmentsForFinanceCosts":           "Cash Flow",
     "AdjustmentsForSharebasedPayments":     "Cash Flow",
     "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets": "Cash Flow",
     "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets": "Cash Flow",
+    "AdjustmentsForFairValueGainsLosses": "Cash Flow",
+    "AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod":"Cash Flow",
     "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences": "Cash Flow",
     "IncreaseDecreaseInWorkingCapital":     "Cash Flow",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities": "Cash Flow",
     "IncreaseDecreaseInTradeAndOtherPayables": "Cash Flow",
     "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables": "Cash Flow",
     "IncreaseDecreaseInTradeAndOtherReceivables": "Cash Flow",
@@ -605,13 +645,29 @@ STATEMENT_MAP: Dict[str, str] = {
     "IncreaseDecreaseInInventories":        "Cash Flow",
     "IncomeTaxesPaid":                      "Cash Flow",
     "IncomeTaxesPaidRefundClassifiedAsOperatingActivities": "Cash Flow",
-    "InterestPaid":                         "Cash Flow",
+        "InterestPaid":                         "Cash Flow",
     "InterestPaidClassifiedAsFinancingActivities": "Cash Flow",
     "InterestPaidClassifiedAsOperatingActivities": "Cash Flow",
-    "PurchaseOfPropertyPlantAndEquipment":  "Cash Flow",
+    # VINCI-specific interest and dividends
+    "Interestpaidandinterestreceivedclassifiedasoperatingactivities": "Cash Flow",
+    "Dividendsreceivedfrominvestmentsaccountedforusingequitymethodclassifiedasoperatingactivities": "Cash Flow",
+    "OtherInflowsOutflowsOfCashClassifiedAsOperatingActivities":"Cash Flow",
+        "PurchaseOfPropertyPlantAndEquipment":  "Cash Flow",
     "PurchaseOfIntangibleAssets":           "Cash Flow",
     "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets": "Cash Flow",
     "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets": "Cash Flow",
+    # VINCI-specific investing activities
+    "Purchaseofpropertyplantandequipmentandpurchaseofintangibleassetsclassifiedasinvestingactivities": "Cash Flow",
+    "Proceedsfromsalesofpropertyplantandequipmentandproceedsfromsalesofintangibleassetsclassifiedasinvestingactivities": "Cash Flow",
+    "Increasedecreaseinpropertyplantandequipmentandintangibleassetsclassifiedasinvestingactivities": "Cash Flow",
+    "Purchaseofconcessionfixedassetsnetofgrantsreceivedclassifiedasinvestingactivities": "Cash Flow",
+    "Increasedecreaseinfinancialreceivablespppcontractsandothersclassifiedasinvestingactivities": "Cash Flow",
+    "Growthinvestmentsinconcessionsandpppsclassifiedasinvestingactivities": "Cash Flow",
+    "Cashflowsusedinobtainingcontrolofsubsidiariesorotherbusinessespurchaseofinterestsininvestmentsaccountedforusingequitymethodandpurchaseofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities": "Cash Flow",
+    "Cashflowsfromlosingcontrolofsubsidiariesorotherbusinessesproceedsfromsalesofinvestmentsaccountedforusingequitymethodandproceedsfromsalesofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities": "Cash Flow",
+    "CashAndCashEquivalentsInSubsidiaryOrBusinessesAcquiredOrDisposed2013":
+"Cash Flow",    "Increasedecreaseininvestmentsclassifiedasinvestingactivities": "Cash Flow",
+"OtherInflowsOutflowsOfCashClassifiedAsInvestingActivities":"Cash Flow",
     "ProceedsFromDisposalOfPropertyPlantAndEquipment": "Cash Flow",
     "ProceedsFromDisposalOfNoncurrentAssets": "Cash Flow",
     "ProceedsFromDisposalOfAssets":         "Cash Flow",
@@ -623,11 +679,25 @@ STATEMENT_MAP: Dict[str, str] = {
     "RepaymentsOfBorrowingsClassifiedAsFinancingActivities": "Cash Flow",
     "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "Cash Flow",
     "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "Cash Flow",
-    "PaymentsForRepurchaseOfShares":        "Cash Flow",
+    "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities":"Cash Flow",
+        "PaymentsForRepurchaseOfShares":        "Cash Flow",
     "PaymentsToAcquireOrRedeemEntitysShares": "Cash Flow",
+    # VINCI-specific financing activities
+    "Proceedsfromissuingsharesproceedsfromissuingotherequityinstrumentsandpaymentsofotherequityinstrumentsclassifiedasfinancingactivities": "Cash Flow",
+    "Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares": "Cash Flow",
+    "CapitalIncreasesAndReductionsOfSubsidiariesSubscribedByThirdParties":"Cash Flow",
+    "Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares":"Cash Flow",
+    "Proceedsfromchangesinownershipinterestsinsubsidiariesandpaymentsfromchangesinownershipinterestsinsubsidiaries": "Cash Flow",
+    "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities": "Cash Flow",
+    "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie": "Cash Flow",
     "ProceedsFromIssuingShares":            "Cash Flow",
     "DividendsPaid":                        "Cash Flow",
     "DividendsPaidClassifiedAsFinancingActivities": "Cash Flow",
+    "DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities":"Cash Flow",
+    "DividendsPaidToNoncontrollingInterestsClassifiedAsFinancingActivities":"Cash Flow",
+    "ProceedsFromNoncurrentBorrowings":"Cash Flow",
+    "RepaymentsOfNoncurrentBorrowings":"Cash Flow",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities":"Cash Flow",
     "GuaranteeDepositsReceivedAndOtherFinancialDebt": "Cash Flow",
     "EffectOfExchangeRateChangesOnCashAndCashEquivalents": "Cash Flow",
     "IncreaseDecreaseInCashAndCashEquivalents": "Cash Flow",
@@ -641,7 +711,10 @@ STATEMENT_MAP: Dict[str, str] = {
 _STATEMENT_ORDER = {
     "Income Statement": [
         "Revenue", "RevenueFromContractsWithCustomers",
-        "OtherIncome", "OtherOperatingIncome", "MiscellaneousOtherOperatingIncome",
+        # VINCI revenue
+        "Revenuefromcontractswithcustomersotherthanrevenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies",
+        "Revenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies",
+        "OtherIncome", "OtherRevenue", "OtherOperatingIncome", "MiscellaneousOtherOperatingIncome",
         "EmployeeBenefitsExpense", "OperatingExpensesOtherThanPersonnelExpenses",
         "CostOfSales", "GrossProfit", "RawMaterialsAndConsumablesUsed",
         "OtherOperatingExpense", "MiscellaneousOtherOperatingExpense", "OtherExpenseByNature",
@@ -650,20 +723,35 @@ _STATEMENT_ORDER = {
         "DepreciationAndAmortisationExpense", "DepreciationRightOfUseAssets",
         "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
         "ImpairmentLossRecognisedInProfitOrLoss",
-        "EarningsBeforeInterestTaxesDepreciationAndAmortisation", "CurrentEbitda",
-        "CurrentOperatingIncome", "ProfitLossFromOperatingActivities",
-        "FinanceIncome", "FinanceIncomeRecognisedInProfitOrLoss", "OtherFinanceIncome",
+                "EarningsBeforeInterestTaxesDepreciationAndAmortisation", "CurrentEbitda",
+        "CurrentOperatingIncome",
+        # VINCI operating income
+        "Profitlossfromordinaryoperatingactivities",
+        "Otheroperatingincomeexpenserecurring",
+        "Profitlossfromoperatingactivitiesrecurring",
+        "Otheroperatingincomeexpensenonrecurring",
+        "ProfitLossFromOperatingActivities",
+        "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod",
+                "FinanceIncome", "FinanceIncomeRecognisedInProfitOrLoss", "OtherFinanceIncome",
         "FinanceCosts", "FinanceCostsRecognisedInProfitOrLoss", "OtherFinanceCost",
+        # VINCI finance costs
+        "Grossfinancecosts","InterestIncomeOnCashAndCashEquivalents", "Netfinancecosts","OtherFinanceIncomeCost",
         "InterestExpense", "InterestExpenseOnBorrowings", "InterestExpenseOnLeaseLiabilities",
         "RevaluationOfHedgingInstruments", "GainsLossesOnExchangeDifferences",
         "FinanceIncomeExpense", "FinanceIncomeCost",
         "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences",
         "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod",
         "ProfitLossBeforeTax", "IncomeTaxExpenseContinuingOperations",
-        "ProfitLoss", "ProfitLossAttributableToOwnersOfParent",
+        "ProfitLoss", "Othercomprehensiveincomebeforetaxcashflowhedgesandothercomprehensiveincomebeforetaxhedgesofnetinvestmentsinforeignoperations","ProfitLossAttributableToOwnersOfParent",
+        "Othercomprehensiveincomebeforetaxcostofhedging",
+        "Incometaxrelatedtochangesinthefairvalueofcashflowshedginginstrumentsandhedgingcosts",
         "ProfitLossAttributableToNoncontrollingInterests",
         "BasicEarningsLossPerShare", "DilutedEarningsLossPerShare",
         "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation",
+        "ShareOfOtherComprehensiveIncomeOfAssociatesAndJointVenturesAccountedForUsingEquityMethodThatWillBeReclassifiedToProfitOrLossNetOfTax",
+        "IncomeTaxRelatingToRemeasurementsOfDefinedBenefitPlansOfOtherComprehensiveIncome",
+        "OtherComprehensiveIncomeBeforeTaxGainsLossesFromInvestmentsInEquityInstruments",
+        "ExpenseFromSharebasedPaymentTransactionsWithEmployees",
         "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss",
         "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax",
         "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans",
@@ -671,63 +759,96 @@ _STATEMENT_ORDER = {
         "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax",
         "OtherComprehensiveIncome", "ComprehensiveIncome",
     ],
-    "Assets": [
-        "Goodwill", "IntangibleAssetsOtherThanGoodwill", "PropertyPlantAndEquipment",
+        "Assets": [
+        "Goodwill", "OtherIntangibleAssets","IntangibleAssetsOtherThanGoodwill", "PropertyPlantAndEquipmentIncludingRightofuseAssets",
+        # VINCI concession assets
+        "Serviceconcessionrights",
+        "PropertyPlantAndEquipment",
         "RightOfUseAssets", "RightofuseAssets", "InvestmentProperty",
         "InvestmentsAccountedForUsingEquityMethod",
-        "NoncurrentFinancialAssets", "NoncurrentDerivativeFinancialAssets", "OtherNoncurrentFinancialAssets",
+        "NoncurrentFinancialAssets", "NoncurrentDerivativeFinancialAssets", "OtherNoncurrentFinancialAssets","InvestmentAccountedForUsingEquityMethod",
         "OtherNoncurrentReceivables", "DeferredTaxAssets", "OtherNoncurrentAssets",
         "NoncurrentAssets",
         "Inventories", "TradeReceivables", "TradeAndOtherCurrentReceivables",
         "CurrentTradesReceivablesAndContractAssets",
         "CurrentTaxAssets", "CurrentTaxAssetsCurrent",
-        "CurrentFinancialAssets", "CurrentDerivativeFinancialAssets",
+        "CurrentFinancialAssets", "OtherCurrentFinancialAssets","CurrentDerivativeFinancialAssets",
         "OtherCurrentAssets", "OtherReceivablesAndCurrentAssets",
-        "CashAndCashEquivalents", "CurrentAssets", "Assets",
+        # VINCI cash management assets
+        "Currentcashmanagementfinancialassets",
+        "CashAndCashEquivalents","CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners","NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale", "CurrentAssets", "Assets",
     ],
-    "Liabilities": [
+        "Liabilities": [
         "IssuedCapital", "SharePremium",
-        "RetainedEarnings", "ReservesAndRetainedEarnings", "RetainedEarningsProfitLossForReportingPeriod",
-        "OtherReserves", "ReserveOfSharebasedPayments", "TreasuryShares",
+        "RetainedEarnings", "ReservesAndRetainedEarnings",
+        # VINCI reserves
+        "Otherreservesandretainedearningsexcludingprofitlossforreportingperiod",
+        "ReserveOfExchangeDifferencesOnTranslation",
+        "RetainedEarningsProfitLossForReportingPeriod",
+        "OtherReserves", "ReserveOfSharebasedPayments", "TreasuryShares","AccumulatedOtherComprehensiveIncome",
         "EquityAttributableToOwnersOfParent", "NoncontrollingInterests", "Equity",
-        "NoncurrentBorrowings", "LongtermBorrowings",
-        "NoncurrentLeaseLiabilities",
+        "NoncurrentBorrowings", "LongtermBorrowings","OtherLongtermProvisions",
+        "NoncurrentLeaseLiabilities","NoncurrentProvisionsForEmployeeBenefits","NoncurrentPortionOfNoncurrentBondsIssued","NoncurrentPortionOfOtherNoncurrentBorrowings",
         "NoncurrentFinancialLiabilities", "OtherNoncurrentFinancialLiabilities", "NoncurrentDerivativeFinancialLiabilities",
         "NoncurrentProvisions", "DeferredTaxLiabilities", "OtherNoncurrentLiabilities",
         "NoncurrentLiabilities",
         "CurrentBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
         "CurrentLeaseLiabilities",
         "TradePayables", "TradeAndOtherCurrentPayables", "TradeAndOtherCurrentPayablesToTradeSuppliers",
-        "CurrentTaxLiabilities", "CurrentTaxLiabilitiesCurrent",
-        "CurrentDerivativeFinancialLiabilities",
-        "CurrentProvisions", "OtherCurrentLiabilities", "CurrentLiabilities",
+        "CurrentTaxLiabilities", "CurrentTaxLiabilitiesCurrent","TradeAndOtherPayablesToTradeSuppliers",
+        "CurrentDerivativeFinancialLiabilities", "ShorttermBorrowings",  "CurrentLiabilitiesOtherThanLiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale","LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale", 
+        "CurrentProvisions", "OtherCurrentLiabilities","CurrentLeaseLiabilities", "CurrentLiabilities",
         "Liabilities", "EquityAndLiabilities",
     ],
-    "Cash Flow": [
+        "Cash Flow": [
         "ProfitLoss", "ProfitLossAdjustedForNoncashItems",
         "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital",
         "AdjustmentsForDepreciationAndAmortisationExpense",
         "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
         "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
         "AdjustmentsForProvisions",
+        # VINCI cash flow adjustments
+        "Adjustmentsforprovisionsandadjustmentsforimpairmentlossreversalofimpairmentlossrecognisedinprofitorloss",
         "AdjustmentsForSharebasedPayments",
         "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets",
         "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets",
-        "AdjustmentsForFinanceCosts",
+        "AdjustmentsForFairValueGainsLosses","AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod",
+                "AdjustmentsForFinanceCosts",
+        # VINCI finance cost adjustments
+        "Adjustmentsfornetfinancecosts",
+        "FinanceCostsPaidClassifiedAsOperatingActivities",
+        "Adjustmentsforinterestexpenseonleaseliabilities",
         "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences",
         "AdjustmentsForIncomeTaxExpense",
+        "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital",
         "IncreaseDecreaseInInventories",
         "IncreaseDecreaseInTradeAndOtherReceivables",
         "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables",
         "IncreaseDecreaseInTradeAndOtherPayables",
         "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables",
         "IncreaseDecreaseInWorkingCapital",
-        "IncomeTaxesPaid", "IncomeTaxesPaidRefundClassifiedAsOperatingActivities",
+        "IncomeTaxesPaidClassifiedAsOperatingActivities",
+                "IncomeTaxesPaid", "IncomeTaxesPaidRefundClassifiedAsOperatingActivities",
         "InterestPaid", "InterestPaidClassifiedAsOperatingActivities",
-        "CashFlowsFromUsedInOperatingActivities", "CashFlowsFromUsedInOperations",
+        # VINCI interest and dividends
+        "Interestpaidandinterestreceivedclassifiedasoperatingactivities",
+        "Dividendsreceivedfrominvestmentsaccountedforusingequitymethodclassifiedasoperatingactivities","OtherInflowsOutflowsOfCashClassifiedAsOperatingActivities",
+                "CashFlowsFromUsedInOperatingActivities", "CashFlowsFromUsedInOperations",
         "PurchaseOfPropertyPlantAndEquipment", "PurchaseOfIntangibleAssets",
         "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets",
         "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets",
+        # VINCI investing activities
+        "Purchaseofpropertyplantandequipmentandpurchaseofintangibleassetsclassifiedasinvestingactivities",
+        "Proceedsfromsalesofpropertyplantandequipmentandproceedsfromsalesofintangibleassetsclassifiedasinvestingactivities",
+        "Increasedecreaseinpropertyplantandequipmentandintangibleassetsclassifiedasinvestingactivities",
+        "Purchaseofconcessionfixedassetsnetofgrantsreceivedclassifiedasinvestingactivities",
+        "Increasedecreaseinfinancialreceivablespppcontractsandothersclassifiedasinvestingactivities",
+        "Growthinvestmentsinconcessionsandpppsclassifiedasinvestingactivities",
+        "Cashflowsusedinobtainingcontrolofsubsidiariesorotherbusinessespurchaseofinterestsininvestmentsaccountedforusingequitymethodandpurchaseofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities",
+        "Cashflowsfromlosingcontrolofsubsidiariesorotherbusinessesproceedsfromsalesofinvestmentsaccountedforusingequitymethodandproceedsfromsalesofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities",
+        "CashAndCashEquivalentsInSubsidiaryOrBusinessesAcquiredOrDisposed2013",
+        "Increasedecreaseininvestmentsclassifiedasinvestingactivities",
+        "OtherInflowsOutflowsOfCashClassifiedAsInvestingActivities",
         "ProceedsFromDisposalOfPropertyPlantAndEquipment",
         "ProceedsFromDisposalOfNoncurrentAssets", "ProceedsFromDisposalOfAssets",
         "AcquisitionOfSubsidiariesNetOfCashAcquired",
@@ -737,14 +858,23 @@ _STATEMENT_ORDER = {
         "CashFlowsFromUsedInInvestingActivities",
         "ProceedsFromBorrowingsClassifiedAsFinancingActivities",
         "RepaymentsOfBorrowingsClassifiedAsFinancingActivities",
-        "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
+                "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
         "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
         "PaymentsForRepurchaseOfShares", "PaymentsToAcquireOrRedeemEntitysShares",
+        # VINCI financing activities
+        "Proceedsfromissuingsharesproceedsfromissuingotherequityinstrumentsandpaymentsofotherequityinstrumentsclassifiedasfinancingactivities",
+        "Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares",
+        "CapitalIncreasesAndReductionsOfSubsidiariesSubscribedByThirdParties",
+        "Proceedsfromchangesinownershipinterestsinsubsidiariesandpaymentsfromchangesinownershipinterestsinsubsidiaries",
+        "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities",
+        "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie",
         "ProceedsFromIssuingShares",
-        "DividendsPaid", "DividendsPaidClassifiedAsFinancingActivities",
+        "DividendsPaid", "DividendsPaidClassifiedAsFinancingActivities","DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities","DividendsPaidToNoncontrollingInterestsClassifiedAsFinancingActivities","ProceedsFromNoncurrentBorrowings","RepaymentsOfNoncurrentBorrowings","PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
+        "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities",
         "InterestPaidClassifiedAsFinancingActivities",
         "GuaranteeDepositsReceivedAndOtherFinancialDebt",
         "CashFlowsFromUsedInFinancingActivities",
+        "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie",
         "EffectOfExchangeRateChangesOnCashAndCashEquivalents",
         "IncreaseDecreaseInCashAndCashEquivalents",
         "CashAndCashEquivalentsAtBeginningOfPeriod",
@@ -761,6 +891,10 @@ _DEFAULT_HEADERS = {
     "Accept": "application/json,*/*",
     "User-Agent": "XBRL-Research/1.0 research@example.com",
 }
+
+# Custom mapping cache
+_CUSTOM_MAPPING_CACHE: Optional[Dict] = None
+_CUSTOM_MAPPING_ENABLED: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -780,6 +914,8 @@ def _parse_period(period: str):
 
     Duration: '2022-01-01/2022-12-31' → ('duration', '2022-01-01', '2022-12-31', '2022')
     Instant:  '2022-12-31'            → ('instant',  '',           '2022-12-31', '2022')
+    Instant:  '2025-01-01'            → ('instant',  '',           '2025-01-01', '2024')
+              (Jan 1 dates represent year-end of prior year)
     """
     if not period:
         return "unknown", "", "", ""
@@ -795,8 +931,18 @@ def _parse_period(period: str):
             fy_year = end[:4] if len(end) >= 4 else ""
         return "duration", start, end, fy_year
     else:
-        fy_year = period[:4] if len(period) >= 4 else ""
-        return "instant", "", period.strip(), fy_year
+        # Instant (point-in-time) period
+        period_clean = period.strip()
+        period_date = period_clean[:10]  # "YYYY-MM-DD"
+        
+        # For instant dates on January 1, the fiscal year is the prior year
+        # because Jan 1, 2025 represents the balance sheet as of Dec 31, 2024 (end of FY2024)
+        if len(period_date) >= 10 and period_date[5:10] == "01-01":
+            fy_year = str(int(period_date[:4]) - 1) if len(period_date) >= 4 else ""
+        else:
+            fy_year = period_date[:4] if len(period_date) >= 4 else ""
+        
+        return "instant", "", period_clean, fy_year
 
 
 def _to_numeric(value) -> Optional[float]:
@@ -850,6 +996,36 @@ def get_value_unit_label(decimals) -> str:
             return "€"
     except (TypeError, ValueError):
         return "€"
+
+
+def _format_instant_date(period_end: str) -> str:
+    """
+    Format an instant period date for display as column header.
+    
+    Examples:
+        "2024-12-31T00:00:00" -> "31-Dec-2024"
+        "2025-01-01T00:00:00" -> "31-Dec-2024" (represents prior year-end)
+        "2024-12-31" -> "31-Dec-2024"
+    """
+    if not period_end:
+        return ""
+    
+    # Extract date part (YYYY-MM-DD)
+    date_str = period_end[:10] if len(period_end) >= 10 else period_end
+    
+    # Parse date
+    try:
+        from datetime import datetime
+        if len(date_str) >= 10 and date_str[5:10] == "01-01":
+            # Jan 1 represents prior year-end (Dec 31)
+            year = int(date_str[:4]) - 1
+            return f"31-Dec-{year}"
+        else:
+            # Parse the actual date
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%d-%b-%Y")
+    except:
+        return date_str
 
 
 # ---------------------------------------------------------------------------
@@ -951,24 +1127,256 @@ def _select_best_fact(facts_for_concept: List[dict]) -> Optional[dict]:
     return (numeric or candidates)[0]
 
 
-def _resolve_labels(concept_short: str, labels_dict: Optional[Dict[str, Tuple[str, str]]] = None) -> Tuple[str, str]:
-    """Return (local_label, en_label) for a concept, preferring labels_dict over IFRS_CONCEPT_LABELS."""
+def _load_custom_mapping_config() -> Dict:
+    """Load custom XBRL mapping configuration from JSON file."""
+    global _CUSTOM_MAPPING_CACHE, _CUSTOM_MAPPING_ENABLED
+    
+    if _CUSTOM_MAPPING_CACHE is not None:
+        print(f"[DEBUG] Using cached mapping config (enabled={_CUSTOM_MAPPING_ENABLED})")
+        return _CUSTOM_MAPPING_CACHE
+    
+    try:
+        from config.config import load_config
+        cfg = load_config()
+        
+        # Check if custom mapping is enabled
+        _CUSTOM_MAPPING_ENABLED = cfg.getboolean("XBRL", "use_custom_mapping", fallback=False)
+        print(f"[DEBUG] Custom mapping enabled: {_CUSTOM_MAPPING_ENABLED}")
+        
+        if not _CUSTOM_MAPPING_ENABLED:
+            print(f"[DEBUG] Custom mapping is DISABLED in config.ini")
+            _CUSTOM_MAPPING_CACHE = {}
+            return _CUSTOM_MAPPING_CACHE
+        
+        # Load mapping file
+        mapping_file = cfg.get("XBRL", "mapping_config_file", fallback="config/xbrl_mapping_config.json")
+        mapping_path = Path(mapping_file)
+        
+        print(f"[DEBUG] Looking for mapping file: {mapping_path.absolute()}")
+        
+        if not mapping_path.exists():
+            print(f"[DEBUG] Custom mapping file NOT FOUND: {mapping_path.absolute()}")
+            _CUSTOM_MAPPING_CACHE = {}
+            return _CUSTOM_MAPPING_CACHE
+        
+        with open(mapping_path, 'r', encoding='utf-8') as f:
+            _CUSTOM_MAPPING_CACHE = json.load(f)
+        
+        # Count concepts
+        total_concepts = 0
+        for key, value in _CUSTOM_MAPPING_CACHE.items():
+            if isinstance(value, dict) and 'concepts' in value:
+                total_concepts += len(value['concepts'])
+        
+        print(f"[DEBUG] Loaded custom XBRL mappings from {mapping_path}")
+        print(f"[DEBUG] Total companies/sections: {len(_CUSTOM_MAPPING_CACHE)}")
+        print(f"[DEBUG] Total concepts: {total_concepts}")
+        print(f"[DEBUG] Companies: {[k for k in _CUSTOM_MAPPING_CACHE.keys() if not k.startswith('_')]}")
+        
+        return _CUSTOM_MAPPING_CACHE
+        
+    except Exception as e:
+        print(f"[DEBUG] ERROR loading custom XBRL mapping: {e}")
+        import traceback
+        traceback.print_exc()
+        _CUSTOM_MAPPING_CACHE = {}
+        return _CUSTOM_MAPPING_CACHE
+
+
+def get_company_key_from_name(company_name: str) -> Optional[str]:
+    """Detect company key from company name for mapping lookup.
+    
+    Args:
+        company_name: Company name (e.g., 'Vinci', 'OVHcloud', 'TotalEnergies')
+    
+    Returns:
+        Company key for mapping lookup (e.g., 'vinci', 'ovhcloud', 'total') or None
+    """
+    if not company_name:
+        return None
+    
+    mapping = _load_custom_mapping_config()
+    if not mapping:
+        return None
+    
+    name_lower = company_name.lower().strip()
+    
+    # Direct match
+    if name_lower in mapping:
+        return name_lower
+    
+    # Fuzzy match - check if company name contains any mapping key
+    for key in mapping.keys():
+        if key.startswith('_'):
+            continue
+        if key in name_lower or name_lower in key:
+            return key
+    
+    # Check company_info names in mapping
+    for key, value in mapping.items():
+        if key.startswith('_'):
+            continue
+        if isinstance(value, dict) and '_company_info' in value:
+            info_name = value['_company_info'].get('name', '').lower()
+            if info_name and (info_name in name_lower or name_lower in info_name):
+                return key
+    
+    return None
+
+
+def _get_inherited_concepts(company_key: str, mapping: Dict) -> Dict:
+    """Get all concepts for a company including inherited ones.
+    
+    Args:
+        company_key: Company identifier (e.g., 'vinci', 'eiffage')
+        mapping: Full mapping configuration
+    
+    Returns:
+        Dictionary of all concepts (own + inherited)
+    """
+    if company_key not in mapping:
+        return {}
+    
+    company_data = mapping[company_key]
+    all_concepts = {}
+    
+    # First, add inherited concepts (lower priority)
+    inherits_from = company_data.get('_inherits_from', [])
+    for shared_section in inherits_from:
+        if shared_section in mapping:
+            shared_concepts = mapping[shared_section].get('concepts', {})
+            all_concepts.update(shared_concepts)
+    
+    # Then, add company-specific concepts (higher priority - overrides inherited)
+    company_concepts = company_data.get('concepts', {})
+    all_concepts.update(company_concepts)
+    
+    return all_concepts
+
+
+def _get_custom_label(concept_full: str, company_key: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """Get custom label for a concept from mapping config.
+    
+    Supports inheritance: company-specific concepts override shared concepts.
+    
+    Args:
+        concept_full: Full concept name with namespace (e.g., 'vinci:Revenue')
+        company_key: Company identifier (e.g., 'vinci', 'ovhcloud'). If None, auto-detect from concept.
+    
+    Returns:
+        (fr_label, en_label) tuple if found, None otherwise
+    """
+    mapping = _load_custom_mapping_config()
+    
+    if not mapping or not _CUSTOM_MAPPING_ENABLED:
+        return None
+    
+    # Auto-detect company from concept namespace if not provided
+    if company_key is None and ':' in concept_full:
+        namespace = concept_full.split(':')[0].lower()
+        # Try exact namespace match first
+        if namespace in mapping and not namespace.startswith('_'):
+            company_key = namespace
+        else:
+            # Try to find matching company key
+            for key in mapping.keys():
+                if key.startswith('_'):
+                    continue
+                if namespace == key or namespace in key:
+                    company_key = key
+                    break
+    
+    if not company_key:
+        # Try global fallback
+        if '_global_fallback' in mapping:
+            concepts = mapping['_global_fallback'].get('concepts', {})
+            if concept_full in concepts:
+                c = concepts[concept_full]
+                return (c.get('fr_label', ''), c.get('en_label', ''))
+        return None
+    
+    # Get all concepts (including inherited)
+    company_key = company_key.lower()
+    all_concepts = _get_inherited_concepts(company_key, mapping)
+    
+    if concept_full in all_concepts:
+        c = all_concepts[concept_full]
+        return (c.get('fr_label', ''), c.get('en_label', ''))
+    
+    # Try global fallback
+    if '_global_fallback' in mapping:
+        global_concepts = mapping['_global_fallback'].get('concepts', {})
+        if concept_full in global_concepts:
+            c = global_concepts[concept_full]
+            return (c.get('fr_label', ''), c.get('en_label', ''))
+    
+    return None
+
+
+def _resolve_labels(
+    concept_short: str,
+    concept_full: str = "",
+    labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Return (fr_label, en_label) for a concept.
+    
+    Priority order (HIGHEST TO LOWEST):
+    1. Custom mapping from xbrl_mapping_config.json (if enabled) - HIGHEST PRIORITY
+    2. ixbrlviewer.html labels (labels_dict) - official filing labels
+    3. IFRS standard labels (IFRS_CONCEPT_LABELS)
+    4. Fallback to concept_short
+    
+    Args:
+        concept_short: Short concept name (e.g., 'Revenue')
+        concept_full: Full concept with namespace (e.g., 'vinci:Revenue')
+        labels_dict: Labels extracted from ixbrlviewer.html
+        company_key: Company identifier for custom mapping lookup
+    """
+    # Debug: show what we received
+    if concept_full and ':' in concept_full:
+        namespace = concept_full.split(':')[0]
+        if namespace.lower() in ['vinci', 'ovhcloud', 'total']:
+            print(f"[DEBUG] _resolve_labels called: concept_full='{concept_full}', company_key='{company_key}', enabled={_CUSTOM_MAPPING_ENABLED}")
+    
+    # 1. Try custom mapping FIRST (if enabled and concept_full provided) - HIGHEST PRIORITY
+    if concept_full and _CUSTOM_MAPPING_ENABLED:
+        custom_labels = _get_custom_label(concept_full, company_key)
+        if custom_labels and (custom_labels[0] or custom_labels[1]):
+            print(f"[DEBUG] Custom label found for {concept_full} (company_key={company_key}): {custom_labels}")
+            return custom_labels
+        else:
+            if concept_full and ':' in concept_full:
+                namespace = concept_full.split(':')[0]
+                if namespace.lower() in ['vinci', 'ovhcloud', 'total']:
+                    print(f"[DEBUG] No custom label for {concept_full} (company_key={company_key})")
+    
+    # 2. Try ixbrlviewer.html labels (official filing labels)
     if labels_dict and concept_short in labels_dict:
+        print(f"[DEBUG] Using ixbrlviewer label for {concept_short}: {labels_dict[concept_short]}")
         return labels_dict[concept_short]
-    return IFRS_CONCEPT_LABELS.get(concept_short, (concept_short, concept_short))
+    
+    # 3. Try IFRS standard labels
+    if concept_short in IFRS_CONCEPT_LABELS:
+        return IFRS_CONCEPT_LABELS[concept_short]
+    
+    # 4. Fallback to concept name
+    return (concept_short, concept_short)
 
 
 def build_statements(
     facts: List[dict],
     fy_year: str = None,
     labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Build financial statement DataFrames from a list of facts (single filing).
 
     If fy_year is provided, only facts for that year are included.
-    labels_dict: optional {concept_short: (local_label, en_label)} from ixbrlviewer.html.
+    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
                  Takes precedence over IFRS_CONCEPT_LABELS when provided.
+    company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
     Returns dict: {statement_type: DataFrame}
     Columns: French Label | English Label | Concept | Value
     """
@@ -1024,12 +1432,12 @@ def build_statements(
             if fact is None:
                 continue
 
-            local_label, en_label = _resolve_labels(concept_short, labels_dict)
-            value_str = _format_value(fact.get("value_numeric"), fact.get("decimals", ""))
             concept_full = fact.get("concept_full", concept_short)
+            fr_label, en_label = _resolve_labels(concept_short, concept_full, labels_dict, company_key)
+            value_str = _format_value(fact.get("value_numeric"), fact.get("decimals", ""))
 
             rows.append({
-                "Local Label":   local_label,
+                "French Label":   fr_label,
                 "English Label":  en_label,
                 "Concept":        concept_full,
                 "Value":          value_str,
@@ -1044,26 +1452,38 @@ def build_statements(
 def build_consolidated(
     all_facts_by_fy: Dict[str, List[dict]],
     labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Build consolidated financial statement DataFrames with all years as columns.
 
     all_facts_by_fy: {fy_label: [facts_list]}  e.g. {'FY2024': [...], 'FY2023': [...]}
-    labels_dict: optional {concept_short: (local_label, en_label)} from ixbrlviewer.html.
+    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
 
     Returns dict: {statement_type: DataFrame}
-    Columns: French Label | English Label | Concept | FY2024 | FY2023 | ...
+    For Assets/Liabilities: Columns show instant dates (e.g., "31-Dec-2024")
+    For Income/Cash Flow: Columns show fiscal years (e.g., "FY2024")
     """
     if not all_facts_by_fy:
         return {}
 
     fy_labels = sorted(all_facts_by_fy.keys(), reverse=True)
+    
+    # Build mapping: fy_label -> period_end date for instant statements
+    fy_to_period_end: Dict[str, str] = {}
+    for fy_label, facts in all_facts_by_fy.items():
+        # Find an instant fact to get the period_end
+        for fact in facts:
+            if fact.get("period_type") == "instant" and fact.get("period_end"):
+                fy_to_period_end[fy_label] = fact["period_end"]
+                break
 
-    # Build per-FY statement dicts
+        # Build per-FY statement dicts
     per_fy: Dict[str, Dict[str, pd.DataFrame]] = {}
     for fy_label in fy_labels:
         fy_year = fy_label.replace("FY", "") if fy_label.startswith("FY") else fy_label
-        per_fy[fy_label] = build_statements(all_facts_by_fy[fy_label], fy_year=fy_year, labels_dict=labels_dict)
+        per_fy[fy_label] = build_statements(all_facts_by_fy[fy_label], fy_year=fy_year, labels_dict=labels_dict, company_key=company_key)
 
     # Build concept_short → concept_full mapping from all available facts
     concept_full_map: Dict[str, str] = {}
@@ -1085,10 +1505,10 @@ def build_consolidated(
         for concept_short in order:
             if STATEMENT_MAP.get(concept_short) != stmt_type:
                 continue
-            local_label, en_label = _resolve_labels(concept_short, labels_dict)
             concept_full = concept_full_map.get(concept_short, concept_short)
+            fr_label, en_label = _resolve_labels(concept_short, concept_full, labels_dict, company_key)
             row = {
-                "Local Label":  local_label,
+                "French Label":  fr_label,
                 "English Label": en_label,
                 "Concept":       concept_full,
             }
@@ -1109,8 +1529,30 @@ def build_consolidated(
                 concept_data[concept_short] = row
 
         if concept_data:
-            columns = ["Local Label", "English Label", "Concept"] + fy_labels
-            df = pd.DataFrame(list(concept_data.values()), columns=columns)
+            # Determine column headers based on statement type
+            if stmt_type in ["Assets", "Liabilities"]:
+                # Use instant dates for balance sheet items
+                # Need to rename the FY columns to date columns
+                date_headers = [
+                    _format_instant_date(fy_to_period_end.get(fy_lbl, ""))
+                    for fy_lbl in fy_labels
+                ]
+                
+                # Create DataFrame with FY labels first
+                df = pd.DataFrame(list(concept_data.values()))
+                
+                # Rename FY columns to date columns
+                rename_map = {fy_lbl: date_hdr for fy_lbl, date_hdr in zip(fy_labels, date_headers)}
+                df = df.rename(columns=rename_map)
+                
+                # Reorder columns to ensure proper order
+                columns = ["French Label", "English Label", "Concept"] + date_headers
+                df = df[columns]
+            else:
+                # Use FY labels for income statement and cash flow
+                columns = ["French Label", "English Label", "Concept"] + fy_labels
+                df = pd.DataFrame(list(concept_data.values()), columns=columns)
+            
             result[stmt_type] = df
 
     return result
@@ -1119,6 +1561,7 @@ def build_consolidated(
 def build_filing_view(
     facts: List[dict],
     labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Build financial statement DataFrames from a single filing's facts.
@@ -1128,11 +1571,21 @@ def build_filing_view(
     prevents spurious extra years (e.g. equity-statement opening balances) from
     appearing as extra columns.
 
-    labels_dict: optional {concept_short: (local_label, en_label)} from ixbrlviewer.html.
+    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
 
     Returns dict: {statement_type: DataFrame}
     Columns: French Label | English Label | Concept | FY2025 | FY2024
     """
+    print(f"[DEBUG]  build_filing_view called with company_key='{company_key}'")
+    print(f"[DEBUG]  labels_dict has {len(labels_dict) if labels_dict else 0} entries")
+    print(f"[DEBUG]  Processing {len(facts)} facts")
+    print(f"[DEBUG]  Custom mapping enabled: {_CUSTOM_MAPPING_ENABLED}")
+    
+    # Show sample concepts to verify namespace
+    if facts:
+        sample_concepts = [f.get('concept_full', '') for f in facts[:5] if f.get('concept_full')]
+        print(f"[DEBUG]  Sample concepts: {sample_concepts}")
     # Determine the two most recent fiscal years from DURATION facts
     # (duration facts represent P&L and cash flow periods, which reliably identify
     # the reporting year and its one comparative year).
@@ -1159,7 +1612,7 @@ def build_filing_view(
         fy_lbl = f"FY{fy_year}"
         all_facts_by_fy.setdefault(fy_lbl, []).append(fact)
 
-    return build_consolidated(all_facts_by_fy, labels_dict=labels_dict)
+    return build_consolidated(all_facts_by_fy, labels_dict=labels_dict, company_key=company_key)
 
 
 def generate_excel_bytes(statements_dict: Dict[str, pd.DataFrame]) -> bytes:
@@ -1220,11 +1673,11 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
     ws1 = wb.add_worksheet("All Facts")
     hdr = [
         "FY Label", "Concept (full)", "Namespace", "Concept (short)",
-        "Local Label", "English Label",
+        "French Label", "English Label",
         "Period Type", "Period Start", "Period End", "FY Year",
-        "Value (raw)", "Value (thousands)", "Unit", "Decimals",
+        "Value (raw)", "Value (thousands)", "Value (millions)", "Unit", "Decimals",
     ]
-    col_w = [10, 70, 14, 50, 50, 50, 10, 14, 14, 10, 18, 18, 30, 10]
+    col_w = [10, 70, 14, 50, 50, 50, 10, 14, 14, 10, 18, 18, 18, 30, 10]
     ws1.set_row(0, 20)
     for ci, (h, w) in enumerate(zip(hdr, col_w)):
         ws1.set_column(ci, ci, w)
@@ -1234,12 +1687,21 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
         concept_full  = fact.get("concept_full", "")
         concept_short = fact.get("concept_short", "")
         namespace     = concept_full.split(":")[0] if ":" in concept_full else ""
-        fr_lbl, en_lbl = IFRS_CONCEPT_LABELS.get(concept_short, ("", ""))
+        
+        # Try to get labels from enriched fact first, fallback to IFRS labels
+        fr_lbl = fact.get("fr_label", "")
+        en_lbl = fact.get("en_label", "")
+        if not fr_lbl and not en_lbl:
+            # Fallback to IFRS labels if not enriched
+            fr_lbl, en_lbl = IFRS_CONCEPT_LABELS.get(concept_short, ("", ""))
+        
         val_num = fact.get("value_numeric")
         try:
             val_thou = val_num / 1000 if val_num is not None else None
+            val_mill = val_num / 1000000 if val_num is not None else None
         except Exception:
             val_thou = None
+            val_mill = None
 
         ws1.write(ri, 0,  fact.get("fy_label", ""),      F(border=1))
         ws1.write(ri, 1,  concept_full,                   F(border=1))
@@ -1261,8 +1723,13 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
                 F(border=1, align="right", num_format="#,##0;(#,##0)"))
         else:
             ws1.write(ri, 11, "", F(border=1))
-        ws1.write(ri, 12, fact.get("unit", ""),          F(border=1))
-        ws1.write(ri, 13, str(fact.get("decimals", "")), F(border=1, align="center"))
+        if val_mill is not None:
+            ws1.write_number(ri, 12, val_mill,
+                F(border=1, align="right", num_format="#,##0.##;(#,##0.##)"))
+        else:
+            ws1.write(ri, 12, "", F(border=1))
+        ws1.write(ri, 13, fact.get("unit", ""),          F(border=1))
+        ws1.write(ri, 14, str(fact.get("decimals", "")), F(border=1, align="center"))
 
     ws1.autofilter(0, 0, len(all_facts), len(hdr) - 1)
     ws1.freeze_panes(1, 0)
@@ -1289,7 +1756,7 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
             except Exception:
                 pass
 
-    p_hdr = ["Concept (full)", "Concept (short)", "Local Label", "English Label",
+    p_hdr = ["Concept (full)", "Concept (short)", "French Label", "English Label",
              "Period Type"] + [str(y) for y in all_years]
     p_w   = [70, 50, 50, 50, 10] + [16] * len(all_years)
     ws2.set_row(0, 20)
@@ -1318,3 +1785,16 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
     wb.close()
     output.seek(0)
     return output.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Module initialization - load custom mapping at import time
+# ---------------------------------------------------------------------------
+print("[DEBUG] XBRL parser module loading...")
+try:
+    _load_custom_mapping_config()
+    print(f"[DEBUG] Custom mapping initialized: enabled={_CUSTOM_MAPPING_ENABLED}")
+except Exception as e:
+    print(f"[DEBUG] Failed to initialize custom mapping: {e}")
+    import traceback
+    traceback.print_exc()
