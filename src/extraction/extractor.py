@@ -160,12 +160,12 @@ def extract_table(
     unit_scale   = result.get("unit_scale")
     year_end_date = result.get("year_end_date")
 
-    print(f"\n📊 EXTRACTION SUMMARY:")
-    print(f"  ✓ Extracted {len(rows)} rows via LLM")
-    print(f"  ✓ Year columns: {year_headers}")
-    print(f"  ✓ Year currencies: {year_currencies if year_currencies else 'NOT EXTRACTED'}")
-    print(f"  ✓ Unit scale: {unit_scale if unit_scale else 'NOT EXTRACTED'}")
-    print(f"  ✓ Year-end date: {year_end_date if year_end_date else 'NOT EXTRACTED'}")
+    print(f"\n[EXTRACTION SUMMARY]")
+    print(f"  + Extracted {len(rows)} rows via LLM")
+    print(f"  + Year columns: {year_headers}")
+    print(f"  + Year currencies: {year_currencies if year_currencies else 'NOT EXTRACTED'}")
+    print(f"  + Unit scale: {unit_scale if unit_scale else 'NOT EXTRACTED'}")
+    print(f"  + Year-end date: {year_end_date if year_end_date else 'NOT EXTRACTED'}")
     print()
 
     return {
@@ -224,12 +224,12 @@ def extract_table_from_image(image_bytes: bytes) -> dict:
     unit_scale    = result.get("unit_scale")
     year_end_date = result.get("year_end_date")
     
-    print(f"\n📊 EXTRACTION SUMMARY (IMAGE):")
-    print(f"  ✓ Extracted {len(rows)} rows via LLM")
-    print(f"  ✓ Year columns: {year_headers}")
-    print(f"  ✓ Year currencies: {year_currencies if year_currencies else 'NOT EXTRACTED'}")
-    print(f"  ✓ Unit scale: {unit_scale if unit_scale else 'NOT EXTRACTED'}")
-    print(f"  ✓ Year-end date: {year_end_date if year_end_date else 'NOT EXTRACTED'}")
+    print(f"\n[EXTRACTION SUMMARY (IMAGE)]")
+    print(f"  + Extracted {len(rows)} rows via LLM")
+    print(f"  + Year columns: {year_headers}")
+    print(f"  + Year currencies: {year_currencies if year_currencies else 'NOT EXTRACTED'}")
+    print(f"  + Unit scale: {unit_scale if unit_scale else 'NOT EXTRACTED'}")
+    print(f"  + Year-end date: {year_end_date if year_end_date else 'NOT EXTRACTED'}")
     print()
 
     return {
@@ -240,6 +240,36 @@ def extract_table_from_image(image_bytes: bytes) -> dict:
         "year_end_date": year_end_date,
         "total_rows":    len(rows),
     }
+
+
+def extract_table_with_vision_fallback(
+    page_candidate: dict,
+    pdf_path: str,
+    stitch_fn=None,
+) -> dict:
+    """Extract a financial table, auto-falling back to vision when text is garbled."""
+    if page_candidate.get("text_garbled"):
+        import fitz
+        all_pnums = page_candidate.get("all_page_nums", [page_candidate["page_num"]])
+        crop_bbox = page_candidate.get("landscape_crop_bbox")
+        doc = fitz.open(pdf_path)
+        page_imgs = []
+        for pnum in all_pnums:
+            fp = doc[pnum]
+            if crop_bbox and fp.rect.width > fp.rect.height:
+                px = fp.get_pixmap(dpi=150, clip=fitz.Rect(*crop_bbox))
+            else:
+                px = fp.get_pixmap(dpi=150)
+            page_imgs.append(px.tobytes("png"))
+        doc.close()
+        if len(page_imgs) > 1 and stitch_fn:
+            img_bytes = stitch_fn(page_imgs)
+        else:
+            img_bytes = page_imgs[0]
+        print("  Auto-falling back to vision extraction (garbled/CID-encoded text detected)")
+        return extract_table_from_image(img_bytes)
+    else:
+        return extract_table(page_candidate["full_text"])
 
 
 def rows_to_text(rows: list) -> str:

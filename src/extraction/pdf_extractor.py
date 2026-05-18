@@ -10,8 +10,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import fitz  # PyMuPDF
-from openai import OpenAI
 from config.config import load_config
+from .llm_client import get_client
 
 # Import statement headings and configuration from extraction_config
 from .extraction_config import (
@@ -29,17 +29,8 @@ class PDFExtractor:
     def __init__(self):
         """Initialize the PDF extractor with LLM client"""
         cfg = load_config()
-        
-        # Get LLM configuration
-        llm_url = cfg.get("LLM", "url", fallback="https://api.openai.com/v1")
-        llm_api_key = cfg.get("LLM", "api_key", fallback="")
-        llm_model = cfg.get("LLM", "model", fallback="gpt-4o")
-        
-        if not llm_api_key:
-            raise ValueError("LLM API key not configured in config.ini [LLM] section")
-        
-        self.client = OpenAI(api_key=llm_api_key, base_url=llm_url)
-        self.model = llm_model
+        self.client = get_client()
+        self.model = cfg.get("LLM", "model", fallback="gpt-4o")
         self.token_usage = {"input": 0, "output": 0, "total": 0}
     
     def reset_token_usage(self):

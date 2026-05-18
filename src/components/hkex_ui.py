@@ -1,0 +1,914 @@
+"""
+HKEX Workstream UI Component.
+Searches, downloads, and extracts HKEX annual reports.
+"""
+
+import os
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+from config.config import get_section as _get_section, SEARCH_URL
+from src import http_client
+from src.parser.hkexnews.parser import HKEXParser
+from src.components.brefmap_ui import (
+    stitch_images_vertical,
+    PDFLiveLogger,
+    render_pdf_panel,
+    create_pdf_excel,
+)
+
+# ==============================================================================
+# PDF EXTRACTION AVAILABILITY
+# ==============================================================================
+try:
+    from src.extraction.pdf_extraction_ui import render_pdf_extraction_section
+    PDF_EXTRACTION_AVAILABLE = True
+except ImportError:
+    PDF_EXTRACTION_AVAILABLE = False
+
+
+# ==============================================================================
+# SESSION STATE
+# ==============================================================================
+
+def initialize_hkex_state():
+    defaults = {
+        "hkex_stock_code": None,
+        "hkex_reports": [],
+        "hkex_reports_loaded": False,
+        "hkex_extraction_results": None,
+        "hkex_extraction_report_title": None,
+        "manual_extraction_results": None,
+        "manual_extraction_report_title": None,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+
+def search_hkex_annual_reports(stock_id, date_from=None, date_to=None):
+    """Search for HKEX annual reports using the API"""
+    try:
+        # Format stock code with leading zeros (5 digits)
+        formatted_stock_code = stock_id.zfill(5) if stock_id.isdigit() else stock_id
+
+        # Format dates to YYYYMMDD
+        if date_from:
+            start_date = date_from.strftime('%Y%m%d')
+        else:
+            # Default to 5 years ago
+            start_date = (datetime.now() - timedelta(days=365*5)).strftime('%Y%m%d')
+
+        if date_to:
+            end_date = date_to.strftime('%Y%m%d')
+        else:
+            end_date = datetime.now().strftime('%Y%m%d')
+
+        # Use exact payload from working crawler.py - focusing on annual reports
+        payload = {
+            "lang": "EN",
+            "category": "0",
+            "market": "SEHK",
+            "searchType": "1",
+            "documentType": "",
+            "t1code": "40000",  # Financial Statements/ESG Information
+            "t2Gcode": "-2",
+            "t2code": "40100",  # Annual Reports
+            "stockId": formatted_stock_code,
+            "from": start_date,
+            "to": end_date,
+            "MB-Daterange": "0",
+            "title": ""
+        }
+
+        # Make request to HKEX using SEARCH_URL from config
+        response = http_client.post(
+            SEARCH_URL,
+            data=payload,
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            st.error(f"HKEX returned status code: {response.status_code}")
+            return []
+
+        # Parse reports using HKEXParser
+        parser = HKEXParser()
+        all_reports = parser.extract_reports(response.content)
+
+        # Filter for annual reports only
+        annual_reports = [
+            report for report in all_reports
+            if report.get('reportType') == 'annual'
+        ]
+
+        return annual_reports
+
+    except Exception as e:
+        st.error(f"Error searching HKEX reports: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+        return []
+
+
+def download_hkex_report(report_url, filename, save_dir):
+    """Download a HKEX report PDF"""
+    try:
+        save_path = Path(save_dir) / filename
+
+        # Create directory if it doesn't exist
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Check if already downloaded
+        if save_path.exists():
+            return save_path
+
+        # Download the file
+        response = http_client.get(report_url, timeout=180)
+        response.raise_for_status()
+
+        # Save the file
+        save_path.write_bytes(response.content)
+
+        return save_path
+    except Exception as e:
+        st.error(f"Error downloading HKEX report: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+
+
+# ==============================================================================
+# MAIN RENDER FUNCTION
+# ==============================================================================
+
+def render_hkex_section(company, hkex_ticker):
+    st.header("HKEX Annual Reports")
+
+    # Define show_extraction at the very beginning of HKEX section
+    show_extraction = PDF_EXTRACTION_AVAILABLE and st.session_state.selected_region == "APAC"
+
+    hkex_ticker = st.session_state.hkex_ticker
+    stock_id = hkex_ticker.get('stockId', '')
+
+    # STEP 1: Search for Annual Reports
+    st.subheader("Step 1: Search Annual Reports")
+    if st.button("🔍 Search Annual Reports", type="primary", use_container_width=True):
+        with st.spinner(f"Searching annual reports for {stock_id}..."):
+            reports = search_hkex_annual_reports(
+                stock_id,
+                st.session_state.date_from,
+                st.session_state.date_to
+            )
+        st.session_state.hkex_reports = reports
+        st.session_state.hkex_reports_loaded = True
+
+        if reports:
+            st.success(f"✅ Found {len(reports)} annual reports")
+            st.rerun()
+        else:
+            st.warning("No annual reports found for the selected date range")
+
+    st.markdown("---")
+
+    # STEP 2: Display Available Reports
+    if st.session_state.hkex_reports_loaded and st.session_state.hkex_reports:
+        st.subheader("Step 2: Available Annual Reports")
+
+        # Display summary metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("📄 Total Reports", len(st.session_state.hkex_reports))
+        with col2:
+            years = [r.get('fiscalYear') for r in st.session_state.hkex_reports if r.get('fiscalYear')]
+            if years:
+                st.metric("📅 Year Range", f"{min(years)} - {max(years)}")
+        with col3:
+            st.metric("🏢 Company", company.get('name', 'N/A')[:20] + "...")
+
+        st.markdown("")
+
+        # Display reports table
+        reports_data = []
+        for idx, report in enumerate(st.session_state.hkex_reports):
+            reports_data.append({
+                '#': idx + 1,
+                'Report Title': report.get('title', 'N/A'),
+                'Fiscal Year': report.get('fiscalYear', 'N/A'),
+                'Type': report.get('reportType', 'N/A').upper(),
+                'Filename': report.get('filename', 'N/A')
+            })
+
+        reports_df = pd.DataFrame(reports_data)
+        st.dataframe(
+            reports_df,
+            width="stretch",
+            hide_index=True,
+            height=min(400, 50 + 35 * len(reports_df))
+        )
+
+        st.markdown("---")
+
+        # STEP 3: Extract or Download Reports
+        st.subheader("Step 3: Extract Financial Data or Download")
+
+        if show_extraction:
+            st.info("💡 You can extract financial statements directly from PDFs or download them for later use.")
+        else:
+            st.info("💡 Download annual reports for your records.")
+
+        # Use text extraction by default (no user selection)
+        extraction_method = "Text (PDFPlumber)"
+
+        # Action buttons for each report
+        for idx, report in enumerate(st.session_state.hkex_reports):
+            report_url = report.get('url', '')
+            report_title = report.get('title', 'N/A')
+            fiscal_year = report.get('fiscalYear', 'N/A')
+
+            with st.expander(f"📑 {idx + 1}. {report_title} (FY {fiscal_year})", expanded=False):
+                st.caption(f"**Filename:** {report.get('filename', 'N/A')}")
+                st.markdown("")
+
+                # Create columns for action buttons
+                if show_extraction:
+                    col1, col2, col3 = st.columns(3)
+                else:
+                    col1, col2 = st.columns(2)
+
+                with col1:
+                    # View button
+                    if report_url:
+                        st.link_button("👁️ View", report_url, use_container_width=True)
+
+                with col2:
+                                            # Download button
+                    if st.button("⬇️ Download", key=f"download_btn_{idx}", use_container_width=True):
+                        with st.spinner(f"Downloading..."):
+                            from pathlib import Path as PathLib
+                            _HKEX_CFG = _get_section("HKEX")
+                            download_dir = PathLib(_HKEX_CFG.get("download_dir", "hkex_pdfs"))
+                            company_dir = download_dir / company.get('name', 'unknown').replace(' ', '_')
+
+                            file_path = download_hkex_report(
+                                report.get('url'),
+                                report.get('filename'),
+                                company_dir
+                            )
+
+                        if file_path:
+                            st.success(f"✅ Downloaded to: {file_path}")
+                            with open(file_path, 'rb') as f:
+                                st.download_button(
+                                    label="💾 Save to Computer",
+                                    data=f.read(),
+                                    file_name=report.get('filename'),
+                                    mime="application/pdf",
+                                    key=f"save_{idx}",
+                                    use_container_width=True
+                                )
+                        else:
+                            st.error("❌ Download failed")
+
+                # Extract section (only for APAC region)
+                if show_extraction:
+                    with col3:
+                        # Statement selection checkboxes - directly above Extract button
+                        st.markdown("<p style='font-size:0.85rem;font-weight:600;margin-bottom:0.25rem;'>Select statements:</p>", unsafe_allow_html=True)
+                        extract_income = st.checkbox("Income Statement", value=True, key=f"cb_income_{idx}")
+                        extract_balance = st.checkbox("Balance Sheet", value=True, key=f"cb_balance_{idx}")
+                        extract_cashflow = st.checkbox("Cash Flow", value=True, key=f"cb_cashflow_{idx}")
+
+                        # Add force re-extract checkbox
+                        force_reextract = st.checkbox("🔄 Force re-extract (ignore cache)", value=False, key=f"cb_force_{idx}", help="Clear cached results and run fresh extraction")
+
+                        selected_types = (
+                            (["income_statement"] if extract_income else []) +
+                            (["balance_sheet"] if extract_balance else []) +
+                            (["cash_flow"] if extract_cashflow else [])
+                        )
+
+                        st.markdown("")
+                        extract_disabled = not selected_types
+                        if extract_disabled:
+                            st.caption("⚠️ Select at least one")
+
+                        if st.button("🔬 Extract", key=f"extract_btn_{idx}", use_container_width=True, type="primary", disabled=extract_disabled):
+                            # Clear cached results if force re-extract is checked
+                            if force_reextract:
+                                st.session_state.hkex_extraction_results = None
+                                st.session_state.hkex_extraction_report_title = None
+                                print("\n" + "!"*80)
+                                print("FORCE RE-EXTRACT: Cleared cached extraction results")
+                                print("!"*80 + "\n")
+                                                                                            # Download PDF first
+                            with st.spinner(f"Downloading PDF for extraction..."):
+                                from pathlib import Path as PathLib
+                                _HKEX_CFG = _get_section("HKEX")
+                                download_dir = PathLib(_HKEX_CFG.get("download_dir", "hkex_pdfs"))
+                                company_dir = download_dir / company.get('name', 'unknown').replace(' ', '_')
+
+                                file_path = download_hkex_report(
+                                    report.get('url'),
+                                    report.get('filename'),
+                                    company_dir
+                                )
+
+                            if file_path:
+                                # Read PDF bytes
+                                with open(file_path, 'rb') as f:
+                                    pdf_bytes = f.read()
+
+                                # Store in session state for extraction
+                                st.session_state.uploaded_pdf_bytes = pdf_bytes
+                                st.session_state.pdf_target_year = fiscal_year if fiscal_year != 'N/A' else datetime.now().year
+
+                                # Run extraction
+                                import tempfile
+                                import contextlib
+                                try:
+                                    import fitz
+                                except ImportError:
+                                    st.error("PyMuPDF not installed. Run: pip install PyMuPDF")
+                                    continue
+
+                                try:
+                                    from src.extraction.page_validator import find_correct_page
+                                    from src.extraction.extractor import extract_table, extract_table_from_image, extract_table_with_vision_fallback
+                                    from src.extraction.llm_client import get_token_usage, reset_token_usage
+                                    from src.extraction.extraction_config import STATEMENT_LABELS
+                                    from src.extraction.scanner import build_manual_candidate
+                                except ImportError as e:
+                                    st.error(f"PDF extraction modules not available: {e}")
+                                    continue
+
+                                                                    # Reset token usage
+                                reset_token_usage()
+                                _new_results = {}
+                                _manual_needed = []  # Track statements needing manual page input
+
+                                with tempfile.TemporaryDirectory() as _tmpdir:
+                                    _pdf_path = os.path.join(_tmpdir, report.get('filename', 'report.pdf'))
+                                    with open(_pdf_path, "wb") as _f:
+                                        _f.write(pdf_bytes)
+
+                                    for _stype in selected_types:
+                                        _stype_result = None
+                                        statement_label = STATEMENT_LABELS.get(_stype, _stype)
+
+                                        with st.expander(f"Extraction Log — {statement_label}", expanded=True):
+                                            _log_placeholder = st.empty()
+                                            _token_placeholder = st.empty()
+                                            _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
+
+                                            try:
+                                                # Find correct page with detailed logging
+                                                with contextlib.redirect_stdout(_logger):
+                                                    _page = find_correct_page(_pdf_path, _stype)
+
+                                                if not _page:
+                                                    st.warning(f"Could not locate **{statement_label}** automatically. Manual page input required.")
+                                                    _manual_needed.append(_stype)
+                                                else:
+                                                    # Extract table with detailed logging (auto-falls back to vision for garbled PDFs)
+                                                    with contextlib.redirect_stdout(_logger):
+                                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+
+                                                    if not _table["rows"]:
+                                                        st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
+                                                        _manual_needed.append(_stype)
+                                                    else:
+                                                                                                                                                                                _stype_result = {
+                                                            "page": _page["page_display"],
+                                                            "page_num": _page["page_num"],
+                                                            "all_page_nums": _page.get("all_page_nums", [_page["page_num"]]),
+                                                            "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
+                                                            "rows": _table["rows"],
+                                                            "year_headers": _table.get("year_headers", []),
+                                                            "year_currencies": _table.get("year_currencies", {}),
+                                                            "unit_scale": _table.get("unit_scale"),
+                                                            "year_end_date": _table.get("year_end_date"),
+                                                            "total_rows": _table["total_rows"],
+                                                            "extraction_method": "text",
+                                                            #"company": company.get('name', 'Unknown'),
+                                                            "company": bref_company_name if 'bref_company_name' in locals() else company.get('name', 'Unknown'),
+                                                            "target_year": bref_target_year if 'bref_target_year' in locals() else (fiscal_year if fiscal_year != 'N/A' else datetime.now().year),
+                                                            "statement": _stype,
+                                                            #"target_year": fiscal_year if fiscal_year != 'N/A' else datetime.now().year,
+                                                        }
+                                                    st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}")
+
+                                            except Exception as _e:
+                                                st.warning(f"Extraction failed for **{statement_label}**: {_e}")
+                                                import traceback
+                                                _logger.write(traceback.format_exc())
+
+                                        if _stype_result:
+                                            _new_results[_stype] = _stype_result
+
+                                if _manual_needed:
+                                    st.markdown("---")
+                                    st.markdown("### 📝 Manual Page Input Required")
+                                    st.warning(f"Could not automatically locate {len(_manual_needed)} statement(s). Please enter page numbers manually.")
+                                    _manual_pages = {}
+                                    cols = st.columns(len(_manual_needed))
+                                    for col, _stype in zip(cols, _manual_needed):
+                                        with col:
+                                            statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                            _manual_pages[_stype] = st.number_input(
+                                                statement_label,
+                                                min_value=1,
+                                                step=1,
+                                                key=f"manual_page_{idx}_{_stype}",
+                                                help="Enter the page number where this statement starts"
+                                            )
+
+                                    if st.button("🔬 Extract from Manual Pages", key=f"manual_extract_{idx}", type="primary"):
+                                        for _stype, page_num_1based in _manual_pages.items():
+                                            statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                            with st.expander(f"Manual Extraction — {statement_label}", expanded=True):
+                                                _log_placeholder = st.empty()
+                                                _token_placeholder = st.empty()
+                                                _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
+
+                                                try:
+                                                    with contextlib.redirect_stdout(_logger):
+                                                        _page = build_manual_candidate(_pdf_path, int(page_num_1based) - 1, _stype)
+
+                                                    if not _page:
+                                                        st.warning(f"Page {page_num_1based} could not be read.")
+                                                        continue
+
+                                                    with contextlib.redirect_stdout(_logger):
+                                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+
+                                                    if not _table["rows"]:
+                                                        st.warning(f"No data extracted from page {page_num_1based}.")
+                                                        continue
+
+                                                    _used_vision = _page.get("text_garbled", False)
+                                                    _all_pnums = _page.get("all_page_nums", [_page["page_num"]])
+                                                    _new_results[_stype] = {
+                                                        "page": _page["page_display"],
+                                                        "page_num": _page["page_num"],
+                                                        "all_page_nums": _all_pnums,
+                                                        "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
+                                                        "rows": _table["rows"],
+                                                        "year_headers": _table.get("year_headers", []),
+                                                        "year_currencies": _table.get("year_currencies", {}),
+                                                        "unit_scale": _table.get("unit_scale"),
+                                                        "year_end_date": _table.get("year_end_date"),
+                                                        "total_rows": _table["total_rows"],
+                                                        "extraction_method": "vision" if _used_vision else "text",
+                                                        "company": manual_bref_company_name if 'manual_bref_company_name' in locals() else company.get('name', 'Unknown'),
+                                                        "target_year": manual_bref_target_year if 'manual_bref_target_year' in locals() else manual_year,
+                                                        "statement": _stype,
+                                                    }
+                                                    st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
+
+                                                except Exception as _e:
+                                                        st.warning(f"Extraction failed: {_e}")
+                                                        import traceback
+                                                        _logger.write(traceback.format_exc())
+
+                                        if _new_results:
+                                            st.session_state.hkex_extraction_results = _new_results
+                                            st.session_state.hkex_extraction_report_title = report_title
+                                            st.session_state.uploaded_pdf_bytes = pdf_bytes
+                                            for _k in list(st.session_state.keys()):
+                                                if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
+                                                    del st.session_state[_k]
+                                            st.success(f"✅ Manual extraction complete! {len(_new_results)} statement(s) extracted.")
+                                            st.rerun()
+
+                                # Store results in session state to display outside the table
+                                if _new_results:
+                                    st.session_state.hkex_extraction_results = _new_results
+                                    st.session_state.hkex_extraction_report_title = report_title
+                                    st.session_state.uploaded_pdf_bytes = pdf_bytes
+                                    for _k in list(st.session_state.keys()):
+                                        if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
+                                            del st.session_state[_k]
+                                    st.success(f"✅ Extraction complete! {len(_new_results)} statement(s) extracted. Scroll down to view results.")
+                                    st.rerun()
+                                else:
+                                    st.error("No statements could be extracted.")
+                            else:
+                                st.error("❌ Failed to download PDF for extraction")
+
+                    st.markdown("---")
+
+    elif st.session_state.hkex_reports_loaded:
+        st.info("ℹ️ No annual reports found for the selected company and date range.")
+        st.markdown("**Suggestions:**")
+        st.markdown("- Try expanding the date range")
+        st.markdown("- Verify the company has filed annual reports with HKEX")
+        st.markdown("- Check if the stock code is correct")
+
+            # Display extraction results (if available) - OUTSIDE the reports table
+    # IMPORTANT: Always display results if they exist, regardless of other conditions
+    if st.session_state.get("hkex_extraction_results") and PDF_EXTRACTION_AVAILABLE:
+        st.markdown("---")
+        st.header(f"Extraction Results for {st.session_state.get('hkex_extraction_report_title', 'Annual Report')}")
+
+        try:
+            from src.extraction.extraction_config import STATEMENT_LABELS
+
+            results = st.session_state.hkex_extraction_results
+            statement_types = list(results.keys())
+
+            # Use tabs for multiple statements
+            tab_labels = [STATEMENT_LABELS.get(st_type, st_type) for st_type in statement_types]
+            tabs = st.tabs(tab_labels)
+
+            for tab, statement_type in zip(tabs, statement_types):
+                with tab:
+                    render_pdf_panel(statement_type, results[statement_type], key_prefix="hkex")
+
+            # Download button for extracted data
+            st.markdown("")
+            create_pdf_excel(results, results[list(results.keys())[0]].get("target_year", datetime.now().year))
+
+            # Clear results button
+            if st.button("❌ Clear Results", key="clear_hkex_extraction"):
+                st.session_state.hkex_extraction_results = None
+                st.session_state.hkex_extraction_report_title = None
+                st.session_state.uploaded_pdf_bytes = None
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"Error displaying results: {e}")
+
+            st.markdown("---")
+
+            # Display MANUAL upload extraction results (if available) - SEPARATE from HKEX results
+    # This section displays results from manually uploaded PDFs
+            # STEP 4: Manual Upload Option (always available for APAC region)
+    if PDF_EXTRACTION_AVAILABLE and st.session_state.selected_region == "APAC":
+        st.markdown("---")
+        st.subheader("Or Upload Annual Report Manually")
+        st.caption("If you have a PDF file saved locally, you can upload it here for extraction.")
+
+        manual_pdf = st.file_uploader(
+        "Upload annual report PDF",
+        type=["pdf"],
+        key="hkex_manual_pdf_upload",
+        label_visibility="collapsed"
+    )
+        if manual_pdf:
+            st.caption(f"📎 {manual_pdf.name}  —  {manual_pdf.size / 1024:.0f} KB")
+
+            if manual_pdf:
+                # Statement selection checkboxes
+                st.markdown("**Select statements to extract:**")
+                col_cb1, col_cb2, col_cb3 = st.columns(3)
+            with col_cb1:
+                manual_extract_income = st.checkbox("Income Statement", value=True, key="manual_cb_income")
+            with col_cb2:
+                manual_extract_balance = st.checkbox("Balance Sheet", value=True, key="manual_cb_balance")
+            with col_cb3:
+                manual_extract_cashflow = st.checkbox("Cash Flow", value=True, key="manual_cb_cashflow")
+
+            manual_selected_types = (
+                (["income_statement"] if manual_extract_income else []) +
+                (["balance_sheet"] if manual_extract_balance else []) +
+                (["cash_flow"] if manual_extract_cashflow else [])
+            )
+
+            extract_disabled = not manual_selected_types
+
+            # Manual page specification option - ADDED FOR INDONESIAN PDFs
+            manual_page_income = 0
+            manual_page_balance = 0
+            manual_page_cashflow = 0
+
+            with st.expander("🔧 Or specify pages manually (if automatic detection fails)"):
+                st.warning("**IMPORTANT**: Enter the **PDF viewer page number** (what your PDF reader shows), NOT the document page number printed on the page!")
+                st.caption("Example: If your PDF viewer shows 'Page 302 of 472' and the page has '300' printed at the bottom, enter **302**.")
+
+
+                manual_page_income_str = st.text_input(
+                    "Income Statement page(s) - PDF viewer page number",
+                    value="",
+                    key="manual_upload_page_income",
+                    placeholder="e.g., 302 or 302-303 (PDF viewer shows this)",
+                    help="Enter the page number from your PDF viewer (e.g., 302), NOT the number printed on the page. Supports ranges like 302-303."
+                )
+                manual_page_balance_str = st.text_input(
+                    "Balance Sheet page(s) - PDF viewer page number",
+                    value="",
+                    key="manual_upload_page_balance",
+                    placeholder="e.g., 299 or 299-301 (PDF viewer shows this)",
+                    help="Enter the page number from your PDF viewer (e.g., 299), NOT the number printed on the page. Supports ranges like 299-301."
+                )
+                manual_page_cashflow_str = st.text_input(
+                    "Cash Flow page(s) - PDF viewer page number",
+                    value="",
+                    key="manual_upload_page_cashflow",
+                    placeholder="e.g., 304 or 304-307 (PDF viewer shows this)",
+                    help="Enter the page number from your PDF viewer (e.g., 304), NOT the number printed on the page. Supports ranges like 304-307."
+                )
+
+            # END MANUAL PAGE SPECIFICATION
+            if extract_disabled:
+                st.warning("⚠️ Please select at least one statement type to extract.")
+
+            if st.button("🔬 Extract from Uploaded PDF", type="primary", use_container_width=True, disabled=extract_disabled):
+                                                        # Parse manual page inputs (supports single page or range)
+                def parse_page_input(page_str):
+                    """Parse page input: '300' -> 300, '300-301' -> [300, 301], '' -> None"""
+                    if not page_str or not page_str.strip():
+                        return None
+                    page_str = page_str.strip()
+                    if '-' in page_str:
+                        # Range: "300-301"
+                        try:
+                            start, end = page_str.split('-')
+                            start_page = int(start.strip())
+                            end_page = int(end.strip())
+                            return list(range(start_page, end_page + 1))
+                        except:
+                            st.error(f"Invalid page range: {page_str}. Use format: 300-301")
+                            return None
+                    else:
+                        # Single page: "300"
+                        try:
+                            return int(page_str)
+                        except:
+                            st.error(f"Invalid page number: {page_str}")
+                            return None
+
+                # Capture manual pages at button click time
+                manual_pages_dict = {
+                    "income_statement": parse_page_input(manual_page_income_str),
+                    "balance_sheet": parse_page_input(manual_page_balance_str),
+                    "cash_flow": parse_page_input(manual_page_cashflow_str),
+                }
+
+                # Store PDF bytes
+                st.session_state.uploaded_pdf_bytes = manual_pdf.getvalue()
+                # Try to extract year from filename, otherwise use current year
+                import re
+                year_match = re.search(r'20\d{2}', manual_pdf.name)
+                manual_year = int(year_match.group()) if year_match else datetime.now().year
+                st.session_state.pdf_target_year = manual_year
+
+                # Run extraction (same logic as above)
+                import tempfile
+                import contextlib
+                try:
+                    import fitz
+                except ImportError:
+                    st.error("PyMuPDF not installed. Run: pip install PyMuPDF")
+                    st.stop()
+
+                try:
+                    from src.extraction.page_validator import find_correct_page
+                    from src.extraction.extractor import extract_table, extract_table_from_image, extract_table_with_vision_fallback
+                    from src.extraction.llm_client import get_token_usage, reset_token_usage
+                    from src.extraction.extraction_config import STATEMENT_LABELS
+                except ImportError as e:
+                    st.error(f"PDF extraction modules not available: {e}")
+                    st.stop()
+
+                reset_token_usage()
+                _new_results = {}
+                _manual_needed = []  # Initialize manual_needed list
+
+                with tempfile.TemporaryDirectory() as _tmpdir:
+                    _pdf_path = os.path.join(_tmpdir, manual_pdf.name)
+                    with open(_pdf_path, "wb") as _f:
+                        _f.write(manual_pdf.getvalue())
+
+                    for _stype in manual_selected_types:
+                        _stype_result = None
+                        statement_label = STATEMENT_LABELS.get(_stype, _stype)
+
+                        with st.expander(f"Extraction Log — {statement_label}", expanded=True):
+
+                            _log_placeholder = st.empty()
+                            _token_placeholder = st.empty()
+                            _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
+
+                            try:
+                                # Check if manual page specified for this statement type
+                                manual_page_num = manual_pages_dict.get(_stype)
+
+                                if manual_page_num:
+                                    # Use manual page specification (single page or range)
+                                    from src.extraction.scanner import build_manual_candidate
+                                    import pdfplumber
+
+                                    if isinstance(manual_page_num, list):
+                                        # Page range: [302, 303] - explicitly merge all pages
+                                        _log_placeholder.info(f"✅ Using manually specified pages {manual_page_num[0]}-{manual_page_num[-1]} for {statement_label}")
+                                        print(f"Extracting from page range: {manual_page_num}")
+
+                                        # Build candidate from first page
+                                        with contextlib.redirect_stdout(_logger):
+                                            _page = build_manual_candidate(_pdf_path, manual_page_num[0] - 1, _stype)
+
+                                        if _page and len(manual_page_num) > 1:
+                                            # Explicitly add remaining pages in the range
+                                            if _page.get("text_garbled"):
+                                                for page_idx in range(1, len(manual_page_num)):
+                                                    pdf_page_num = manual_page_num[page_idx] - 1
+                                                    _page["all_page_nums"].append(pdf_page_num)
+                                                    print(f"  Added page {manual_page_num[page_idx]} (garbled — images will be rendered at extraction)")
+                                            else:
+                                                with pdfplumber.open(_pdf_path) as pdf:
+                                                    for page_idx in range(1, len(manual_page_num)):
+                                                        pdf_page_num = manual_page_num[page_idx] - 1  # Convert to 0-based
+                                                        if pdf_page_num < len(pdf.pages):
+                                                            page_text = pdf.pages[pdf_page_num].extract_text() or ""
+                                                            _page["full_text"] += f"\n{page_text}"
+                                                            _page["all_page_nums"].append(pdf_page_num)
+                                                            print(f"  Added page {manual_page_num[page_idx]} to extraction")
+
+                                            print(f"Manual page range {manual_page_num[0]}-{manual_page_num[-1]} specified, extracted pages: {[p+1 for p in _page.get('all_page_nums', [])]}")
+                                    else:
+                                        # Single page: 302
+                                        with contextlib.redirect_stdout(_logger):
+                                            _page = build_manual_candidate(_pdf_path, manual_page_num - 1, _stype)
+                                        if _page:
+                                            _log_placeholder.info(f"✅ Using manually specified page {manual_page_num} for {statement_label}")
+                                            print(f"Manual page {manual_page_num} specified, extracted pages: {[p+1 for p in _page.get('all_page_nums', [])]}")
+                                else:
+                                    # Use automatic detection
+                                    with contextlib.redirect_stdout(_logger):
+                                        _page = find_correct_page(_pdf_path, _stype)
+
+                                if not _page:
+                                    if manual_page_num:
+                                        page_display = f"{manual_page_num[0]}-{manual_page_num[-1]}" if isinstance(manual_page_num, list) else str(manual_page_num)
+                                        st.error(f"Manual page(s) {page_display} specified but could not extract data from **{statement_label}**")
+                                    else:
+                                        st.warning(f"Could not locate **{statement_label}** page — skipped.")
+                                else:
+                                                                            # Extract table with detailed logging
+                                    print(f"Extracting table from {len(_page.get('all_page_nums', []))} page(s): {[p+1 for p in _page.get('all_page_nums', [])]}")
+                                    with contextlib.redirect_stdout(_logger):
+                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+
+                                        if not _table["rows"]:
+                                            st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
+                                            _manual_needed.append(_stype)
+                                        else:
+                                            _used_vision = _page.get("text_garbled", False)
+                                            _stype_result = {
+                                                "page": _page["page_display"],
+                                                "page_num": _page["page_num"],
+                                                "all_page_nums": _page.get("all_page_nums", [_page["page_num"]]),
+                                                "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
+                                                "rows": _table["rows"],
+                                                "year_headers": _table.get("year_headers", []),
+                                                "unit_scale": _table.get("unit_scale"),
+                                                "year_end_date": _table.get("year_end_date"),
+                                                "total_rows": _table["total_rows"],
+                                                "extraction_method": "vision" if _used_vision else "text",
+                                                "company": company.get('name', 'Unknown'),
+                                                "statement": _stype,
+                                                "target_year": manual_year,
+                                            }
+                                            st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
+
+                            except Exception as _e:
+                                st.warning(f"Extraction failed for **{statement_label}**: {_e}")
+                                import traceback
+                                _logger.write(traceback.format_exc())
+
+                        if _stype_result:
+                            _new_results[_stype] = _stype_result
+
+                    if _manual_needed:
+                        st.markdown("---")
+                        st.markdown("### 📝 Manual Page Input Required")
+                        st.warning(f"Could not automatically locate {len(_manual_needed)} statement(s). Please enter page numbers manually.")
+                        _manual_pages = {}
+                        cols = st.columns(len(_manual_needed))
+                        for col, _stype in zip(cols, _manual_needed):
+                            with col:
+                                statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                _manual_pages[_stype] = st.number_input(
+                                    statement_label,
+                                    min_value=1,
+                                    step=1,
+                                    key=f"manual_page_upload_{_stype}",
+                                    help="Enter the page number where this statement starts"
+                                )
+
+                        if st.button("🔬 Extract from Manual Pages", key=f"manual_extract_upload", type="primary"):
+                            for _stype, page_num_1based in _manual_pages.items():
+                                statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                with st.expander(f"Manual Extraction — {statement_label}", expanded=True):
+                                    _log_placeholder = st.empty()
+                                    _token_placeholder = st.empty()
+                                    _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
+
+                                    try:
+                                        with contextlib.redirect_stdout(_logger):
+                                            _page = build_manual_candidate(_pdf_path, int(page_num_1based) - 1, _stype)
+
+                                        if not _page:
+                                            st.warning(f"Page {page_num_1based} could not be read.")
+                                            continue
+
+                                        with contextlib.redirect_stdout(_logger):
+                                            _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+
+                                        if not _table["rows"]:
+                                            st.warning(f"No data extracted from page {page_num_1based}.")
+                                            continue
+
+                                        _used_vision = _page.get("text_garbled", False)
+                                        _all_pnums = _page.get("all_page_nums", [_page["page_num"]])
+                                        _new_results[_stype] = {
+                                            "page": _page["page_display"],
+                                            "page_num": _page["page_num"],
+                                            "all_page_nums": _all_pnums,
+                                            "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
+                                            "rows": _table["rows"],
+                                            "year_headers": _table.get("year_headers", []),
+                                            "year_currencies": _table.get("year_currencies", {}),
+                                            "unit_scale": _table.get("unit_scale"),
+                                            "year_end_date": _table.get("year_end_date"),
+                                            "total_rows": _table["total_rows"],
+                                            "extraction_method": "vision" if _used_vision else "text",
+                                            "company": company.get('name', 'Unknown'),
+                                            "statement": _stype,
+                                            "target_year": fiscal_year if fiscal_year != 'N/A' else datetime.now().year,
+                                        }
+                                        st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
+
+                                    except Exception as _e:
+                                        st.warning(f"Extraction failed: {_e}")
+                                        import traceback
+                                        _logger.write(traceback.format_exc())
+
+                                if _new_results:
+                                    st.session_state.hkex_extraction_results = _new_results
+                                    st.session_state.hkex_extraction_report_title = report_title
+                                    st.session_state.uploaded_pdf_bytes = pdf_bytes
+                                    for _k in list(st.session_state.keys()):
+                                        if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
+                                            del st.session_state[_k]
+                                    st.success(f"✅ Manual extraction complete! {len(_new_results)} statement(s) extracted.")
+                                    st.rerun()
+
+
+                                                                    # Display results inline with side-by-side view (moved outside loop)
+                    if _new_results:
+                        # CRITICAL FIX: Store results in SEPARATE session state variable for manual uploads
+                        # This prevents key conflicts with HKEX extraction results
+                        st.session_state.manual_extraction_results = _new_results
+                        st.session_state.manual_extraction_report_title = manual_pdf.name
+                        st.session_state.uploaded_pdf_bytes = manual_pdf.getvalue()
+
+                        st.success(f"✅ Extraction complete! {len(_new_results)} statement(s) extracted. Scroll down to view results.")
+                        st.rerun()
+                    else:
+                        st.error("No statements could be extracted.")
+
+    # Display MANUAL upload extraction results BELOW the upload form
+    # This section displays results from manually uploaded PDFs
+    if st.session_state.get("manual_extraction_results") and PDF_EXTRACTION_AVAILABLE:
+        st.markdown("---")
+        st.header(f"Extraction Results from {st.session_state.get('manual_extraction_report_title', 'Uploaded PDF')}")
+
+        try:
+            from src.extraction.extraction_config import STATEMENT_LABELS
+
+            results = st.session_state.manual_extraction_results
+            statement_types = list(results.keys())
+
+            # Use tabs for multiple statements
+            tab_labels = [STATEMENT_LABELS.get(st_type, st_type) for st_type in statement_types]
+            tabs = st.tabs(tab_labels)
+
+            for tab, statement_type in zip(tabs, statement_types):
+                with tab:
+                    render_pdf_panel(statement_type, results[statement_type], key_prefix="manual")
+
+            # Download button for extracted data
+            st.markdown("")
+            create_pdf_excel(results, results[list(results.keys())[0]].get("target_year", datetime.now().year))
+
+            # Clear results button
+            if st.button("❌ Clear Results", key="clear_manual_extraction"):
+                st.session_state.manual_extraction_results = None
+                st.session_state.manual_extraction_report_title = None
+                st.session_state.uploaded_pdf_bytes = None
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"Error displaying results: {e}")
+
+        st.markdown("---")

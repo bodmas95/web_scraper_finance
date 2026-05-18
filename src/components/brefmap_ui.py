@@ -1,0 +1,835 @@
+"""
+PDF rendering, BREF mapping UI helpers.
+Shared by HKEX extraction and manual PDF upload flows.
+"""
+
+import io
+import base64
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+try:
+    from src.extraction.extraction_config import STATEMENT_LABELS
+except ImportError:
+    STATEMENT_LABELS = {
+        "income_statement": "Income Statement",
+        "balance_sheet": "Balance Sheet",
+        "cash_flow": "Cash Flow Statement",
+    }
+
+try:
+    from src.mapping import (
+        map_all_fields,
+        validate_mappings,
+        FIELD_MAPPINGS,
+        get_field_mappings,
+        load_bref_fields,
+        create_clean_output_excel,
+        STATEMENT_SHEET_MAP,
+    )
+    BREF_MAPPING_AVAILABLE = True
+except ImportError:
+    BREF_MAPPING_AVAILABLE = False
+
+
+# ==============================================================================
+# UTILITY CLASSES & FUNCTIONS
+# ==============================================================================
+
+def stitch_images_vertical(image_bytes_list: list[bytes]) -> bytes:
+    from PIL import Image
+    images = [Image.open(io.BytesIO(b)) for b in image_bytes_list]
+    max_width = max(img.width for img in images)
+    total_height = sum(img.height for img in images)
+    canvas = Image.new("RGB", (max_width, total_height), "white")
+    y = 0
+    for img in images:
+        canvas.paste(img, (0, y))
+        y += img.height
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+class PDFLiveLogger:
+    """Streams stdout to a Streamlit placeholder in real time."""
+
+    def __init__(self, log_placeholder, token_placeholder=None):
+        self._log = log_placeholder
+        self._tokens = token_placeholder
+        self._buf = ""
+
+    def write(self, text):
+        self._buf += text
+        self._log.code(self._buf, language=None)
+        if self._tokens:
+            try:
+                from src.extraction.llm_client import get_token_usage
+                _tu = get_token_usage()
+                self._tokens.markdown(
+                    f"Input: **{_tu['input']:,}**  \n"
+                    f"Output: **{_tu['output']:,}**  \n"
+                    f"Total: **{_tu['total']:,}**"
+                )
+            except:
+                pass
+        return len(text)
+
+    def flush(self):
+        pass
+
+
+class BREFLiveLogger:
+    """Streams stdout to a Streamlit placeholder in real time."""
+    def __init__(self, placeholder):
+        self._placeholder = placeholder
+        self._buf = ""
+
+    def write(self, text):
+        self._buf += text
+        self._placeholder.code(self._buf, language=None)
+        return len(text)
+
+    def flush(self):
+        pass
+
+
+@st.dialog("Full View", width="large")
+def zoom_dialog(pdf_bytes, page_nums, crop_bbox):
+    """Render zoomed PDF page in a modal dialog."""
+    try:
+        import fitz
+
+        _doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        _hi_imgs = []
+        for _pnum in page_nums:
+            _fp = _doc[_pnum]
+            if crop_bbox and _fp.rect.width > _fp.rect.height:
+                _px = _fp.get_pixmap(dpi=250, clip=fitz.Rect(*crop_bbox))
+            else:
+                _px = _fp.get_pixmap(dpi=250)
+            _hi_imgs.append(_px.tobytes("png"))
+        _doc.close()
+
+        _hi_bytes = stitch_images_vertical(_hi_imgs) if len(_hi_imgs) > 1 else _hi_imgs[0]
+        st.image(_hi_bytes, use_container_width=True)
+    except Exception as e:
+        st.error(f"Could not render zoom view: {e}")
+
+
+def load_nextera4_template():
+    try:
+        template_path = Path("NEXTERA 4.xlsx")
+        if template_path.exists():
+            return template_path.read_bytes()
+        template_path = Path("bref-populator-latest/NEXTERA 4.xlsx")
+        if template_path.exists():
+            return template_path.read_bytes()
+    except Exception as e:
+        print(f"Error loading NEXTERA 4 template: {e}")
+    return None
+
+
+def find_year_column(worksheet, year: int) -> int:
+    for row_idx in range(1, 6):
+        for col_idx in range(1, 30):
+            cell_value = worksheet.cell(row=row_idx, column=col_idx).value
+            if cell_value and str(year) in str(cell_value):
+                return col_idx
+    return None
+
+
+# ==============================================================================
+# TRANSLATION HELPER
+# ==============================================================================
+
+def _translate_labels_to_english(rows: list) -> list:
+    """Translate non-English labels and parent fields to English using LLM."""
+    import json
+    from src.extraction.llm_client import get_client
+    from src.extraction.extraction_config import LLM_MODEL
+
+    texts = set()
+    for row in rows:
+        if row.get("label"):
+            texts.add(row["label"])
+        if row.get("parent"):
+            for part in row["parent"].split(" > "):
+                stripped = part.strip()
+                if stripped:
+                    texts.add(stripped)
+
+    if not texts:
+        return rows
+
+    prompt = (
+        "Translate the following financial statement labels to English.\n"
+        "If a label is already in English, return it unchanged.\n"
+        "Keep financial terminology precise (e.g. Revenue, Expenses, Net Income).\n"
+        "Return a JSON object mapping each original label to its English translation.\n\n"
+        f"Labels:\n{json.dumps(sorted(texts), ensure_ascii=False)}\n\n"
+        'Respond with valid JSON only: {"original": "english", ...}'
+    )
+
+    client = get_client()
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+
+    translations = json.loads(response.choices[0].message.content)
+
+    translated_rows = []
+    for row in rows:
+        new_row = dict(row)
+        if new_row.get("label") and new_row["label"] in translations:
+            new_row["label"] = translations[new_row["label"]]
+        if new_row.get("parent"):
+            parts = [p.strip() for p in new_row["parent"].split(" > ")]
+            translated_parts = [translations.get(p, p) for p in parts]
+            new_row["parent"] = " > ".join(translated_parts)
+        translated_rows.append(new_row)
+
+    return translated_rows
+
+
+# ==============================================================================
+# PDF EXCEL DOWNLOAD
+# ==============================================================================
+
+def create_pdf_excel(results: dict, target_year: int):
+    """Create centered download button for extracted data."""
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for statement_type, result in results.items():
+            sheet_name = STATEMENT_LABELS.get(statement_type, statement_type)[:31]
+            rows = result.get("rows", [])
+            if rows:
+                df = pd.DataFrame(rows)
+                cols = list(df.columns)
+                ordered_cols = []
+                if "parent" in cols:
+                    ordered_cols.append("parent")
+                if "label" in cols:
+                    ordered_cols.append("label")
+                ordered_cols.extend([c for c in cols if c not in ["parent", "label"]])
+                df = df[ordered_cols]
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    output.seek(0)
+    excel_bytes = output.getvalue()
+
+    _dl_l, _dl_c, _dl_r = st.columns([2, 1, 2])
+    with _dl_c:
+        st.download_button(
+            label="Download Extracted Data",
+            data=excel_bytes,
+            file_name=f"extracted_{target_year}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+            key="dl_extracted_all",
+        )
+
+
+# ==============================================================================
+# HUMAN REVIEW UI
+# ==============================================================================
+
+def render_human_review_ui(fields: list, mapping_key: str, target_year: int):
+    low_conf_fields = [
+        (idx, f) for idx, f in enumerate(fields)
+        if f.get('final_confidence', f.get('mapping_confidence')) == 'low'
+    ]
+
+    if not low_conf_fields:
+        st.success("✅ All fields mapped with high confidence - no review needed!")
+        return
+
+    st.warning(f"⚠️ {len(low_conf_fields)} field(s) need human review")
+
+    with st.expander("🔍 Review Low Confidence Mappings", expanded=True):
+        for idx, field in low_conf_fields:
+            st.markdown(f"**{field.get('label')}**")
+
+            col1, col2 = st.columns([3, 2])
+            with col1:
+                st.text_input(
+                    "Matched Label",
+                    value=field.get('matched_label', ''),
+                    key=f"{mapping_key}_matched_{idx}",
+                    help="The label from the extracted data"
+                )
+            with col2:
+                new_value = st.number_input(
+                    f"Value ({target_year})",
+                    value=float(field.get('target_value') or 0),
+                    key=f"{mapping_key}_value_{idx}",
+                    format="%.2f"
+                )
+
+            if st.button("✓ Confirm", key=f"{mapping_key}_confirm_{idx}", use_container_width=True, type="primary"):
+                st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['target_value'] = new_value
+                st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['matched_label'] = st.session_state[f"{mapping_key}_matched_{idx}"]
+                st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['final_confidence'] = 'high'
+                st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['validation_status'] = 'human_verified'
+                st.success(f"✅ Updated {field.get('label')}")
+                st.rerun()
+
+            st.caption(f"Reason: {field.get('reason', 'N/A')}")
+            st.markdown("---")
+
+
+# ==============================================================================
+# MAIN PDF PANEL RENDERER
+# ==============================================================================
+
+def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
+    """Render extraction panel for one statement (table + page image + BREF mapping)."""
+    _all_pnums = result.get("all_page_nums", [result.get("page_num", 0)])
+    _page_label = ", ".join(str(p + 1) for p in _all_pnums)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Page Located", _page_label)
+    col2.metric("Rows Extracted", result.get("total_rows", 0))
+    years = result.get("year_headers", [])
+    col3.metric("Year Columns", ", ".join(years) if years else "—")
+
+    col_table, col_page = st.columns(2)
+
+    # Right column: Source page image with zoom
+    with col_page:
+        _spacer, _inner = st.columns([1, 12])
+        with _inner:
+            _hdr_col, _btn_col = st.columns([5, 1])
+            with _hdr_col:
+                _src_label = f"Source Page {_page_label}" if len(_all_pnums) == 1 else f"Source Pages {_page_label}"
+                st.markdown(f"<p class='centered-subheader'>{_src_label}</p>", unsafe_allow_html=True)
+
+            try:
+                import fitz
+                if st.session_state.uploaded_pdf_bytes:
+                    _crop_bbox = result.get("landscape_crop_bbox")
+                    _pdf_doc = fitz.open(stream=st.session_state.uploaded_pdf_bytes, filetype="pdf")
+                    _page_imgs = []
+
+                    for _pnum in _all_pnums:
+                        _fp = _pdf_doc[_pnum]
+                        if _crop_bbox and _fp.rect.width > _fp.rect.height:
+                            _px = _fp.get_pixmap(dpi=150, clip=fitz.Rect(*_crop_bbox))
+                        else:
+                            _px = _fp.get_pixmap(dpi=150)
+                        _page_imgs.append(_px.tobytes("png"))
+                    _pdf_doc.close()
+
+                    _img_bytes_display = stitch_images_vertical(_page_imgs) if len(_page_imgs) > 1 else _page_imgs[0]
+
+                    with _btn_col:
+                        zoom_btn_key = f"zoom_btn_{key_prefix}_{statement_type}"
+                        if st.button("🔍", key=zoom_btn_key, help="Zoom in", use_container_width=True):
+                            zoom_dialog(
+                                st.session_state.uploaded_pdf_bytes,
+                                _all_pnums,
+                                _crop_bbox
+                            )
+
+                    _b64 = base64.b64encode(_img_bytes_display).decode()
+                    st.markdown(
+                        f'<div style="overflow-y: auto; max-height: 800px; border: 1px solid #e5e5e5; border-radius: 4px;">'
+                        f'<img src="data:image/png;base64,{_b64}" style="width: 100%;" />'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            except Exception as e:
+                st.warning(f"Could not render page: {e}")
+
+    # Left column: Extracted table with formatting
+    with col_table:
+        rows = result.get("rows", [])
+        if rows:
+            df = pd.DataFrame(rows)
+
+            cols = list(df.columns)
+            ordered_cols = []
+            if "parent" in cols:
+                ordered_cols.append("parent")
+            if "label" in cols:
+                ordered_cols.append("label")
+            ordered_cols.extend([c for c in cols if c not in ["parent", "label"]])
+            df = df[ordered_cols]
+
+            _year_headers = result.get("year_headers", [])
+            _year_end_date = result.get("year_end_date")
+            _year_currencies = result.get("year_currencies", {})
+            _unit_scale = result.get("unit_scale")
+
+            _tbl_hdr_col, _currency_col, _save_btn_col = st.columns([3, 2, 1])
+            with _tbl_hdr_col:
+                _method = result.get("extraction_method", "text")
+                st.markdown(f"<p class='centered-subheader'>Extracted Table ({_method})</p>", unsafe_allow_html=True)
+
+            _needs_currency_input = not _year_currencies or not any(_year_currencies.values())
+
+            with _currency_col:
+                if _needs_currency_input:
+                    manual_currency = st.text_input(
+                        "Currency (optional)",
+                        placeholder="e.g., USD, RMB",
+                        key=f"{key_prefix}_{statement_type}_currency",
+                        help="Enter currency if not auto-detected",
+                        label_visibility="visible"
+                    )
+                    if manual_currency:
+                        _year_currencies = {yr: manual_currency.upper() for yr in _year_headers}
+                else:
+                    st.markdown("<div style='padding-top: 8px;'></div>", unsafe_allow_html=True)
+                    st.caption(f"Currency: {', '.join(set(_year_currencies.values()))}")
+
+            _rename = {}
+            for yr in _year_headers:
+                parts = []
+                if _year_end_date:
+                    _month_abbr = {
+                        "January": "Jan", "February": "Feb", "March": "Mar", "April": "Apr",
+                        "May": "May", "June": "Jun", "July": "Jul", "August": "Aug",
+                        "September": "Sep", "October": "Oct", "November": "Nov", "December": "Dec",
+                    }
+                    tokens = _year_end_date.split()
+                    if tokens and tokens[0] in _month_abbr:
+                        tokens[0] = _month_abbr[tokens[0]]
+                    parts.append(" ".join(tokens))
+
+                base_year = yr.split('_')[0] if '_' in yr else yr
+                parts.append(base_year)
+
+                _currency = None
+                if _year_currencies:
+                    _currency = _year_currencies.get(yr)
+                    if not _currency:
+                        _currency = _year_currencies.get(base_year)
+
+                if _currency and _unit_scale:
+                    parts.append(f"{_currency} ({_unit_scale})")
+                elif _currency:
+                    parts.append(_currency)
+                elif _unit_scale:
+                    parts.append(f"({_unit_scale})")
+                _rename[yr] = " ".join(parts)
+
+            # Translate to English button
+            _translated_flag = f"{key_prefix}_translated_{statement_type}"
+            _already_translated = st.session_state.get(_translated_flag, False)
+            _tr_spacer, _tr_btn = st.columns([4, 2])
+            with _tr_btn:
+                if st.button(
+                    "Translate Labels to English" if not _already_translated else "Already Translated",
+                    key=f"{key_prefix}_translate_{statement_type}" if key_prefix else f"translate_{statement_type}",
+                    use_container_width=True,
+                    type="secondary",
+                    disabled=_already_translated,
+                ):
+                    with st.spinner("Translating labels..."):
+                        translated_rows = _translate_labels_to_english(rows)
+                    result["rows"] = translated_rows
+                    st.session_state[_translated_flag] = True
+                    st.rerun()
+
+            _display_df = df.rename(columns=_rename).copy()
+
+            for _ycol in _rename.values():
+                if _ycol in _display_df.columns:
+                    _display_df[_ycol] = _display_df[_ycol].apply(lambda x: f"{float(x):,.0f}" if x is not None and str(x).replace('.','').replace('-','').isdigit() else "")
+
+            edited_df = st.data_editor(
+                _display_df,
+                use_container_width=True,
+                hide_index=True,
+                height=600,
+                key=f"{key_prefix}_extracted_table_editor_{statement_type}" if key_prefix else f"extracted_table_editor_{statement_type}",
+            )
+
+            with _save_btn_col:
+                if _needs_currency_input:
+                    st.markdown("<label style='font-size:14px;visibility:hidden;display:block;margin-bottom:2px;'>&nbsp;</label>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<div style='padding-top: 8px;'></div>", unsafe_allow_html=True)
+                if st.button("Save", key=f"{key_prefix}_save_edits_{statement_type}" if key_prefix else f"save_edits_{statement_type}", use_container_width=True):
+                    _reverse = {v: k for k, v in _rename.items()}
+                    _save_df = edited_df.rename(columns=_reverse).copy()
+                    for _yr in _year_headers:
+                        if _yr in _save_df.columns:
+                            _save_df[_yr] = pd.to_numeric(
+                                _save_df[_yr].astype(str).str.replace(",", ""), errors="coerce"
+                            )
+
+                    if key_prefix == "hkex" and st.session_state.hkex_extraction_results:
+                        st.session_state.hkex_extraction_results[statement_type]["rows"] = _save_df.to_dict("records")
+                    elif key_prefix == "manual":
+                        pass
+
+                    st.toast("Edits saved.")
+        else:
+            st.info("No data extracted")
+
+    # ==================================================================
+    # BREF MAPPING SECTION
+    # ==================================================================
+    if BREF_MAPPING_AVAILABLE and rows:
+        st.markdown("---")
+        st.header("🎯 BREF Mapping")
+
+        st.subheader("Step 1: Configuration")
+
+        col_name, col_year, col_region, col_template = st.columns([3, 1, 1, 2])
+
+        with col_name:
+            bref_company_name = st.text_input(
+                "Company Name",
+                value="",
+                placeholder="Enter Company Name",
+                key=f"{key_prefix}_bref_company_{statement_type}",
+                help="Enter company name for BREF mapping"
+            )
+
+        with col_year:
+            bref_target_year = st.number_input(
+                "Target Year",
+                min_value=2000,
+                max_value=2030,
+                value=result.get("target_year", datetime.now().year),
+                step=1,
+                key=f"{key_prefix}_bref_year_{statement_type}"
+            )
+
+        with col_region:
+            _app_region = st.session_state.get("selected_region", "")
+            _default_idx = 1 if _app_region == "APAC" else 0
+            bref_region = st.selectbox(
+                "Region",
+                options=["US", "APAC"],
+                index=_default_idx,
+                key=f"{key_prefix}_bref_region_{statement_type}",
+                help="US uses I-prefix codes, APAC uses Q-prefix codes"
+            )
+
+        with col_template:
+            st.markdown("**Download Template**")
+            template_bytes = load_nextera4_template()
+            if template_bytes:
+                st.download_button(
+                    "📥 Default Template",
+                    data=template_bytes,
+                    file_name=f"Default_Bref_Tempalte.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"{key_prefix}_dl_template_{statement_type}"
+                )
+            else:
+                st.warning("⚠️ Default Template not found in project root")
+
+        st.markdown("---")
+
+        st.subheader("Step 2: Select Mapping Mode")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Raw Mapping")
+            st.markdown("""
+            - Uses `field_mappings.py`
+            - No Excel template needed
+            - No validation
+            - Faster processing
+            """)
+
+            if st.button("Start Raw Mapping", key=f"{key_prefix}_raw_map_{statement_type}", use_container_width=True, type="secondary"):
+                bref_field_dict = get_field_mappings(bref_region).get(statement_type, {})
+
+                if not bref_field_dict:
+                    st.warning(f"No BREF field mappings defined for {statement_type}")
+                else:
+                    try:
+                        with st.status("🔄 Running raw mapping...", expanded=True) as status:
+                            st.write("📋 Loading BREF field definitions...")
+                            fields = [
+                                {
+                                    "label": label,
+                                    "description": ", ".join(aliases) if isinstance(aliases, list) else aliases,
+                                    "reference_value": None,
+                                }
+                                for label, aliases in bref_field_dict.items()
+                            ]
+                            st.write(f"✅ Loaded {len(fields)} BREF fields")
+                            st.info(f"📊 Extracted {len(rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
+
+                            st.write("🤖 Mapping fields using AI...")
+
+                            with st.expander("📝 Mapping Logs", expanded=True):
+                                mapping_log_placeholder = st.empty()
+                                mapping_logger = BREFLiveLogger(mapping_log_placeholder)
+
+                                import contextlib
+                                with contextlib.redirect_stdout(mapping_logger):
+                                    mapped_fields = map_all_fields(
+                                        fields=fields,
+                                        extracted_rows=rows,
+                                        company_name=bref_company_name,
+                                        target_year=bref_target_year
+                                    )
+
+                            for field in mapped_fields:
+                                field["mode"] = "raw"
+                                field["final_confidence"] = field.get("mapping_confidence", "low")
+                                field["validation_status"] = "unverified"
+
+                            high_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'high')
+                            low_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'low')
+                            st.write(f"✅ Mapped {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
+
+                            mapping_key = f"{key_prefix}_mapping_{statement_type}"
+                            st.session_state.bref_mapping_results[mapping_key] = {
+                                "fields": mapped_fields,
+                                "mode": "raw",
+                                "target_year": bref_target_year,
+                                "statement_type": statement_type,
+                                "company_name": bref_company_name,
+                                "region": bref_region,
+                            }
+
+                            status.update(label="✅ Mapping completed successfully!", state="complete")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Mapping failed: {e}")
+                        import traceback
+                        with st.expander("🐛 Error Details", expanded=True):
+                            st.code(traceback.format_exc(), language="python")
+
+        with col2:
+            st.markdown("### ✅ Mapping with Validation")
+            st.markdown("""
+            - Requires Excel template
+            - Validates against reference year
+            - Higher accuracy
+            - Human review for low confidence
+            """)
+
+            bref_file = st.file_uploader(
+                "Upload BREF Template",
+                type=["xlsx"],
+                key=f"{key_prefix}_bref_upload_{statement_type}",
+                help="Upload NEXTERA or similar template"
+            )
+
+            ignore_extract = st.checkbox(
+                "Load all fields (ignore Extract column)",
+                value=False,
+                key=f"{key_prefix}_ignore_extract2_{statement_type}",
+                help="If checked, loads all fields regardless of Extract column value."
+            )
+
+            if bref_file:
+                st.caption(f"✅ {bref_file.name}")
+
+                if st.button("Start Validated Mapping", use_container_width=True, type="primary", key=f"{key_prefix}_validated_map_{statement_type}"):
+                    import tempfile
+                    import openpyxl
+                    import os
+
+                    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                        tmp.write(bref_file.getvalue())
+                        tmp_path = tmp.name
+
+                    try:
+                        with st.status("🔄 Running validated mapping...", expanded=True) as status:
+                            st.write("📂 Loading BREF template...")
+                            wb = openpyxl.load_workbook(tmp_path)
+                            ws = wb.active
+
+                            ref_year = bref_target_year - 1
+                            ref_col = find_year_column(ws, ref_year)
+                            target_col = find_year_column(ws, bref_target_year)
+
+                            if ref_col:
+                                st.write(f"✅ Found reference year ({ref_year}) in column {ref_col}")
+                            else:
+                                st.warning(f"⚠️ Reference year ({ref_year}) not found in template")
+
+                            if target_col:
+                                st.write(f"✅ Found target year ({bref_target_year}) in column {target_col}")
+                            else:
+                                st.warning(f"⚠️ Target year ({bref_target_year}) not found in template")
+
+                            wb.close()
+
+                            st.write("📋 Loading BREF fields from template...")
+                            field_mappings_dict = get_field_mappings(bref_region).get(statement_type, {})
+                            fields = load_bref_fields(
+                                tmp_path,
+                                STATEMENT_SHEET_MAP[statement_type],
+                                bref_target_year,
+                                field_mappings=field_mappings_dict,
+                                ignore_extract_column=ignore_extract
+                            )
+
+                            if not fields:
+                                st.error(f"❌ No BREF field mappings defined for {statement_type}")
+                                status.update(label="❌ Mapping failed", state="error")
+                            else:
+                                ref_count = sum(1 for f in fields if f['reference_value'] is not None)
+                                st.write(f"✅ Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
+
+                                st.write("🤖 Mapping fields using AI...")
+
+                                with st.expander("📝 Mapping Logs", expanded=True):
+                                    mapping_log_placeholder = st.empty()
+                                    mapping_logger = BREFLiveLogger(mapping_log_placeholder)
+
+                                    import contextlib
+                                    with contextlib.redirect_stdout(mapping_logger):
+                                        mapped_fields = map_all_fields(
+                                            fields=fields,
+                                            extracted_rows=rows,
+                                            company_name=bref_company_name,
+                                            target_year=bref_target_year
+                                        )
+
+                                st.write(f"✅ Mapped {len(mapped_fields)} fields")
+
+                                st.write("✓ Validating mappings...")
+
+                                with st.expander("📝 Validation Logs", expanded=True):
+                                    validation_log_placeholder = st.empty()
+                                    validation_logger = BREFLiveLogger(validation_log_placeholder)
+
+                                    import contextlib
+                                    with contextlib.redirect_stdout(validation_logger):
+                                        validated_fields = validate_mappings(mapped_fields)
+
+                                high_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'high')
+                                low_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'low')
+                                validated_count = sum(1 for f in validated_fields if f.get('validation_status') == 'validated')
+
+                                st.write(f"✅ Validation complete: {high_conf} high confidence, {low_conf} low confidence, {validated_count} validated")
+
+                                st.write("📊 Generating Excel output...")
+                                excel_bytes = create_clean_output_excel(
+                                    validated_fields,
+                                    target_year=bref_target_year,
+                                    statement_type=statement_type
+                                )
+
+                                mapping_key = f"{key_prefix}_mapping_{statement_type}"
+                                st.session_state.bref_mapping_results[mapping_key] = {
+                                    "fields": validated_fields,
+                                    "mode": "validated",
+                                    "target_year": bref_target_year,
+                                    "statement_type": statement_type,
+                                    "company_name": bref_company_name,
+                                    "template_name": bref_file.name,
+                                    "excel_bytes": excel_bytes,
+                                    "region": bref_region,
+                                }
+
+                                status.update(label="✅ Mapping completed successfully!", state="complete")
+                                st.rerun()
+
+                    except Exception as e:
+                        st.error(f"❌ Mapping failed: {e}")
+                        import traceback
+                        with st.expander("🐛 Error Details", expanded=True):
+                            st.code(traceback.format_exc(), language="python")
+                    finally:
+                        import os
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+
+        st.markdown("---")
+
+        # STEP 3: Display Results
+        mapping_key = f"{key_prefix}_mapping_{statement_type}"
+        if mapping_key in st.session_state.bref_mapping_results:
+            col_header, col_clear = st.columns([3, 1])
+            with col_header:
+                st.subheader("Step 3: Results & Review")
+            with col_clear:
+                if st.button("🗑️ Clear Results", key=f"{key_prefix}_clear_{statement_type}", use_container_width=True):
+                    del st.session_state.bref_mapping_results[mapping_key]
+                    st.success("✅ Results cleared - you can start fresh mapping")
+                    st.rerun()
+
+            mapping_results = st.session_state.bref_mapping_results[mapping_key]
+            fields = mapping_results["fields"]
+            mode = mapping_results["mode"]
+
+            col1, col2, col3, col4 = st.columns(4)
+            high_conf = sum(1 for f in fields if f.get('final_confidence', f.get('mapping_confidence')) == 'high')
+            low_conf = sum(1 for f in fields if f.get('final_confidence', f.get('mapping_confidence')) == 'low')
+
+            col1.metric("Total Fields", len(fields))
+            col2.metric("High Confidence", high_conf)
+            col3.metric("Low Confidence", low_conf)
+            col4.metric("Mode", mode.upper())
+
+            st.markdown("---")
+
+            render_human_review_ui(fields, mapping_key, bref_target_year)
+
+            st.markdown("---")
+
+            st.subheader("📋 All Mapped Fields")
+
+            reference_year = bref_target_year - 1
+
+            df_data = []
+            for field in fields:
+                row_data = {
+                    "Field": field.get("label"),
+                    "Matched Label": field.get("matched_label", "—"),
+                }
+                if mode == "validated":
+                    row_data[f"{reference_year} (Reference)"] = field.get("reference_value")
+                row_data[f"{bref_target_year} (Extracted)"] = field.get("target_value")
+                row_data["Confidence"] = field.get("final_confidence", field.get("mapping_confidence"))
+                row_data["Validation"] = field.get("validation_status", "—")
+                df_data.append(row_data)
+
+            df = pd.DataFrame(df_data)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+
+            st.markdown("---")
+
+            st.subheader("📥 Download")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.download_button(
+                    "📄 Download as JSON",
+                    data=pd.DataFrame(fields).to_json(orient="records", indent=2),
+                    file_name=f"bref_results_{statement_type}_{bref_target_year}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    key=f"{key_prefix}_json_download_{statement_type}"
+                )
+
+            with col2:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, sheet_name="BREF Mapping", index=False)
+                output.seek(0)
+
+                st.download_button(
+                    "📊 Download BREF Output (Excel)",
+                    data=output.getvalue(),
+                    file_name=f"BREF_Output_{statement_type}_{bref_target_year}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    type="primary",
+                    key=f"{key_prefix}_excel_download_{statement_type}"
+                )

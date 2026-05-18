@@ -295,6 +295,299 @@ INCOME_STATEMENT_FIELDS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# APAC Income Statement Fields (Q-prefix codes)
+# Same aliases as US fields, different codes per Income_Statement_Fields.xlsx
+# ---------------------------------------------------------------------------
+
+APAC_INCOME_STATEMENT_FIELDS = {
+    "Q1 | Sales (Revenue)": [
+        "Revenue",
+        "Revenue from operations",
+        "Operating Revenue",
+        "Total revenue",
+        "Total Sales",
+        "Turnover",
+        "Net Sales",
+        "Gross sales",
+    ],
+
+    "Q5 | Cost of sales": [
+        "Cost of Sales",
+        "Cost of Revenue",
+        "Cost of Services",
+        "Cost of Products Sold",
+        "Direct Costs of Sales",
+        "Manufacturing Costs",
+        "Fuel",
+        "Power",
+    ],
+
+    "Q6 | SG&A Expense": [
+        "Selling",
+        "General and Administrative Expenses",
+        "Operating Expenses",
+        "General and Administrative Expenses (G&A)",
+        "Selling Expenses",
+        "Marketing and Administrative Expenses",
+        "Corporate Expenses",
+        "Commercial Expenses",
+    ],
+
+    "Q48 | o/w administratives expenses": [
+        "General and Administrative Expenses (G&A Expenses)",
+        "Administrative Costs",
+        "Operating Expenses",
+        "Selling",
+        "General & Administrative Expenses (SG&A Expenses)",
+        "Corporate Expenses",
+        "Overhead Costs",
+    ],
+
+    "Q49 | o/w distribution costs, advertising & promotion": [
+        "Selling Expenses",
+        "Logistics Costs",
+        "Fulfillment Costs",
+        "Delivery Expenses",
+        "Shipping Costs",
+        "Marketing and Distribution Costs",
+    ],
+
+    "Q50 | o/w Salaries & related costs": [
+        "Personnel Costs",
+        "Employee Compensation",
+        "Wages and Salaries",
+        "Staff Costs",
+        "Employee Costs",
+        "Payroll Expenses",
+        "Salaries",
+        "Wages and Benefits",
+    ],
+
+    "Q7 | External operating costs (incl. services, R&D)": [
+        "Research and Development Expenses",
+        "R&D Expenses",
+        "Development Costs",
+        "Innovation Costs",
+        "New Product Development Costs",
+        "Technology Development Expenses",
+        "Exploration and Development Cost",
+    ],
+
+    "Q8 | Taxes other than income tax": [
+        "Property Taxes",
+        "Local Taxes",
+        "Business Taxes",
+        "Excise Taxes",
+        "Levies",
+        "Other Statutory Taxes",
+        "Insurance Premiums",
+        "Insurance Costs",
+        "Policy Costs",
+        "Insurances",
+    ],
+
+    "Q97 | Net charges to provisions and impairment losses": [
+        "Provision for Doubtful Accounts",
+        "Allowance for Doubtful Accounts Expense",
+        "Doubtful Accounts Expense",
+        "Uncollectible Accounts Expense",
+        "Impairment Losses on Receivables",
+        "Write-offs of Receivables",
+        "Credit Losses Expense",
+    ],
+
+    "Q9 | +/-Changes in inventories and property development inventories": [
+        "Increase/Decrease in Inventories",
+        "Inventory Movements",
+        "Changes in Stock",
+        "Adjustments for Inventory",
+        "Changes in Property Development Stock",
+        "Property Development Inventory Movements",
+        "Work-in-Progress on Property Development",
+        "Development Properties - Changes",
+        "Alias",
+        "Changes in Inventories and Development Properties",
+        "Inventory and Property Stock Adjustments",
+        "Movements in Operating Assets - Inventories and Properties",
+    ],
+
+    "Q3 | Other Revenues, including other operating income from patents & licensing": [
+        "Other Operating Revenue",
+        "Other Operating Income",
+        "Gains & Disposals",
+    ],
+
+    "Q10 | +/- Other revenues & expenses from current operations": [
+        "Other Operating Expenses",
+        "Miscellaneous Expenses",
+        "General Expenses",
+        "Operating Costs - Other",
+        "Ancillary Expenses",
+        "Non-primary Operating Expenses",
+    ],
+
+    "Q14 | Net depreciation and amortization expense": [
+        "D&A",
+        "Depreciation",
+        "Amortisation",
+    ],
+
+    "Q22 | Goodwill Impairment (non recurring)": [
+        "Goodwill Impairment Charge",
+        "Impairment Loss - Goodwill",
+        "Write-down of Goodwill",
+        "Goodwill Impairment Expense",
+        "Impairment of Intangible Assets - Goodwill",
+    ],
+
+    "Q27 | Incomes from bank deposits and alikes": [
+        "Financial Income",
+        "Int on Bank Deposits",
+        "Interest income",
+        "Interest Revenue",
+    ],
+
+    "Q28 | Interest costs (gross)": [
+        "Finance Costs",
+        "Borrowing Costs",
+        "Interest Expense on Debt",
+        "Cost of Borrowing",
+        "Finance Charges",
+        "Interest Paid",
+    ],
+
+    "Q52 | +/- Gain (loss) on extinguishment of debt": [
+        "Gain (loss) on debt redemption",
+        "Gain (loss) on early retirement of debt",
+        "Gain (loss) from debt restructuring",
+        "Gain (loss) on settlement of debt",
+        "Debt extinguishment income (expense)",
+        "Gain (loss) from financial liabilities extinguishment",
+    ],
+
+    "Q74 | +/- Interests in jointly controlled entities": [
+        "Equity in losses of equity method investees",
+        "Income/Loss from Equity Affiliates/Associates",
+    ],
+
+    "Q100 | +/- FX gains (loss) - realized": [
+        "Foreign Exchange Gain (Loss)",
+        "Foreign Currency Gain (Loss)",
+        "Net Foreign Exchange Gain (Loss)",
+        "Foreign Exchange Differences",
+        "Unrealized/Realized Foreign Exchange Gain (Loss)",
+        "Exchange Rate Differences",
+    ],
+
+    "Q31 | +/- Other investment & financial income and expenses": [
+        "Other Finance Income/(Costs)",
+        "Miscellaneous Financial Gains/(Losses)",
+        "Investment Gains/(Losses) - Other",
+        "Other Investment Income/(Expenses)",
+        "Net Financial Income/(Expense) - Other",
+        "Gains/(Losses) from Financial Instruments",
+    ],
+
+    "Q23 | Grants and assistance": [
+        "Government Grants",
+        "Subsidies",
+        "Grants Received",
+        "Assistance Received",
+        "Public Funding",
+        "Non-repayable Grants",
+        "Economic Development Grants",
+    ],
+
+    "Q56 | Restructuring costs & similar items": [
+        "Restructuring Charges",
+        "Restructuring Expenses",
+        "Restructuring Gains/(Losses)",
+        "Reorganization Costs/Gains",
+        "Severance Costs",
+        "Closure Costs",
+        "Business Transformation Costs",
+        "Asset Impairment & Restructuring Charges",
+    ],
+
+    "Q57 | Disposals of intangibles, subsidiaries and affiliates (gains or losses)": [
+        "Sale of Intangible Assets",
+        "Gain (loss) on Sale of Intangible Assets",
+        "Write-off of Intangible Assets",
+        "Pour \"Disposals of subsidiaries",
+        "Sale of Subsidiaries",
+        "Gain (loss) on Disposal of Subsidiaries",
+        "Divestitures of Subsidiaries",
+        "Sale of Business Units",
+        "Sale of Investments in Associates",
+        "Gain (loss) on Sale of Investments in Affiliates",
+        "Divestment of Associates",
+        "Gain (loss) on Sale of Assets",
+        "Discontinued Operations",
+        "Divestitures and Other Asset Disposals",
+    ],
+
+    "Q58 | Disposals of property, plant and equipment (gains or losses)": [
+        "Sale of Property",
+        "Plant and Equipment (PP&E)",
+        "Gain (loss) on Sale of PP&E",
+        "Proceeds from Sale of Fixed Assets",
+        "Disposal of Fixed Assets",
+        "Write-off of Property",
+        "Plant and Equipment",
+        "Sale of Assets",
+    ],
+
+    "Q60 | Share options granted to directors and employees": [
+        "Employee Stock Options",
+        "Director Stock Options",
+        "Share-Based Compensation Expense",
+        "Equity-Settled Share-Based Payments",
+        "Stock Option Awards",
+        "Long-Term Incentive Plans (LTIP)",
+        "Executive Stock Options",
+        "Awards of Stock Options to Management",
+    ],
+
+    "Q24 | +/- Other non recurring operating incomes and costs": [
+        "Other Income/(Expenses)",
+        "Miscellaneous Income/(Expenses)",
+        "Finance Income/(Costs)",
+        "Investment Income/(Losses)",
+        "Gain (loss) from Unusual Items",
+        "Exceptional Items Gain (Loss)",
+        "Discontinued Operations",
+        "Significant One-time Events Gain (Loss)",
+    ],
+
+    "Q35 | Income tax": [
+        "Income Tax Expense/(Benefit)",
+        "Current Tax Expense/(Benefit)",
+        "Deferred Tax Expense/(Benefit)",
+        "Provision for Taxes on Income",
+        "Corporate Income Tax Expense/(Benefit)",
+        "Taxes on Income",
+        "Taxation",
+        "Income Tax Charge",
+    ],
+
+    "Q38 | +/- Net profit/(loss) from discontinued and held-for-sale operations": [
+        "Net gain (loss) on disposal of business operations",
+        "Profit (loss) from operations held for sale",
+        "Results of discontinued segments",
+        "Gain (loss) from divested activities",
+        "Net impact of discontinued operations",
+        "Income (loss) from segments to be disposed of",
+    ],
+
+    "Q39 | Net profit (loss) for the year": [
+        "Net profit",
+        "Profit",
+        "Profit After tax",
+    ],
+}
+
+
 # Balance Sheet fields - To be populated
 BALANCE_SHEET_FIELDS = {
     # Add balance sheet field mappings here
@@ -305,9 +598,22 @@ CASH_FLOW_FIELDS = {
     # Add cash flow field mappings here
 }
 
-# Map statement types to field dictionaries
+# Map statement types to field dictionaries (US region - default)
 FIELD_MAPPINGS = {
     "income_statement": INCOME_STATEMENT_FIELDS,
     "balance_sheet": BALANCE_SHEET_FIELDS,
     "cash_flow": CASH_FLOW_FIELDS,
 }
+
+FIELD_MAPPINGS_APAC = {
+    "income_statement": APAC_INCOME_STATEMENT_FIELDS,
+    "balance_sheet": BALANCE_SHEET_FIELDS,
+    "cash_flow": CASH_FLOW_FIELDS,
+}
+
+
+def get_field_mappings(region: str = "US") -> dict:
+    """Return the field mappings dict for the given region."""
+    if region == "APAC":
+        return FIELD_MAPPINGS_APAC
+    return FIELD_MAPPINGS

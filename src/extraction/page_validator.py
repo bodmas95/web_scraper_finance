@@ -73,7 +73,13 @@ def find_correct_page(
       2. If a single candidate, return it directly.
       3. If multiple candidates, use the LLM to pick the right one.
     """
-    from .scanner import llm_scan_for_candidates, scan_for_candidates
+    from .scanner import llm_scan_for_candidates, pdf_has_garbled_text, scan_for_candidates
+
+    # Early exit for PDFs with garbled/CID-encoded text
+    if pdf_has_garbled_text(pdf_path):
+        print(f"  WARNING: PDF has garbled/CID-encoded text -- text-based scanning will not work.")
+        print(f"  Please enter page numbers manually; vision extraction will be used automatically.\n")
+        return None
 
     # Tier 1 — static heading scan
     candidates = scan_for_candidates(pdf_path, statement_type)

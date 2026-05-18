@@ -1,0 +1,276 @@
+"""
+Shared utilities for the Financial Data Ingestion Pipeline UI.
+MongoDB loaders, company detection, and session state management.
+"""
+
+import streamlit as st
+from datetime import datetime, timedelta
+
+from src.pipeline.db import MongoDBClient
+
+
+# ==============================================================================
+# SESSION STATE
+# ==============================================================================
+
+def initialize_common_session_state():
+    defaults = {
+        "companies": [],
+        "regions": [],
+        "selected_region": None,
+        "countries": [],
+        "selected_country": None,
+        "filtered_companies": [],
+        "selected_company": None,
+        "selected_company_name": None,
+        "is_company_validated": False,
+        "company_type": None,
+        "filings": [],
+        "selected_filing": None,
+        "financial_data": {},
+        "consolidated_data": None,
+        "show_individual_filing": False,
+        "lei": None,
+        "api_base": None,
+        "filing_metadata": {},
+        "ovh_sources": [],
+        "company_sources": [],
+        "selected_source": None,
+        "show_filings": False,
+        "hkex_stock_code": None,
+        "hkex_reports": [],
+        "hkex_reports_loaded": False,
+        "download_confirm": {},
+        "date_from": datetime.now() - timedelta(days=365 * 5),
+        "date_to": datetime.now(),
+        "raw_api_data": None,
+        "all_facts": [],
+        "concept_map": {},
+        "parsed_labels": set(),
+        "sec_ticker": None,
+        "edgar_financials": None,
+        "edgar_mongo_saved": False,
+        "edgar_excel_bytes": None,
+        "pdf_extraction_results": {},
+        "pdf_extraction_done": False,
+        "pdf_token_usage": {"input": 0, "output": 0, "total": 0},
+        "uploaded_pdf_bytes": None,
+        "pdf_target_year": datetime.now().year,
+        "show_pdf_extraction": False,
+        "hkex_extraction_results": None,
+        "hkex_extraction_report_title": None,
+        "manual_extraction_results": None,
+        "manual_extraction_report_title": None,
+        "zoom_page_nums": [],
+        "zoom_crop_bbox": None,
+        "show_zoom": {},
+        "bref_mapping_results": {},
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def reset_company_state():
+    st.session_state.selected_company = None
+    st.session_state.selected_company_name = None
+    st.session_state.is_company_validated = False
+    st.session_state.company_sources = []
+    st.session_state.company_type = None
+    st.session_state.lei = None
+    st.session_state.hkex_ticker = None
+    st.session_state.filings = []
+    st.session_state.show_filings = False
+    st.session_state.hkex_reports = []
+    st.session_state.hkex_reports_loaded = False
+    st.session_state.consolidated_data = None
+    st.session_state.financial_data = {}
+    st.session_state.all_facts = []
+    st.session_state.concept_map = {}
+    st.session_state.parsed_labels = set()
+    st.session_state.show_individual_filing = False
+    st.session_state.edgar_financials = None
+    st.session_state.edgar_mongo_saved = False
+    st.session_state.edgar_excel_bytes = None
+    st.session_state.pdf_extraction_results = {}
+    st.session_state.pdf_extraction_done = False
+    st.session_state.show_pdf_extraction = False
+
+
+# ==============================================================================
+# MONGODB LOADERS
+# ==============================================================================
+
+def load_regions_from_mongodb():
+    try:
+        with MongoDBClient() as client:
+            regions = client.db.companies.distinct("region")
+            return sorted([r for r in regions if r])
+    except Exception as e:
+        st.error(f"Error loading regions from MongoDB: {str(e)}")
+        return []
+
+
+def load_countries_by_region(region):
+    try:
+        with MongoDBClient() as client:
+            countries = client.db.companies.distinct("country", {"region": region})
+            return sorted([c for c in countries if c])
+    except Exception as e:
+        st.error(f"Error loading countries from MongoDB: {str(e)}")
+        return []
+
+
+def load_companies_by_region_country(region, country):
+    try:
+        with MongoDBClient() as client:
+            companies = list(client.db.companies.find({
+                "region": region,
+                "country": country
+            }))
+            return companies
+    except Exception as e:
+        st.error(f"Error loading companies from MongoDB: {str(e)}")
+        return []
+
+
+def get_company_sources(company_id):
+    try:
+        with MongoDBClient() as client:
+            sources = list(client.db.sources.find({"companyId": str(company_id)}))
+            return sources
+    except Exception as e:
+        st.error(f"Error loading sources: {str(e)}")
+        return []
+
+
+# ==============================================================================
+# COMPANY / TICKER EXTRACTION
+# ==============================================================================
+
+def extract_lei_from_company(company):
+    tickers = company.get("tickers", [])
+
+    if isinstance(tickers, list):
+        for ticker in tickers:
+            if isinstance(ticker, dict):
+                if "0" in ticker and isinstance(ticker["0"], dict):
+                    ticker_data = ticker["0"]
+                else:
+                    ticker_data = ticker
+                if ticker_data.get("lei"):
+                    return ticker_data["lei"]
+
+    if isinstance(tickers, dict):
+        for key, ticker in tickers.items():
+            if isinstance(ticker, dict) and ticker.get("lei"):
+                return ticker["lei"]
+
+    return None
+
+
+def extract_hkex_ticker_from_company(company):
+    tickers = company.get("tickers", [])
+
+    if isinstance(tickers, list):
+        for ticker in tickers:
+            if isinstance(ticker, dict):
+                if "0" in ticker and isinstance(ticker["0"], dict):
+                    ticker_data = ticker["0"]
+                else:
+                    ticker_data = ticker
+
+                exchange = ticker_data.get('exchange', '').upper()
+                if exchange in ['HKEX', 'HKG', 'SEHK', 'HK']:
+                    symbol = ticker_data.get('symbol', '')
+                    stock_id = ticker_data.get('stockId', symbol)
+                    if symbol:
+                        return {
+                            'symbol': symbol,
+                            'stockId': stock_id,
+                            'exchange': exchange
+                        }
+
+    if isinstance(tickers, dict):
+        for key, ticker in tickers.items():
+            if isinstance(ticker, dict):
+                exchange = ticker.get('exchange', '').upper()
+                if exchange in ['HKEX', 'HKG', 'SEHK', 'HK']:
+                    symbol = ticker.get('symbol', '')
+                    stock_id = ticker.get('stockId', symbol)
+                    if symbol:
+                        return {
+                            'symbol': symbol,
+                            'stockId': stock_id,
+                            'exchange': exchange
+                        }
+
+    return None
+
+
+def extract_sec_ticker_from_company(company):
+    """
+    Extract the best SEC identifier from the company document.
+    Prefers CIK field over symbol. Returns raw string — call
+    normalize_sec_identifier() before passing to edgartools.
+    """
+    tickers = company.get("tickers", [])
+    if isinstance(tickers, list):
+        for ticker in tickers:
+            if not isinstance(ticker, dict):
+                continue
+            td = ticker.get("0", ticker) if "0" in ticker else ticker
+            if str(td.get("exchange", "")).upper() == "SEC":
+                cik = td.get("CIK", "").strip()
+                if cik:
+                    return cik
+                sym = td.get("symbol", "").strip()
+                if sym:
+                    return sym
+    if isinstance(tickers, dict):
+        for td in tickers.values():
+            if isinstance(td, dict) and str(td.get("exchange", "")).upper() == "SEC":
+                cik = td.get("CIK", "").strip()
+                if cik:
+                    return cik
+                sym = td.get("symbol", "").strip()
+                if sym:
+                    return sym
+    return None
+
+
+def normalize_sec_identifier(raw: str) -> str:
+    """
+    'CIK0000753308' -> '0000753308'
+    'NEE'           -> 'NEE'
+    '753308'        -> '0000753308'
+    """
+    if not raw:
+        return raw
+    s = raw.strip()
+    if s.upper().startswith("CIK"):
+        return s[3:].lstrip("0").zfill(10)
+    if s.isdigit():
+        return s.zfill(10)
+    return s
+
+
+def detect_company_type(company):
+    """
+    Detect company data source type.
+    Returns (type, lei, hkex_ticker).
+    Priority: SEC > XBRL > HKEX
+    """
+    sec_sym = extract_sec_ticker_from_company(company)
+    if sec_sym:
+        return 'SEC', None, None
+
+    lei = extract_lei_from_company(company)
+    if lei:
+        return 'XBRL', lei, None
+
+    hkex_ticker = extract_hkex_ticker_from_company(company)
+    if hkex_ticker:
+        return 'HKEX', None, hkex_ticker
+
+    return None, None, None

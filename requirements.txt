@@ -11,7 +11,7 @@ py-xbrl
 xlsxwriter
 edgartools==5.28.4
 python-dotenv
-
+streamlit
 
 # PDF Extraction dependencies
 PyMuPDF>=1.23.0

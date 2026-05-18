@@ -33,6 +33,43 @@ _TABLE_ROW_RE = re.compile(
     r"(?:\s+[\(\$]?\d[\d,]*(?:\.\d+)?\)?){1,}"  # one or more additional numbers
 )
 
+_CID_RE = re.compile(r'\(cid:\d+\)')
+
+
+def _is_garbled_text(text: str, threshold: int = 10) -> bool:
+    """Detect CID-encoded or otherwise unreadable PDF text."""
+    if not text or len(text.strip()) < 50:
+        return False
+    sample = text[:2000]
+    if len(_CID_RE.findall(sample)) > threshold:
+        return True
+    non_ws = re.sub(r'\s', '', sample)
+    if not non_ws:
+        return False
+    alpha_count = sum(1 for c in non_ws if c.isalpha() and ord(c) < 128)
+    if alpha_count / len(non_ws) < 0.3:
+        return True
+    return False
+
+
+def pdf_has_garbled_text(pdf_path: str) -> bool:
+    """Check if a PDF produces garbled text by sampling the first few content pages."""
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            pages_to_check = min(10, len(pdf.pages))
+            garbled_count = 0
+            checked = 0
+            for i in range(pages_to_check):
+                text = pdf.pages[i].extract_text() or ""
+                if len(text.strip()) < 50:
+                    continue
+                checked += 1
+                if _is_garbled_text(text):
+                    garbled_count += 1
+            return checked > 0 and garbled_count >= max(1, checked // 2)
+    except Exception:
+        return False
+
 
 def _extract_text(page) -> str:
     return page.extract_text() or ""
@@ -158,6 +195,14 @@ def scan_for_candidates(
         total_pages = len(pdf.pages)
         print(f"  Total pages: {total_pages}\n")
 
+        # Early check: detect garbled/CID-encoded text
+        _sample_idx = min(total_pages - 1, max(5, total_pages // 4))
+        _sample_text = pdf.pages[_sample_idx].extract_text() or ""
+        if _is_garbled_text(_sample_text):
+            print(f"  WARNING: PDF has garbled/CID-encoded text -- text-based heading scan will not work.")
+            print(f"  Use manual page entry with vision extraction.\n")
+            return []
+
         skip_pages = set()
 
         for page_num, page in enumerate(pdf.pages):
@@ -240,6 +285,7 @@ def build_manual_candidate(pdf_path: str, page_num: int, statement_type: str) ->
     """
     Build a candidate dict from a user-supplied 0-based page number, skipping heading check.
     Applies landscape detection and continuation walk exactly like the normal scan.
+    Flags ``text_garbled=True`` when the PDF uses CID-encoded or unreadable fonts.
     """
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
@@ -249,14 +295,19 @@ def build_manual_candidate(pdf_path: str, page_num: int, statement_type: str) ->
 
         page = pdf.pages[page_num]
         text = _extract_text(page)
-        if not text.strip():
+        garbled = _is_garbled_text(text)
+
+        if not text.strip() and not garbled:
             print(f"  Page {page_num + 1} has no extractable text.")
             return None
+
+        if garbled:
+            print(f"  Page {page_num + 1}: garbled/CID-encoded text detected — will use vision extraction.")
 
         landscape_side = None
         landscape_crop_bbox = None
 
-        if _is_landscape(page):
+        if not garbled and _is_landscape(page):
             cropped_page, side, bbox = _find_heading_side(page, statement_type)
             if side is not None:
                 landscape_side = side
@@ -264,27 +315,28 @@ def build_manual_candidate(pdf_path: str, page_num: int, statement_type: str) ->
                 text = _extract_text(cropped_page)
                 print(f"  Page {page_num + 1}: landscape — heading on {side} half, cropping")
 
-        # Walk continuation pages
+        # Walk continuation pages (skip when text is garbled — detection won't work)
         all_page_nums = [page_num]
         merged_text   = text
 
-        for offset in range(1, MAX_CONTINUATION_PAGES + 1):
-            next_idx = page_num + offset
-            if next_idx >= total_pages:
-                break
-            next_page = pdf.pages[next_idx]
+        if not garbled:
+            for offset in range(1, MAX_CONTINUATION_PAGES + 1):
+                next_idx = page_num + offset
+                if next_idx >= total_pages:
+                    break
+                next_page = pdf.pages[next_idx]
 
-            if landscape_crop_bbox and _is_landscape(next_page):
-                next_text = next_page.crop(landscape_crop_bbox).extract_text() or ""
-            else:
-                next_text = _extract_text(next_page)
+                if landscape_crop_bbox and _is_landscape(next_page):
+                    next_text = next_page.crop(landscape_crop_bbox).extract_text() or ""
+                else:
+                    next_text = _extract_text(next_page)
 
-            if not _is_continuation_page(next_text, "", statement_type):
-                break
+                if not _is_continuation_page(next_text, "", statement_type):
+                    break
 
-            all_page_nums.append(next_idx)
-            merged_text += f"\n{next_text}"
-            print(f"  Page {next_idx + 1}: continuation detected, merged")
+                all_page_nums.append(next_idx)
+                merged_text += f"\n{next_text}"
+                print(f"  Page {next_idx + 1}: continuation detected, merged")
 
         return {
             "page_num":            page_num,
@@ -297,6 +349,7 @@ def build_manual_candidate(pdf_path: str, page_num: int, statement_type: str) ->
             "landscape_side":      landscape_side,
             "landscape_crop_bbox": landscape_crop_bbox,
             "is_confirmed":        True,
+            "text_garbled":        garbled,
         }
 
 
@@ -309,6 +362,13 @@ def llm_scan_for_candidates(pdf_path: str, statement_type: str) -> list[dict]:
 
     table_pages = []
     with pdfplumber.open(pdf_path) as pdf:
+        # Skip Tier 2 when text is garbled — LLM will get gibberish
+        _sample_idx = min(len(pdf.pages) - 1, max(5, len(pdf.pages) // 4))
+        _sample_text = pdf.pages[_sample_idx].extract_text() or ""
+        if _is_garbled_text(_sample_text):
+            print("  Skipping LLM scan — PDF has garbled/CID-encoded text.")
+            return []
+
         for page_num, page in enumerate(pdf.pages):
             text = _extract_text(page)
             if not text.strip() or not _has_table_structure(text):

@@ -117,7 +117,7 @@ def load_bref_fields(excel_path: str, sheet_name: str, target_year: int, field_m
         
         # Skip header/section rows (those that don't start with field codes)
         label_str = str(label).strip()
-        if not any(label_str.startswith(prefix) for prefix in ["I", "B", "L", "ACF", "CF"]):
+        if not any(label_str.startswith(prefix) for prefix in ["I", "B", "L", "ACF", "CF", "Q", "ITRR"]):
             continue
         
         # Check Extract column if COL_EXTRACT and COL_DESC are different
