@@ -1,0 +1,1061 @@
+{
+  "_comment": "XBRL Concept Mapping Configuration with Shared Concepts",
+  "_usage": "Enable/disable via config.ini [XBRL] use_custom_mapping = true/false",
+  
+  "_shared_french_construction": {
+    "_comment": "Shared concepts for French construction companies (Vinci, Eiffage, Bouygues, etc.)",
+    "_applies_to": ["vinci", "eiffage", "bouygues"],
+    "concepts": {
+      "ifrs-full:RevenueFromContractsWithCustomers": {
+        "fr_label": "Chiffre d'affaires total",
+        "en_label": "Total revenue"
+      },
+      "ifrs-full:OtherRevenue": {
+        "fr_label": "Produits des activités annexes",
+        "en_label": "Revenue from ancillary activities"
+      },
+      "ifrs-full:OperatingExpense": {
+        "fr_label": "Charges opérationnelles",
+        "en_label": "Operating expenses"
+      },
+      "ifrs-full:SharebasedPaymentArrangementExpense": {
+        "fr_label": "Paiements en actions (IFRS 2)",
+        "en_label": "Share-based payments (IFRS 2)"
+      },
+      "ifrs-full:ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": {
+        "fr_label": "Résultat des sociétés mises en équivalence",
+        "en_label": "Profit/(loss) of companies accounted for under the equity method"
+      },
+      "ifrs-full:ProfitLossFromOperatingActivities": {
+        "fr_label": "Résultat opérationnel",
+        "en_label": "Operating income"
+      },
+      "ifrs-full:IncomeTaxExpenseContinuingOperations": {
+        "fr_label": "Impôts sur les bénéfices",
+        "en_label": "Income tax expense"
+      },
+      "ifrs-full:ProfitLoss": {
+        "fr_label": "Résultat net",
+        "en_label": "Net income"
+      },
+      "ifrs-full:ProfitLossAttributableToNoncontrollingInterests": {
+        "fr_label": "Résultat net attribuable aux participations ne donnant pas le contrôle",
+        "en_label": "Net income attributable to non-controlling interests"
+      },
+      "ifrs-full:ProfitLossAttributableToOwnersOfParent": {
+        "fr_label": "Résultat net - part du Groupe",
+        "en_label": "Net income attributable to owners of the parent"
+      },
+      "ifrs-full:BasicEarningsLossPerShare": {
+        "fr_label": "Résultat net par action (en euros)",
+        "en_label": "Basic earnings per share (in €)"
+      },
+      "ifrs-full:DilutedEarningsLossPerShare": {
+        "fr_label": "Résultat net dilué par action (en euros)",
+        "en_label": "Diluted earnings per share (in €)"
+      },
+      "ifrs-full:ExchangeDifferencesOnTranslationOfForeignOperations": {
+        "fr_label": "Écarts de conversion",
+        "en_label": "Currency translation differences"
+      },
+      "ifrs-full:GainsLossesOnRemeasurementsOfDefinedBenefitPlans": {
+        "fr_label": "Gains et pertes actuariels sur engagements de retraite",
+        "en_label": "Actuarial gains and losses on retirement benefit obligations"
+      },
+      "ifrs-full:ComprehensiveIncome": {
+        "fr_label": "Résultat global",
+        "en_label": "Comprehensive income"
+      },
+      "ifrs-full:Goodwill": {
+        "fr_label": "Goodwill",
+        "en_label": "Goodwill"
+      },
+      "ifrs-full:IntangibleAssetsOtherThanGoodwill": {
+        "fr_label": "Autres immobilisations incorporelles",
+        "en_label": "Other intangible assets"
+      },
+      "ifrs-full:PropertyPlantAndEquipment": {
+        "fr_label": "Immobilisations corporelles",
+        "en_label": "Property, plant and equipment"
+      },
+      "ifrs-full:InvestmentsAccountedForUsingEquityMethod": {
+        "fr_label": "Participations dans les sociétés mises en équivalence",
+        "en_label": "Investments in companies accounted for under the equity method"
+      },
+      "ifrs-full:OtherNoncurrentFinancialAssets": {
+        "fr_label": "Autres actifs financiers non courants",
+        "en_label": "Other non-current financial assets"
+      },
+      "ifrs-full:NoncurrentDerivativeFinancialAssets": {
+        "fr_label": "Instruments dérivés actifs non courants",
+        "en_label": "Derivative financial instruments - non-current assets"
+      },
+      "ifrs-full:DeferredTaxAssets": {
+        "fr_label": "Impôts différés actifs",
+        "en_label": "Deferred tax assets"
+      },
+      "ifrs-full:NoncurrentAssets": {
+        "fr_label": "Total actifs non courants",
+        "en_label": "Total non-current assets"
+      },
+      "ifrs-full:Inventories": {
+        "fr_label": "Stocks et travaux en cours",
+        "en_label": "Inventories and work in progress"
+      },
+      "ifrs-full:TradeAndOtherCurrentReceivables": {
+        "fr_label": "Clients et autres débiteurs",
+        "en_label": "Trade and other receivables"
+      },
+      "ifrs-full:OtherCurrentAssets": {
+        "fr_label": "Autres actifs courants",
+        "en_label": "Other current assets"
+      },
+      "ifrs-full:CurrentTaxAssets": {
+        "fr_label": "Actifs d'impôt exigible",
+        "en_label": "Current tax assets"
+      },
+      "ifrs-full:CurrentFinancialAssets": {
+        "fr_label": "Autres actifs financiers courants",
+        "en_label": "Other current financial assets"
+      },
+      "ifrs-full:CurrentDerivativeFinancialAssets": {
+        "fr_label": "Instruments dérivés actifs courants",
+        "en_label": "Derivative financial instruments - current assets"
+      },
+      "ifrs-full:CashAndCashEquivalents": {
+        "fr_label": "Disponibilités et équivalents de trésorerie",
+        "en_label": "Cash and cash equivalents"
+      },
+      "ifrs-full:CurrentAssets": {
+        "fr_label": "Total actifs courants",
+        "en_label": "Total current assets"
+      },
+      "ifrs-full:NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners": {
+        "fr_label": "Actifs destinés à être cédés",
+        "en_label": "Assets held for sale"
+      },
+      "ifrs-full:Assets": {
+        "fr_label": "Total actifs",
+        "en_label": "Total assets"
+      },
+      "ifrs-full:IssuedCapital": {
+        "fr_label": "Capital social",
+        "en_label": "Share capital"
+      },
+      "ifrs-full:SharePremium": {
+        "fr_label": "Primes liées au capital",
+        "en_label": "Share premium"
+      },
+      "ifrs-full:TreasuryShares": {
+        "fr_label": "Titres autodétenus",
+        "en_label": "Treasury shares"
+      },
+      "ifrs-full:ReservesAndRetainedEarnings": {
+        "fr_label": "Réserves consolidées",
+        "en_label": "Consolidated reserves"
+      },
+      "ifrs-full:ReserveOfExchangeDifferencesOnTranslation": {
+        "fr_label": "Réserves de conversion",
+        "en_label": "Currency translation reserves"
+      },
+      "ifrs-full:EquityAttributableToOwnersOfParent": {
+        "fr_label": "Capitaux propres - part du Groupe",
+        "en_label": "Equity attributable to owners of the parent"
+      },
+      "ifrs-full:NoncontrollingInterests": {
+        "fr_label": "Capitaux propres - part attribuable aux participations ne donnant pas le contrôle",
+        "en_label": "Equity attributable to non-controlling interests"
+      },
+      "ifrs-full:Equity": {
+        "fr_label": "Total capitaux propres",
+        "en_label": "Total equity"
+      },
+      "ifrs-full:NoncurrentProvisions": {
+        "fr_label": "Provisions non courantes",
+        "en_label": "Non-current provisions"
+      },
+      "ifrs-full:NoncurrentEmployeeBenefitsLiabilities": {
+        "fr_label": "Provisions pour avantages du personnel",
+        "en_label": "Provisions for employee benefits"
+      },
+      "ifrs-full:NoncurrentBorrowings": {
+        "fr_label": "Emprunts obligataires",
+        "en_label": "Bonds"
+      },
+      "ifrs-full:OtherNoncurrentFinancialLiabilities": {
+        "fr_label": "Autres emprunts et dettes financières",
+        "en_label": "Other loans and borrowings"
+      },
+      "ifrs-full:NoncurrentDerivativeFinancialLiabilities": {
+        "fr_label": "Instruments dérivés passifs non courants",
+        "en_label": "Derivative financial instruments - non-current liabilities"
+      },
+      "ifrs-full:NoncurrentLeaseLiabilities": {
+        "fr_label": "Dettes de location non courantes",
+        "en_label": "Non-current lease liabilities"
+      },
+      "ifrs-full:OtherNoncurrentLiabilities": {
+        "fr_label": "Autres passifs non courants",
+        "en_label": "Other non-current liabilities"
+      },
+      "ifrs-full:DeferredTaxLiabilities": {
+        "fr_label": "Impôts différés passifs",
+        "en_label": "Deferred tax liabilities"
+      },
+      "ifrs-full:NoncurrentLiabilities": {
+        "fr_label": "Total passifs non courants",
+        "en_label": "Total non-current liabilities"
+      },
+      "ifrs-full:CurrentProvisions": {
+        "fr_label": "Provisions courantes",
+        "en_label": "Current provisions"
+      },
+      "ifrs-full:TradeAndOtherCurrentPayables": {
+        "fr_label": "Fournisseurs",
+        "en_label": "Trade payables"
+      },
+      "ifrs-full:OtherCurrentLiabilities": {
+        "fr_label": "Autres passifs courants",
+        "en_label": "Other current liabilities"
+      },
+      "ifrs-full:CurrentTaxLiabilities": {
+        "fr_label": "Passifs d'impôt exigible",
+        "en_label": "Current tax liabilities"
+      },
+      "ifrs-full:CurrentLeaseLiabilities": {
+        "fr_label": "Dettes de location courantes",
+        "en_label": "Current lease liabilities"
+      },
+      "ifrs-full:CurrentDerivativeFinancialLiabilities": {
+        "fr_label": "Instruments dérivés passifs courants",
+        "en_label": "Derivative financial instruments - current liabilities"
+      },
+      "ifrs-full:CurrentBorrowings": {
+        "fr_label": "Dettes financières courantes",
+        "en_label": "Current borrowings"
+      },
+      "ifrs-full:CurrentLiabilities": {
+        "fr_label": "Total passifs courants",
+        "en_label": "Total current liabilities"
+      },
+      "ifrs-full:LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale": {
+        "fr_label": "Passifs directement associés aux actifs destinés à être cédés",
+        "en_label": "Liabilities directly associated with assets held for sale"
+      },
+      "ifrs-full:EquityAndLiabilities": {
+        "fr_label": "Total passifs et capitaux propres",
+        "en_label": "Total equity and liabilities"
+      },
+      "ifrs-full:DepreciationAndAmortisationExpense": {
+        "fr_label": "Dotations aux amortissements",
+        "en_label": "Depreciation and amortisation"
+      },
+      "ifrs-full:IncreaseDecreaseInProvisionsAndImpairmentLoss": {
+        "fr_label": "Dotations (reprises) aux provisions et dépréciations (nettes)",
+        "en_label": "Net increase/(decrease) in provisions and impairment"
+      },
+      "ifrs-full:SharebasedPaymentTransactionsAndOtherRestatements": {
+        "fr_label": "Paiements en actions (IFRS 2) et autres retraitements",
+        "en_label": "Share-based payments (IFRS 2) and other restatements"
+      },
+      "ifrs-full:GainsLossesOnDisposals": {
+        "fr_label": "Résultat sur cessions",
+        "en_label": "Gain or loss on disposals"
+      },
+      "ifrs-full:AdjustmentsForChangeInFairValueOfFinancialInstruments": {
+        "fr_label": "Variations de juste valeur des instruments financiers",
+        "en_label": "Change in fair value of financial instruments"
+      },
+      "ifrs-full:AdjustmentsForShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": {
+        "fr_label": "Quote-part de résultat des sociétés mises en équivalence et dividendes des sociétés non consolidées",
+        "en_label": "Share of profit/(loss) of companies accounted for under the equity method and dividends received from unconsolidated companies"
+      },
+      "ifrs-full:AdjustmentsForFinanceCosts": {
+        "fr_label": "Coût de l'endettement financier net comptabilisé",
+        "en_label": "Cost of net financial debt recognised"
+      },
+      "ifrs-full:CapitalisedBorrowingCosts": {
+        "fr_label": "Coûts d'emprunt immobilisés",
+        "en_label": "Capitalised borrowing costs"
+      },
+      "ifrs-full:FinancialExpenseOnLeaseLiabilitiesAndOtherLiabilities": {
+        "fr_label": "Charges financières associées aux contrats de location et aux autres passifs",
+        "en_label": "Financial expense on lease liabilities and other liabilities"
+      },
+      "ifrs-full:AdjustmentsForIncomeTaxExpense": {
+        "fr_label": "Charges d'impôt (y compris impôts différés) comptabilisées",
+        "en_label": "Current and deferred tax expense recognised"
+      },
+      "ifrs-full:CashFlowFromOperationsBeforeTaxAndFinancingCosts": {
+        "fr_label": "Capacité d'autofinancement avant coût de financement et impôts",
+        "en_label": "Cash flow from operations before tax and financing costs"
+      },
+      "ifrs-full:IncreaseDecreaseInOperatingWorkingCapitalRequirementAndCurrentProvisions": {
+        "fr_label": "Variations du BFR liées à l'activité et des provisions courantes",
+        "en_label": "Changes in operating working capital requirement and current provisions"
+      },
+      "ifrs-full:IncomeTaxesPaidRefundClassifiedAsOperatingActivities": {
+        "fr_label": "Impôts payés",
+        "en_label": "Income taxes paid"
+      },
+      "ifrs-full:InterestPaidClassifiedAsOperatingActivities": {
+        "fr_label": "Intérêts financiers nets payés",
+        "en_label": "Net interest paid"
+      },
+      "ifrs-full:DividendsReceivedFromAssociatesClassifiedAsOperatingActivities": {
+        "fr_label": "Dividendes reçus des sociétés mises en équivalence",
+        "en_label": "Dividends received from companies accounted for under the equity method"
+      },
+      "ifrs-full:OtherLongtermAdvancesAndAssociatedInterestPayments": {
+        "fr_label": "Autres avances à caractère long terme et intérêts payés associés",
+        "en_label": "Other long-term advances and associated interest payments"
+      },
+      "ifrs-full:CashFlowsFromUsedInOperatingActivities": {
+        "fr_label": "Flux nets de trésorerie liés aux opérations d'investissements",
+        "en_label": "Net cash flows (used in)/from operating activities"
+      },
+      "ifrs-full:PurchaseOfPropertyPlantAndEquipmentAndIntangibleAssets": {
+        "fr_label": "Investissements en immobilisations corporelles et incorporelles",
+        "en_label": "Purchases of property, plant and equipment and intangible assets"
+      },
+      "ifrs-full:ProceedsFromSalesOfPropertyPlantAndEquipmentAndIntangibleAssets": {
+        "fr_label": "Cession d'immobilisations corporelles et incorporelles",
+        "en_label": "Proceeds from sales of property, plant and equipment and intangible assets"
+      },
+      "ifrs-full:OperatingInvestmentsNetOfDisposals": {
+        "fr_label": "Investissements opérationnels (nets de cessions)",
+        "en_label": "Operating investments (net of disposals)"
+      },
+      "ifrs-full:InvestmentsInConcessionFixedAssetsNetOfGrantsReceived": {
+        "fr_label": "Investissements en immobilisations du domaine concédé (nets de subventions reçues)",
+        "en_label": "Investments in concession fixed assets (net of grants received)"
+      },
+      "ifrs-full:FinancialReceivablesPPPContractsAndOthers": {
+        "fr_label": "Créances financières (contrats de PPP et autres)",
+        "en_label": "Financial receivables (PPP contracts and others)"
+      },
+      "ifrs-full:GrowthInvestmentsConcessionsAndPPPs": {
+        "fr_label": "Investissements de développement (concessions et PPP)",
+        "en_label": "Growth investments (concessions and PPPs)"
+      },
+      "ifrs-full:PurchasesOfSharesInSubsidiariesAndAffiliatesConsolidatedAndUnconsolidated": {
+        "fr_label": "Acquisition de titres de participation (consolidés et non consolidés)",
+        "en_label": "Purchases of shares in subsidiaries and affiliates (consolidated and unconsolidated)"
+      },
+      "ifrs-full:ProceedsFromSalesOfSharesInSubsidiariesAndAffiliatesConsolidatedAndUnconsolidated": {
+        "fr_label": "Cession de titres de participation (consolidés et non consolidés)",
+        "en_label": "Proceeds from sales of shares in subsidiaries and affiliates (consolidated and unconsolidated)"
+      },
+      "ifrs-full:CashAndCashEquivalentsOfAcquiredCompanies": {
+        "fr_label": "Disponibilités et équivalents de trésorerie des sociétés acquises",
+        "en_label": "Cash and cash equivalents of acquired companies"
+      },
+      "ifrs-full:NetFinancialInvestmentsExcludingFinancialDebtsTransferredDuringBusinessCombinations": {
+        "fr_label": "Investissements financiers nets (hors dettes financières reprises lors de regroupements d'entreprises)",
+        "en_label": "Net financial investments (excluding financial debts transferred during business combinations)"
+      },
+      "ifrs-full:Other": {
+        "fr_label": "Autres",
+        "en_label": "Other"
+      },
+      "ifrs-full:CashFlowsFromUsedInInvestingActivities": {
+        "fr_label": "Flux nets de trésorerie liés aux opérations d'investissements",
+        "en_label": "Net cash flows (used in)/from investing activities"
+      },
+      "ifrs-full:ShareCapitalIncreasesAndDecreasesAndRepurchasesOfOtherEquityInstruments": {
+        "fr_label": "Augmentations, réductions de capital et rachat d'autres instruments de capitaux propres",
+        "en_label": "Share capital increases and decreases and repurchases of other equity instruments"
+      },
+      "ifrs-full:TransactionsInTreasuryShares": {
+        "fr_label": "Opérations sur actions propres",
+        "en_label": "Transactions in treasury shares"
+      },
+      "ifrs-full:CapitalIncreasesAndDecreasesOfSubsidiariesSubscribedByThirdParties": {
+        "fr_label": "Augmentations et réductions de capital des filiales souscrites par des tiers",
+        "en_label": "Capital increases and decreases of subsidiaries subscribed by third parties"
+      },
+      "ifrs-full:AcquisitionsDisposalsOfNoncontrollingInterestsWithoutAcquisitionOrLossOfControl": {
+        "fr_label": "Acquisitions/cessions d'intérêts minoritaires (sans prise/perte de contrôle)",
+        "en_label": "Acquisitions/disposals of non-controlling interests (without acquisition or loss of control)"
+      },
+      "ifrs-full:DividendsPaidClassifiedAsFinancingActivities": {
+        "fr_label": "Dividendes payés",
+        "en_label": "Dividends paid"
+      },
+      "ifrs-full:DividendsPaidToShareholdersOfVINCI": {
+        "fr_label": "aux actionnaires de VINCI SA",
+        "en_label": "to shareholders of VINCI SA"
+      },
+      "ifrs-full:DividendsPaidToNoncontrollingInterests": {
+        "fr_label": "aux minoritaires des sociétés intégrées",
+        "en_label": "to non-controlling interests"
+      },
+      "ifrs-full:ProceedsFromNewLongtermBorrowings": {
+        "fr_label": "Encaissements liés aux nouveaux emprunts à long terme",
+        "en_label": "Proceeds from new long-term borrowings"
+      },
+      "ifrs-full:RepaymentsOfLongtermBorrowings": {
+        "fr_label": "Remboursements d'emprunts à long terme",
+        "en_label": "Repayments of long-term borrowings"
+      },
+      "ifrs-full:RepaymentsOfLeaseLiabilitiesAndFinancialExpenseOnLeaseLiabilities": {
+        "fr_label": "Remboursements des dettes de location et charges financières associées",
+        "en_label": "Repayments of lease liabilities and financial expense on lease liabilities"
+      },
+      "ifrs-full:ChangeInCashManagementAssetsAndOtherCurrentFinancialDebts": {
+        "fr_label": "Variation des actifs de gestion de trésorerie et autres dettes financières courantes",
+        "en_label": "Change in cash management assets and other current financial debts"
+      },
+      "ifrs-full:CashFlowsFromUsedInFinancingActivities": {
+        "fr_label": "Flux nets de trésorerie liés aux opérations de financement",
+        "en_label": "Net cash flows (used in)/from financing activities"
+      },
+      "ifrs-full:OtherChanges": {
+        "fr_label": "Autres variations",
+        "en_label": "Other changes"
+      },
+      "ifrs-full:ChangeInNetCash": {
+        "fr_label": "Variation de la trésorerie nette",
+        "en_label": "Change in net cash"
+      },
+      "ifrs-full:NetCashAndCashEquivalentsAtBeginningOfPeriod": {
+        "fr_label": "Trésorerie nette à l'ouverture",
+        "en_label": "Net cash and cash equivalents at beginning of period"
+      },
+      "ifrs-full:NetCashAndCashEquivalentsAtEndOfPeriod": {
+        "fr_label": "Trésorerie nette à la clôture",
+        "en_label": "Net cash and cash equivalents at end of period"
+      }
+    }
+  },
+  
+  "vinci": {
+    "_company_info": {
+      "name": "Vinci",
+      "lei": "213800WFQ334R8UXUG83",
+      "description": "French construction and concessions company"
+    },
+    "_inherits_from": ["_shared_french_construction"],
+    "concepts": {
+      "VINCI:Revenuefromcontractswithcustomersotherthanrevenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies": {
+        "fr_label": "Chiffre d'affaires",
+        "en_label": "Revenue"
+      },
+      "VINCI:Revenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies": {
+        "fr_label": "Chiffre d'affaires travaux hors Groupe des filiales concessionnaires",
+        "en_label": "Concession subsidiaries' revenue derived from works carried out by non-Group companies"
+      },
+      "VINCI:Profitlossfromordinaryoperatingactivities": {
+        "fr_label": "Résultat opérationnel sur activité",
+        "en_label": "Operating income from ordinary activities"
+      },
+      "VINCI:Otheroperatingincomeexpenserecurring": {
+        "fr_label": "Autres éléments opérationnels courants",
+        "en_label": "Other recurring operating items"
+      },
+      "VINCI:Profitlossfromoperatingactivitiesrecurring": {
+        "fr_label": "Résultat opérationnel courant",
+        "en_label": "Recurring operating income"
+      },
+      "VINCI:Otheroperatingincomeexpensenonrecurring": {
+        "fr_label": "Éléments opérationnels non courants",
+        "en_label": "Non-recurring operating items"
+      },
+      "VINCI:Grossfinancecosts": {
+        "fr_label": "Coût de l'endettement financier brut",
+        "en_label": "Cost of gross financial debt"
+      },
+      "VINCI:Netfinancecosts": {
+        "fr_label": "Coût de l'endettement financier net",
+        "en_label": "Cost of net financial debt"
+      },
+      "VINCI:Serviceconcessionrights": {
+        "fr_label": "Immobilisations incorporelles du domaine concédé",
+        "en_label": "Concession intangible assets"
+      },
+      "VINCI:Currentcashmanagementfinancialassets": {
+        "fr_label": "Actifs financiers de gestion de trésorerie",
+        "en_label": "Cash management financial assets"
+      },
+      "VINCI:Otherreservesandretainedearningsexcludingprofitlossforreportingperiod": {
+        "fr_label": "Réserves consolidées",
+        "en_label": "Consolidated reserves"
+      },
+      "VINCI:Adjustmentsforprovisionsandadjustmentsforimpairmentlossreversalofimpairmentlossrecognisedinprofitorloss": {
+        "fr_label": "Dotations (reprises) aux provisions et dépréciations (nettes)",
+        "en_label": "Net increase/(decrease) in provisions and impairment"
+      },
+      "VINCI:Adjustmentsfornetfinancecosts": {
+        "fr_label": "Coût de l'endettement financier net comptabilisé",
+        "en_label": "Cost of net financial debt recognised"
+      },
+      "VINCI:Adjustmentsforinterestexpenseonleaseliabilities": {
+        "fr_label": "Charges financières associées aux contrats de location et aux autres passifs",
+        "en_label": "Financial expense on lease liabilities and other liabilities"
+      },
+      "VINCI:Interestpaidandinterestreceivedclassifiedasoperatingactivities": {
+        "fr_label": "Intérêts financiers nets payés",
+        "en_label": "Net interest paid"
+      },
+      "VINCI:Dividendsreceivedfrominvestmentsaccountedforusingequitymethodclassifiedasoperatingactivities": {
+        "fr_label": "Dividendes reçus des sociétés mises en équivalence",
+        "en_label": "Dividends received from companies accounted for under the equity method"
+      },
+      "VINCI:Purchaseofpropertyplantandequipmentandpurchaseofintangibleassetsclassifiedasinvestingactivities": {
+        "fr_label": "Investissements en immobilisations corporelles et incorporelles",
+        "en_label": "Purchases of property, plant and equipment and intangible assets"
+      },
+      "VINCI:Proceedsfromsalesofpropertyplantandequipmentandproceedsfromsalesofintangibleassetsclassifiedasinvestingactivities": {
+        "fr_label": "Cession d'immobilisations corporelles et incorporelles",
+        "en_label": "Proceeds from sales of property, plant and equipment and intangible assets"
+      },
+      "VINCI:Increasedecreaseinpropertyplantandequipmentandintangibleassetsclassifiedasinvestingactivities": {
+        "fr_label": "Investissements opérationnels (nets de cessions)",
+        "en_label": "Operating investments (net of disposals)"
+      },
+      "VINCI:Purchaseofconcessionfixedassetsnetofgrantsreceivedclassifiedasinvestingactivities": {
+        "fr_label": "Investissements en immobilisations du domaine concédé (nets de subventions reçues)",
+        "en_label": "Investments in concession fixed assets (net of grants received)"
+      },
+      "VINCI:Increasedecreaseinfinancialreceivablespppcontractsandothersclassifiedasinvestingactivities": {
+        "fr_label": "Créances financières (contrats de PPP et autres)",
+        "en_label": "Financial receivables (PPP contracts and others)"
+      },
+      "VINCI:Growthinvestmentsinconcessionsandpppsclassifiedasinvestingactivities": {
+        "fr_label": "Investissements de développement (concessions et PPP)",
+        "en_label": "Growth investments (concessions and PPPs)"
+      },
+      "VINCI:Cashflowsusedinobtainingcontrolofsubsidiariesorotherbusinessespurchaseofinterestsininvestmentsaccountedforusingequitymethodandpurchaseofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities": {
+        "fr_label": "Acquisition de titres de participation (consolidés et non consolidés)",
+        "en_label": "Purchases of shares in subsidiaries and affiliates (consolidated and unconsolidated)"
+      },
+      "VINCI:Cashflowsfromlosingcontrolofsubsidiariesorotherbusinessesproceedsfromsalesofinvestmentsaccountedforusingequitymethodandproceedsfromsalesofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities": {
+        "fr_label": "Cession de titres de participation (consolidés et non consolidés)",
+        "en_label": "Proceeds from sales of shares in subsidiaries and affiliates (consolidated and unconsolidated)"
+      },
+      "VINCI:Increasedecreaseininvestmentsclassifiedasinvestingactivities": {
+        "fr_label": "Investissements financiers nets",
+        "en_label": "Net financial investments"
+      },
+      "VINCI:Proceedsfromissuingsharesproceedsfromissuingotherequityinstrumentsandpaymentsofotherequityinstrumentsclassifiedasfinancingactivities": {
+        "fr_label": "Augmentations, réductions de capital et rachat d'autres instruments de capitaux propres",
+        "en_label": "Share capital increases and decreases and repurchases of other equity instruments"
+      },
+      "VINCI:Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares": {
+        "fr_label": "Opérations sur actions propres",
+        "en_label": "Transactions in treasury shares"
+      },
+      "VINCI:CapitalIncreasesAndReductionsOfSubsidiariesSubscribedByThirdParties": {
+        "fr_label": "Augmentations et réductions de capital des filiales souscrites par des tiers",
+        "en_label": "Capital increases and decreases of subsidiaries subscribed by third parties"
+      },
+      "VINCI:Proceedsfromchangesinownershipinterestsinsubsidiariesandpaymentsfromchangesinownershipinterestsinsubsidiaries": {
+        "fr_label": "Acquisitions/cessions d'intérêts minoritaires (sans prise/perte de contrôle)",
+        "en_label": "Acquisitions/disposals of non-controlling interests (without acquisition or loss of control)"
+      },
+      "VINCI:Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities": {
+        "fr_label": "Variation des actifs de gestion de trésorerie et autres dettes financières courantes",
+        "en_label": "Change in cash management assets and other current financial debts"
+      },
+      "VINCI:Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie": {
+        "fr_label": "Autres variations",
+        "en_label": "Other changes"
+      }
+    }
+  },
+  
+  "eiffage": {
+    "_company_info": {
+      "name": "Eiffage",
+      "lei": "969500MGFIKUGLTM9742",
+      "description": "French construction and concessions company"
+    },
+    "_inherits_from": ["_shared_french_construction"],
+    "_label_differences": {
+      "_comment": "Eiffage uses different French labels for some shared IFRS concepts compared to Vinci",
+      "ifrs-full:Revenue": "Produits des activités opérationnelles (vs Vinci: Chiffre d'affaires total)",
+      "ifrs-full:ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": "Quote-part du résultat des sociétés mises en équivalence (vs Vinci: Résultat des sociétés mises en équivalence)",
+      "ifrs-full:IncomeTaxExpenseContinuingOperations": "Impôt sur le résultat (vs Vinci: Impôts sur les bénéfices)",
+      "ifrs-full:NoncontrollingInterests": "Participations ne donnant pas le contrôle (vs Vinci: Capitaux propres - part attribuable aux participations ne donnant pas le contrôle)"
+    },
+    "concepts": {
+      "ifrs-full:Revenue": {
+        "fr_label": "Produits des activités opérationnelles",
+        "en_label": "Revenue"
+      },
+      "ifrs-full:OtherIncome": {
+        "fr_label": "Autres produits de l'activité",
+        "en_label": "Other income"
+      },
+      "ifrs-full:RawMaterialsAndConsumablesUsed": {
+        "fr_label": "Achats consommés",
+        "en_label": "Raw materials and consumables used"
+      },
+      "ifrs-full:EmployeeBenefitsExpense": {
+        "fr_label": "Charges de personnel",
+        "en_label": "Staff costs"
+      },
+      "ifrs-full:OtherExpenseByNature": {
+        "fr_label": "Charges externes",
+        "en_label": "Other expenses"
+      },
+      "ifrs-full:TaxExpenseOtherThanIncomeTaxExpense": {
+        "fr_label": "Impôts et taxes",
+        "en_label": "Taxes other than corporate tax"
+      },
+      "ifrs-full:DepreciationAndAmortisationExpense": {
+        "fr_label": "Dotations aux amortissements",
+        "en_label": "Amortisation and depreciation expense"
+      },
+      "eif:ProvisionExpense": {
+        "fr_label": "Dotations aux provisions (nettes de reprises)",
+        "en_label": "Provisions"
+      },
+      "ifrs-full:ChangesInInventoriesOfFinishedGoodsAndWorkInProgress": {
+        "fr_label": "Variation des stocks de produits en-cours et de produits finis",
+        "en_label": "Changes in inventories"
+      },
+      "eif:OtherOperatingIncomeExpenseRecurring": {
+        "fr_label": "Autres produits et charges d'exploitation",
+        "en_label": "Other operating income and expenses"
+      },
+      "eif:ProfitLossFromOperatingActivitiesRecurring": {
+        "fr_label": "Résultat opérationnel courant",
+        "en_label": "Operating profit on ordinary activities"
+      },
+      "eif:OtherOperatingIncomeExpenseNonRecurring": {
+        "fr_label": "Autres produits et charges opérationnels",
+        "en_label": "Other operating income and expenses"
+      },
+      "ifrs-full:ProfitLossFromOperatingActivities": {
+        "fr_label": "Résultat opérationnel",
+        "en_label": "Operating profit"
+      },
+      "ifrs-full:InterestIncomeOnCashAndCashEquivalents": {
+        "fr_label": "Produits de trésorerie et d'équivalents de trésorerie",
+        "en_label": "Income from cash and cash equivalent"
+      },
+      "ifrs-full:InterestExpenseOnBorrowings": {
+        "fr_label": "Coût de l'endettement financier brut",
+        "en_label": "Cost of gross debt"
+      },
+      "eif:CostOfNetDebt": {
+        "fr_label": "Coût de l'endettement financier net",
+        "en_label": "Net finance costs"
+      },
+      "ifrs-full:OtherFinanceIncomeCost": {
+        "fr_label": "Autres produits et charges financiers",
+        "en_label": "Other financial income (expenses)"
+      },
+      "ifrs-full:ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": {
+        "fr_label": "Quote-part du résultat des sociétés mises en équivalence",
+        "en_label": "Share of profit (loss) of equity-method investments"
+      },
+      "ifrs-full:IncomeTaxExpenseContinuingOperations": {
+        "fr_label": "Impôt sur le résultat",
+        "en_label": "Corporation tax"
+      },
+      "ifrs-full:ProfitLoss": {
+        "fr_label": "Résultat net",
+        "en_label": "Net profit"
+      },
+      "ifrs-full:ProfitLossAttributableToOwnersOfParent": {
+        "fr_label": "Part du Groupe",
+        "en_label": "Attributable to the Group"
+      },
+      "ifrs-full:ProfitLossAttributableToNoncontrollingInterests": {
+        "fr_label": "Participations ne donnant pas le contrôle",
+        "en_label": "Non controlling interests"
+      },
+      "ifrs-full:BasicEarningsLossPerShare": {
+        "fr_label": "Résultat de base par action (part du Groupe)",
+        "en_label": "Basic earnings per share (Group share)"
+      },
+      "ifrs-full:DilutedEarningsLossPerShare": {
+        "fr_label": "Résultat dilué par action (part du Groupe)",
+        "en_label": "Diluted earnings per share (Group share)"
+      },
+      "eif:RevenueFromConstructionOfConcessionsIfric12": {
+        "fr_label": "Chiffre d'affaires construction des Concessions IFRIC 12",
+        "en_label": "Revenue from construction of concessions (IFRIC 12)"
+      },
+      "ifrs-full:PropertyPlantAndEquipment": {
+        "fr_label": "Immobilisations corporelles",
+        "en_label": "Property, plant and equipment"
+      },
+      "ifrs-full:RightofuseAssets": {
+        "fr_label": "Droits d'utilisation des actifs loués",
+        "en_label": "Assets held under a finance lease"
+      },
+      "ifrs-full:InvestmentProperty": {
+        "fr_label": "Immeubles de placement",
+        "en_label": "Investment property"
+      },
+      "eif:ServiceConcessionRights": {
+        "fr_label": "Immobilisations incorporelles du domaine concédé",
+        "en_label": "Fixed assets held under concessions"
+      },
+      "ifrs-full:Goodwill": {
+        "fr_label": "Goodwill",
+        "en_label": "Goodwill on acquisition"
+      },
+      "ifrs-full:OtherIntangibleAssets": {
+        "fr_label": "Autres immobilisations incorporelles",
+        "en_label": "Other intangible assets"
+      },
+      "ifrs-full:InvestmentAccountedForUsingEquityMethod": {
+        "fr_label": "Participations dans les sociétés mises en équivalence",
+        "en_label": "Equity-method investments"
+      },
+      "eif:NonCurrentFinancialAssetsServiceConcessionArrangements": {
+        "fr_label": "Actifs financiers sur accords de concession de services non courants",
+        "en_label": "Financial assets on non-current service concessions"
+      },
+      "ifrs-full:OtherNoncurrentFinancialAssets": {
+        "fr_label": "Autres actifs financiers non courants",
+        "en_label": "Other non-current financial assets"
+      },
+      "ifrs-full:DeferredTaxAssets": {
+        "fr_label": "Impôts différés",
+        "en_label": "Deferred tax assets"
+      },
+      "ifrs-full:OtherNoncurrentAssets": {
+        "fr_label": "Autres actifs non courants",
+        "en_label": "Other non-current assets"
+      },
+      "ifrs-full:NoncurrentAssets": {
+        "fr_label": "Total actif non courant",
+        "en_label": "Total non current assets"
+      },
+      "ifrs-full:Inventories": {
+        "fr_label": "Stocks",
+        "en_label": "Inventories"
+      },
+      "eif:TradeAndOtherCurrentReceivablesAndContractAssets": {
+        "fr_label": "Clients et autres débiteurs",
+        "en_label": "Trade receivables"
+      },
+      "ifrs-full:CurrentTaxAssetsCurrent": {
+        "fr_label": "Impôts courants",
+        "en_label": "Current tax receivables"
+      },
+      "eif:CurrentFinancialAssetsServiceConcessionArrangements": {
+        "fr_label": "Actifs financiers sur accords de concession de services courants",
+        "en_label": "Financial assets on service concessions current"
+      },
+      "ifrs-full:OtherCurrentAssets": {
+        "fr_label": "Autres actifs",
+        "en_label": "Other current assets"
+      },
+      "ifrs-full:OtherCurrentFinancialAssets": {
+        "fr_label": "Autres actifs financiers",
+        "en_label": "Other financial assets"
+      },
+      "ifrs-full:CashAndCashEquivalents": {
+        "fr_label": "Trésorerie et équivalents de trésorerie",
+        "en_label": "Cash and cash equivalent"
+      },
+      "ifrs-full:NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale": {
+        "fr_label": "Actifs détenus en vue de la vente",
+        "en_label": "Assets held for sale"
+      },
+      "ifrs-full:CurrentAssets": {
+        "fr_label": "Total actif courant",
+        "en_label": "Total current assets"
+      },
+      "ifrs-full:Assets": {
+        "fr_label": "Total de l'actif",
+        "en_label": "Total assets"
+      },
+      "ifrs-full:IssuedCapital": {
+        "fr_label": "Capital",
+        "en_label": "Share capital"
+      },
+      "eif:SharePremiumTreasurySharesMiscellaneousOtherReservesAndRetainedEarningsExcludingProfitLossForReportingPeriod": {
+        "fr_label": "Réserves consolidées",
+        "en_label": "Consolidated reserves"
+      },
+      "ifrs-full:AccumulatedOtherComprehensiveIncome": {
+        "fr_label": "Cumul des autres éléments du résultat global",
+        "en_label": "All other comprehensive income items"
+      },
+      "ifrs-full:RetainedEarningsProfitLossForReportingPeriod": {
+        "fr_label": "Résultat de l'exercice",
+        "en_label": "Net profit for the period"
+      },
+      "ifrs-full:EquityAttributableToOwnersOfParent": {
+        "fr_label": "Capitaux propres part du Groupe",
+        "en_label": "Total capital and reserves, attributable to the Group"
+      },
+      "ifrs-full:NoncontrollingInterests": {
+        "fr_label": "Participations ne donnant pas le contrôle",
+        "en_label": "Non-controlling interests"
+      },
+      "ifrs-full:Equity": {
+        "fr_label": "Total des capitaux propres",
+        "en_label": "Total capital and reserves"
+      },
+      "ifrs-full:LongtermBorrowings": {
+        "fr_label": "Emprunts",
+        "en_label": "Long-term debt"
+      },
+      "ifrs-full:NoncurrentLeaseLiabilities": {
+        "fr_label": "Dettes de location",
+        "en_label": "Lease liabilities"
+      },
+      "ifrs-full:DeferredTaxLiabilities": {
+        "fr_label": "Impôts différés",
+        "en_label": "Deferred tax liabilities"
+      },
+      "ifrs-full:NoncurrentProvisions": {
+        "fr_label": "Provisions non courantes",
+        "en_label": "Non-current provisions"
+      },
+      "ifrs-full:OtherNoncurrentLiabilities": {
+        "fr_label": "Autres passifs non courants",
+        "en_label": "Other non-current liabilities"
+      },
+      "ifrs-full:NoncurrentLiabilities": {
+        "fr_label": "Total passif non courant",
+        "en_label": "Total non-current liabilities"
+      },
+      "ifrs-full:TradeAndOtherCurrentPayables": {
+        "fr_label": "Fournisseurs et autres créanciers",
+        "en_label": "Trade creditors"
+      },
+      "ifrs-full:ShorttermBorrowings": {
+        "fr_label": "Emprunts et dettes financières diverses",
+        "en_label": "Short-term loans and other borrowings"
+      },
+      "ifrs-full:CurrentPortionOfLongtermBorrowings": {
+        "fr_label": "Partie à moins d'un an des emprunts non courants",
+        "en_label": "Non-current borrowings due within one year"
+      },
+      "ifrs-full:CurrentLeaseLiabilities": {
+        "fr_label": "Partie à moins d'un an des dettes de location",
+        "en_label": "Lease liabilities due within one year"
+      },
+      "ifrs-full:CurrentTaxLiabilitiesCurrent": {
+        "fr_label": "Dette d'impôt sur le résultat",
+        "en_label": "Current tax liabilities"
+      },
+      "ifrs-full:CurrentProvisions": {
+        "fr_label": "Provisions courantes",
+        "en_label": "Current provisions"
+      },
+      "ifrs-full:OtherCurrentLiabilities": {
+        "fr_label": "Autres passifs",
+        "en_label": "Other creditors and accruals"
+      },
+      "ifrs-full:LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale": {
+        "fr_label": "Passifs détenus en vue de la vente",
+        "en_label": "Liabilities held for sale"
+      },
+      "ifrs-full:CurrentLiabilities": {
+        "fr_label": "Total passif courant",
+        "en_label": "Total current liabilities"
+      },
+      "ifrs-full:EquityAndLiabilities": {
+        "fr_label": "Total des capitaux propres et passifs",
+        "en_label": "Total liabilities and shareholder's equity"
+      },
+      "ifrs-full:CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition": {
+        "fr_label": "Trésorerie et équivalents de trésorerie à l'ouverture",
+        "en_label": "Cash and equivalents at 1 January"
+      },
+      "ifrs-full:EffectOfExchangeRateChangesOnCashAndCashEquivalents": {
+        "fr_label": "Incidence des variations de cours des devises",
+        "en_label": "Currency effect"
+      },
+      "eif:CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPositionAtBeginningOfPeriodAfterEffectOfExchangeRateChangesOnCashAndCashEquivalents": {
+        "fr_label": "Trésorerie d'ouverture corrigée",
+        "en_label": "Restated cash at 1 January"
+      },
+      "ifrs-full:ProfitLoss": {
+        "fr_label": "Résultat net",
+        "en_label": "Net profit"
+      },
+      "ifrs-full:AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod": {
+        "fr_label": "Résultat des sociétés mises en équivalence",
+        "en_label": "Profit (loss) of equity-method investments"
+      },
+      "ifrs-full:DividendsReceivedClassifiedAsOperatingActivities": {
+        "fr_label": "Dividendes reçus des sociétés mises en équivalence",
+        "en_label": "Dividends from equity-method investments"
+      },
+      "ifrs-full:AdjustmentsForDepreciationAndAmortisationExpense": {
+        "fr_label": "Dotation aux amortissements",
+        "en_label": "Depreciation and amortisation"
+      },
+      "ifrs-full:AdjustmentsForProvisions": {
+        "fr_label": "Dotation nette aux provisions",
+        "en_label": "Net increase in provisions"
+      },
+      "ifrs-full:OtherAdjustmentsForNoncashItems": {
+        "fr_label": "Autres résultats sans effet sur la trésorerie",
+        "en_label": "Other non-cash items"
+      },
+      "ifrs-full:AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets": {
+        "fr_label": "Résultat sur cessions",
+        "en_label": "Gain (loss) on disposals"
+      },
+      "eif:CashFlowsFromUsedInOperationsAfterCostOfNetDebtAndIncomeTaxExpense": {
+        "fr_label": "Autofinancement",
+        "en_label": "Self-financing"
+      },
+      "ifrs-full:AdjustmentsForInterestExpense": {
+        "fr_label": "Charge nette d'intérêts",
+        "en_label": "Net interest expense"
+      },
+      "ifrs-full:InterestPaidClassifiedAsOperatingActivities": {
+        "fr_label": "Intérêts versés",
+        "en_label": "Interest paid"
+      },
+      "ifrs-full:AdjustmentsForIncomeTaxExpense": {
+        "fr_label": "Charge d'impôt sur le résultat",
+        "en_label": "Income tax expense"
+      },
+      "ifrs-full:IncomeTaxesPaidClassifiedAsOperatingActivities": {
+        "fr_label": "Impôt sur le résultat payé",
+        "en_label": "Income tax paid"
+      },
+      "ifrs-full:IncreaseDecreaseInWorkingCapital": {
+        "fr_label": "Variation du besoin en fonds de roulement lié à l'activité",
+        "en_label": "Change in working capital requirement"
+      },
+      "ifrs-full:CashFlowsFromUsedInOperatingActivities": {
+        "fr_label": "Flux nets de trésorerie générés par l'activité opérationnelle (I)",
+        "en_label": "Net cash from operating activities (I)"
+      },
+      "eif:PurchaseOfPropertyPlantAndEquipmentAndIntangibleAssetsOtherThanServiceConcessionRightsAndGoodwill": {
+        "fr_label": "Acquisitions d'immobilisations incorporelles et corporelles",
+        "en_label": "Purchases of fixed assets"
+      },
+      "eif:PurchaseOfServiceConcessionRightsClassifiedAsInvestingActivities": {
+        "fr_label": "Acquisitions d'immobilisations incorporelles du domaine concédé",
+        "en_label": "Purchases of intangible concession assets"
+      },
+      "eif:PurchaseOfNonCurrentFinancialAssetsClassifiedAsInvestingActivities": {
+        "fr_label": "Acquisitions d'immobilisations financières",
+        "en_label": "Purchase of non-current financial assets"
+      },
+      "ifrs-full:ProceedsFromDisposalsOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets": {
+        "fr_label": "Cessions et diminutions d'immobilisations",
+        "en_label": "Disposals and reductions of fixed assets"
+      },
+      "eif:OperatingInvestmentsClassifiedAsInvestingActivities": {
+        "fr_label": "Investissements opérationnels nets",
+        "en_label": "Net operating investments"
+      },
+      "eif:CashFlowsUsedInObtainingControlOfSubsdiariesOrOtherBusinessesPurchaseOfInterestsInInvestmentsAccountedForUsingEquityMethodAndPurchaseOfInvestmentsOtherThanInvestmentsAccountedForUsingEquityMethodClassifiedAsInvestingActivities": {
+        "fr_label": "Acquisitions de titres de participation",
+        "en_label": "Purchases of controlling interests"
+      },
+      "ifrs-full:CashFlowsFromLosingControlOfSubsidiariesOrOtherBusinessesClassifiedAsInvestingActivities": {
+        "fr_label": "Cessions de titres de participation et d'actifs correspondant à des cessions d'activité",
+        "en_label": "Disposals of controlling interests and assets held for sale"
+      },
+      "ifrs-full:CashAndCashEquivalentsInSubsidiaryOrBusinessesAcquiredOrDisposed2013": {
+        "fr_label": "Trésorerie des entités acquises/cédées",
+        "en_label": "Cash and cash equivalents of entities bought/sold"
+      },
+      "eif:FinancialInvestmentsClassifiedAsInvestingActivities": {
+        "fr_label": "Investissements financiers nets",
+        "en_label": "Net financial investments"
+      },
+      "ifrs-full:CashFlowsFromUsedInInvestingActivities": {
+        "fr_label": "Flux nets de trésorerie liés aux activités d'investissement (II)",
+        "en_label": "Net cash used in investing activities (II)"
+      },
+      "ifrs-full:DividendsPaidClassifiedAsFinancingActivities": {
+        "fr_label": "Dividendes versés aux actionnaires",
+        "en_label": "Dividends paid to shareholders*"
+      },
+      "ifrs-full:ProceedsFromIssuingShares": {
+        "fr_label": "Augmentation de capital",
+        "en_label": "Capital increase"
+      },
+      "eif:Proceedsfromchangesinownershipinterestsinsubsidiariesandpaymentsfromchangesinownershipinterestsinsubsidiaries": {
+        "fr_label": "Acquisitions/cessions d'intérêts minoritaires",
+        "en_label": "Purchases/disposals of non controlling interests"
+      },
+      "eif:PaymentsToAcquireOrRedeemEntitysSharesAndProceedsFromSaleOrIssueOfTreasuryShares": {
+        "fr_label": "Rachats et reventes d'actions propres",
+        "en_label": "Repurchase and resale of treasury shares"
+      },
+      "ifrs-full:PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": {
+        "fr_label": "Remboursement des dettes de location",
+        "en_label": "Repayment of lease liabilities"
+      },
+      "ifrs-full:RepaymentsOfBorrowingsClassifiedAsFinancingActivities": {
+        "fr_label": "Remboursement d'emprunts",
+        "en_label": "Repayment of borrowings**"
+      },
+      "ifrs-full:ProceedsFromBorrowingsClassifiedAsFinancingActivities": {
+        "fr_label": "Émission d'emprunts",
+        "en_label": "New borrowings**"
+      },
+      "ifrs-full:CashFlowsFromUsedInFinancingActivities": {
+        "fr_label": "Flux nets de trésorerie liés aux activités de financement (III)",
+        "en_label": "Net cash (used in) from financing activities (III)"
+      },
+      "eif:IncreaseDecreaseInOtherFinancialAssets": {
+        "fr_label": "Variation des autres actifs financiers (IV)",
+        "en_label": "Movement in other financial assets (IV)"
+      },
+      "ifrs-full:IncreaseDecreaseInCashAndCashEquivalentsBeforeEffectOfExchangeRateChanges": {
+        "fr_label": "Variation de trésorerie (I + II + III + IV)",
+        "en_label": "Net increase (decrease) in cash and cash equivalents (I + II + III + IV)"
+      },
+      "eif:PurchaseOfInterestsInGetlink": {
+        "fr_label": "Rachat de participations dans Getlink",
+        "en_label": "Purchase of interests in Getlink"
+      },
+      "eif:PaymentsFromChangesInOwnershipInterestsInSubsidiariesViaducDeMillau": {
+        "fr_label": "Paiements liés à des changements dans les parts d'intérêts Viaduc du Millau",
+        "en_label": "Payments from changes in ownership interests in subsidiaries Viaduc De Millau"
+      },
+      "eif:RepaymentsOfBorrowingsRelatingToFinanciereEiffarieGroupClassifiedAsFinancingActivities": {
+        "fr_label": "Remboursements d'emprunts relatifs à groupe Financière Eiffarie",
+        "en_label": "Repayments of borrowings relating to Financière Eiffarie group"
+      },
+      "eif:ProceedsFromBorrowingsRelatingToFinanciereEiffarieGroupClassifiedAsFinancingActivities": {
+        "fr_label": "Produits d'emprunts relatifs à groupe Financière Eiffarie",
+        "en_label": "Proceeds from borrowings relating to Financière Eiffarie group"
+      }
+    }
+  },
+  
+  "bouygues": {
+    "_company_info": {
+      "name": "Bouygues",
+      "lei": "969500MWNF1VZ6V0R412",
+      "description": "French construction and telecoms company"
+    },
+    "_inherits_from": ["_shared_french_construction"],
+    "concepts": {
+      "bouygues:SalesRevenue": {
+        "fr_label": "Chiffre d'affaires",
+        "en_label": "Sales revenue"
+      },
+      "bouygues:CurrentOperatingIncome": {
+        "fr_label": "Résultat opérationnel courant",
+        "en_label": "Current operating income"
+      }
+    }
+  },
+  
+  "_global_fallback": {
+    "_comment": "Global mappings that apply to all companies if not overridden",
+    "concepts": {
+      "custom:AdjustedEBITDA": {
+        "fr_label": "EBITDA ajusté",
+        "en_label": "Adjusted EBITDA"
+      },
+      "custom:UnderlyingProfit": {
+        "fr_label": "Résultat sous-jacent",
+        "en_label": "Underlying profit"
+      }
+    }
+  }
+}
