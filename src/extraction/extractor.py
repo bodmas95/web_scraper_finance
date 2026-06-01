@@ -112,8 +112,25 @@ Only respond with valid JSON — no other text.
 """
 
 
+def _clean_extraction_result(result: dict) -> dict:
+    """Clean extraction result by replacing None values with empty strings."""
+    rows = result.get("rows", [])
+    cleaned_rows = []
+    for row in rows:
+        if isinstance(row, dict):
+            cleaned_row = {k: (v if v is not None else "") for k, v in row.items()}
+            cleaned_rows.append(cleaned_row)
+        else:
+            cleaned_rows.append(row)
+    
+    result["rows"] = cleaned_rows
+    return result
+
+
 def extract_table(
     page_text: str,
+    provider: str = None,
+    model: str = None,
 ) -> dict:
     print("\n" + "#"*80)
     print("EXTRACT_TABLE CALLED - TEXT EXTRACTION")
@@ -123,7 +140,8 @@ def extract_table(
         print("No text to extract from.")
         return {"rows": [], "year_headers": [], "total_rows": 0}
 
-    print(f"Calling LLM with model: {LLM_MODEL}")
+    _model = model or LLM_MODEL
+    print(f"Calling LLM with model: {_model}")
     print(f"Page text length: {len(page_text)} characters")
     print("\nFull page text being sent to LLM:")
     print("-" * 80)
@@ -131,10 +149,10 @@ def extract_table(
     print("-" * 80)
     print("#"*80)
     
-    client = get_client()
+    client = get_client(provider=provider, model=model)
 
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=_model,
         messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(page_text=page_text)}],
         temperature=0,
         response_format={"type": "json_object"},
@@ -168,7 +186,7 @@ def extract_table(
     print(f"  + Year-end date: {year_end_date if year_end_date else 'NOT EXTRACTED'}")
     print()
 
-    return {
+    result = {
         "rows":          rows,
         "year_headers":  year_headers,
         "year_currencies": year_currencies,
@@ -176,23 +194,27 @@ def extract_table(
         "year_end_date": year_end_date,
         "total_rows":    len(rows),
     }
+    
+    # Clean None values (especially for GPT-5.1 which sometimes returns None)
+    return _clean_extraction_result(result)
 
 
-def extract_table_from_image(image_bytes: bytes) -> dict:
+def extract_table_from_image(image_bytes: bytes, provider: str = None, model: str = None) -> dict:
     """Extract a financial table from a page image using LLM vision."""
     print("\n" + "#"*80)
     print("EXTRACT_TABLE_FROM_IMAGE CALLED - VISION EXTRACTION")
     print("#"*80)
-    print(f"Calling LLM with model: {LLM_MODEL}")
+    _model = model or LLM_MODEL
+    print(f"Calling LLM with model: {_model}")
     print(f"Image size: {len(image_bytes)} bytes")
     print("#"*80)
     
-    client = get_client()
+    client = get_client(provider=provider, model=model)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     print(f"Image encoded to base64, length: {len(b64)} chars")
 
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=_model,
         messages=[{
             "role": "user",
             "content": [
@@ -232,7 +254,7 @@ def extract_table_from_image(image_bytes: bytes) -> dict:
     print(f"  + Year-end date: {year_end_date if year_end_date else 'NOT EXTRACTED'}")
     print()
 
-    return {
+    result = {
         "rows":          rows,
         "year_headers":  year_headers,
         "year_currencies": year_currencies,
@@ -240,12 +262,17 @@ def extract_table_from_image(image_bytes: bytes) -> dict:
         "year_end_date": year_end_date,
         "total_rows":    len(rows),
     }
+    
+    # Clean None values (especially for GPT-5.1 which sometimes returns None)
+    return _clean_extraction_result(result)
 
 
 def extract_table_with_vision_fallback(
     page_candidate: dict,
     pdf_path: str,
     stitch_fn=None,
+    provider: str = None,
+    model: str = None,
 ) -> dict:
     """Extract a financial table, auto-falling back to vision when text is garbled."""
     if page_candidate.get("text_garbled"):
@@ -267,9 +294,9 @@ def extract_table_with_vision_fallback(
         else:
             img_bytes = page_imgs[0]
         print("  Auto-falling back to vision extraction (garbled/CID-encoded text detected)")
-        return extract_table_from_image(img_bytes)
+        return extract_table_from_image(img_bytes, provider=provider, model=model)
     else:
-        return extract_table(page_candidate["full_text"])
+        return extract_table(page_candidate["full_text"], provider=provider, model=model)
 
 
 def rows_to_text(rows: list) -> str:
