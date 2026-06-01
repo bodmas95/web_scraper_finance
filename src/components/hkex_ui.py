@@ -13,6 +13,7 @@ import streamlit as st
 
 from config.config import get_section as _get_section, SEARCH_URL
 from src import http_client
+from src.extraction.model_config import render_model_selector
 from src.parser.hkexnews.parser import HKEXParser
 from src.components.brefmap_ui import (
     stitch_images_vertical,
@@ -286,9 +287,12 @@ def render_hkex_section(company, hkex_ticker):
                         extract_income = st.checkbox("Income Statement", value=True, key=f"cb_income_{idx}")
                         extract_balance = st.checkbox("Balance Sheet", value=True, key=f"cb_balance_{idx}")
                         extract_cashflow = st.checkbox("Cash Flow", value=True, key=f"cb_cashflow_{idx}")
-
+                                                # Model selection
+                        st.markdown("**Select AI Model:**")
+                        provider, model_id = render_model_selector(key_prefix=f"hkex_{idx}")
+                        
                         # Add force re-extract checkbox
-                        force_reextract = st.checkbox("🔄 Force re-extract (ignore cache)", value=False, key=f"cb_force_{idx}", help="Clear cached results and run fresh extraction")
+                        force_reextract = st.checkbox("Force re-extract (ignore cache)", value=False, key=f"cb_force_{idx}", help="Clear cached results and run fresh extraction")
 
                         selected_types = (
                             (["income_statement"] if extract_income else []) +
@@ -380,8 +384,11 @@ def render_hkex_section(company, hkex_ticker):
                                                 else:
                                                     # Extract table with detailed logging (auto-falls back to vision for garbled PDFs)
                                                     with contextlib.redirect_stdout(_logger):
-                                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
-
+                                                       #_table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                                        _table = extract_table_with_vision_fallback(
+                                                            _page, _pdf_path, stitch_images_vertical,
+                                                            provider=provider, model=model_id
+                                                        )
                                                     if not _table["rows"]:
                                                         st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
                                                         _manual_needed.append(_stype)
@@ -582,6 +589,10 @@ def render_hkex_section(company, hkex_ticker):
                 (["balance_sheet"] if manual_extract_balance else []) +
                 (["cash_flow"] if manual_extract_cashflow else [])
             )
+            
+            # Model selection for manual upload
+            st.markdown("**Select AI Model:**")
+            manual_provider, manual_model_id = render_model_selector(key_prefix="manual_upload")
 
             extract_disabled = not manual_selected_types
 
@@ -753,10 +764,13 @@ def render_hkex_section(company, hkex_ticker):
                                     else:
                                         st.warning(f"Could not locate **{statement_label}** page — skipped.")
                                 else:
-                                                                            # Extract table with detailed logging
+                                                                                                                # Extract table with detailed logging
                                     print(f"Extracting table from {len(_page.get('all_page_nums', []))} page(s): {[p+1 for p in _page.get('all_page_nums', [])]}")
                                     with contextlib.redirect_stdout(_logger):
-                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                        _table = extract_table_with_vision_fallback(
+                                            _page, _pdf_path, stitch_images_vertical,
+                                            provider=manual_provider, model=manual_model_id
+                                        )
 
                                         if not _table["rows"]:
                                             st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
@@ -822,7 +836,10 @@ def render_hkex_section(company, hkex_ticker):
                                             continue
 
                                         with contextlib.redirect_stdout(_logger):
-                                            _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                            _table = extract_table_with_vision_fallback(
+                                                _page, _pdf_path, stitch_images_vertical,
+                                                provider=manual_provider, model=manual_model_id
+                                            )
 
                                         if not _table["rows"]:
                                             st.warning(f"No data extracted from page {page_num_1based}.")
