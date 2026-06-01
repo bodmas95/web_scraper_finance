@@ -21,6 +21,7 @@ from src.components.brefmap_ui import (
     render_pdf_panel,
     create_pdf_excel,
 )
+from src.extraction.model_config import render_model_selector
 
 # ==============================================================================
 # PDF EXTRACTION AVAILABILITY
@@ -473,11 +474,15 @@ def render_sec_edgar_section(company):
             with col_cb3:
                 sec_extract_cashflow = st.checkbox("Cash Flow", value=True, key="sec_cb_cashflow")
 
-            sec_selected_types = (
+                sec_selected_types = (
                 (["income_statement"] if sec_extract_income else []) +
                 (["balance_sheet"] if sec_extract_balance else []) +
                 (["cash_flow"] if sec_extract_cashflow else [])
             )
+            
+            # Model selection for SEC upload
+            st.markdown("**Select AI Model:**")
+            sec_provider, sec_model_id = render_model_selector(key_prefix="sec_upload")
 
             extract_disabled = not sec_selected_types
 
@@ -618,7 +623,10 @@ def render_sec_edgar_section(company):
                                         _manual_needed.append(_stype)
                                 else:
                                     with contextlib.redirect_stdout(_logger):
-                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                        _table = extract_table_with_vision_fallback(
+                                            _page, _pdf_path, stitch_images_vertical,
+                                            provider=sec_provider, model=sec_model_id
+                                        )
 
                                         if not _table["rows"]:
                                             st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
@@ -685,7 +693,10 @@ def render_sec_edgar_section(company):
                                             continue
 
                                         with contextlib.redirect_stdout(_logger):
-                                            _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                            _table = extract_table_with_vision_fallback(
+                                                _page, _pdf_path, stitch_images_vertical,
+                                                provider=sec_provider, model=sec_model_id
+                                            )
 
                                         if not _table["rows"]:
                                             st.warning(f"No data extracted from page {page_num_1based}.")
