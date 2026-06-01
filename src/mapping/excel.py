@@ -141,11 +141,23 @@ def load_bref_fields(excel_path: str, sheet_name: str, target_year: int, field_m
             description = row[COL_DESC - 1].value or ""
         elif field_mappings:
             # Fallback to field_mappings.py if no alias/description in template
-            description = field_mappings.get(label_str, "")
-            if isinstance(description, list):
-                description = ", ".join(description)
+            field_data = field_mappings.get(label_str, "")
+            
+            # Handle different field_data formats
+            if isinstance(field_data, dict):
+                # New format: {"aliases": [...], "calculation": ..., "is_calculated": ...}
+                aliases = field_data.get('aliases', [])
+                description = ", ".join(aliases) if aliases else ""
+            elif isinstance(field_data, list):
+                # Old format: just a list of aliases
+                description = ", ".join(field_data)
+            else:
+                # String or other format
+                description = str(field_data) if field_data else ""
+            
             if description:
-                print(f"  Using alias from field_mappings.py for {label_str}: {description[:50]}...")
+                desc_preview = description[:50] + "..." if len(description) > 50 else description
+                print(f"  Using alias from field_mappings.py for {label_str}: {desc_preview}")
         else:
             description = ""
         
