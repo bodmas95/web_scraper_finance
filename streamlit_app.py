@@ -428,24 +428,13 @@ def main():
         st.markdown("### Available Data Sources")
 
         if st.session_state.company_sources:
-            # Create dataframe for sources
-            sources_data = []
-            for idx, source in enumerate(st.session_state.company_sources):
-                sources_data.append({
-                    '#': idx + 1,
-                    'Source': source.get('source', 'N/A'),
-                    'Type': source.get('sourceType', 'N/A'),
-                    'URL': source.get('sourceUrl', 'N/A'),
-                    'Status': source.get('status', 'N/A')
-                })
-
-            sources_df = pd.DataFrame(sources_data)
-            st.dataframe(
-                sources_df,
-                width='stretch',
-                hide_index=True,
-                height=200
-            )
+            # Display sources as simple list instead of dataframe to avoid React errors
+            for idx, source in enumerate(st.session_state.company_sources, 1):
+                st.write(f"**{idx}. {source.get('source', 'N/A')}**")
+                st.caption(f"Type: {source.get('sourceType', 'N/A')} | Status: {source.get('status', 'N/A')}")
+                if source.get('sourceUrl'):
+                    st.caption(f"URL: {source.get('sourceUrl', 'N/A')}")
+                st.markdown("---")
         else:
             st.info("No data sources found for this company")
 
