@@ -13,11 +13,25 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.ini")
 # Functions (used by OVH pipeline via: from config.config import ...)
 # ---------------------------------------------------------------------------
 
+_cached_config: configparser.ConfigParser | None = None
+
+
 def load_config() -> configparser.ConfigParser:
-    """Return a fresh ConfigParser instance reading config.ini."""
+    """Return a cached ConfigParser instance (re-reads only on first call)."""
+    global _cached_config
+    if _cached_config is not None:
+        return _cached_config
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.read(CONFIG_PATH)
+    _cached_config = cfg
     return cfg
+
+
+def reload_config() -> configparser.ConfigParser:
+    """Force re-read config.ini from disk."""
+    global _cached_config
+    _cached_config = None
+    return load_config()
 
 
 def get_section(section: str) -> dict:

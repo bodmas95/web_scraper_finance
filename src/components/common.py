@@ -101,11 +101,17 @@ def reset_company_state():
 # MONGODB LOADERS
 # ==============================================================================
 
+def _get_db():
+    """Return the cached MongoDB database handle (no new connection per call)."""
+    from src.cache import get_mongo_db
+    return get_mongo_db()
+
+
 def load_regions_from_mongodb():
     try:
-        with MongoDBClient() as client:
-            regions = client.db.companies.distinct("region")
-            return sorted([r for r in regions if r])
+        db = _get_db()
+        regions = db.companies.distinct("region")
+        return sorted([r for r in regions if r])
     except Exception as e:
         st.error(f"Error loading regions from MongoDB: {str(e)}")
         return []
@@ -113,9 +119,9 @@ def load_regions_from_mongodb():
 
 def load_countries_by_region(region):
     try:
-        with MongoDBClient() as client:
-            countries = client.db.companies.distinct("country", {"region": region})
-            return sorted([c for c in countries if c])
+        db = _get_db()
+        countries = db.companies.distinct("country", {"region": region})
+        return sorted([c for c in countries if c])
     except Exception as e:
         st.error(f"Error loading countries from MongoDB: {str(e)}")
         return []
@@ -123,12 +129,9 @@ def load_countries_by_region(region):
 
 def load_companies_by_region_country(region, country):
     try:
-        with MongoDBClient() as client:
-            companies = list(client.db.companies.find({
-                "region": region,
-                "country": country
-            }))
-            return companies
+        db = _get_db()
+        companies = list(db.companies.find({"region": region, "country": country}).sort("name", 1))
+        return companies
     except Exception as e:
         st.error(f"Error loading companies from MongoDB: {str(e)}")
         return []
@@ -136,9 +139,9 @@ def load_companies_by_region_country(region, country):
 
 def get_company_sources(company_id):
     try:
-        with MongoDBClient() as client:
-            sources = list(client.db.sources.find({"companyId": str(company_id)}))
-            return sources
+        db = _get_db()
+        sources = list(db.sources.find({"companyId": str(company_id)}).sort("_id", 1))
+        return sources
     except Exception as e:
         st.error(f"Error loading sources: {str(e)}")
         return []

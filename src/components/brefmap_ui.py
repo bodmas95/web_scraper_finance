@@ -120,16 +120,36 @@ def zoom_dialog(pdf_bytes, page_nums, crop_bbox):
         st.error(f"Could not render zoom view: {e}")
 
 
-def load_nextera4_template():
+def load_bref_template(region: str = "US"):
+    """Load region-specific BREF template.
+    
+    Args:
+        region: "US" for NEXTERA 4.xlsx, "APAC" for KLN.xlsx
+    
+    Returns:
+        bytes: Template file content or None if not found
+    """
     try:
-        template_path = Path("NEXTERA 4.xlsx")
-        if template_path.exists():
-            return template_path.read_bytes()
-        template_path = Path("bref-populator-latest/NEXTERA 4.xlsx")
-        if template_path.exists():
-            return template_path.read_bytes()
+        if region == "APAC":
+            # Try KLN.xlsx for APAC region
+            template_path = Path("KLN.xlsx")
+            if template_path.exists():
+                return template_path.read_bytes()
+            # Fallback to lowercase
+            template_path = Path("kln.xlsx")
+            if template_path.exists():
+                return template_path.read_bytes()
+        else:
+            # Try NEXTERA 4.xlsx for US region
+            template_path = Path("NEXTERA 4.xlsx")
+            if template_path.exists():
+                return template_path.read_bytes()
+            # Fallback to subfolder
+            template_path = Path("bref-populator-latest/NEXTERA 4.xlsx")
+            if template_path.exists():
+                return template_path.read_bytes()
     except Exception as e:
-        print(f"Error loading NEXTERA 4 template: {e}")
+        print(f"Error loading {region} template: {e}")
     return None
 
 
@@ -140,6 +160,127 @@ def find_year_column(worksheet, year: int) -> int:
             if cell_value and str(year) in str(cell_value):
                 return col_idx
     return None
+
+
+# ==============================================================================
+# COMPANY NAME EXTRACTION
+# ==============================================================================
+
+def _extract_company_name_from_pdf(rows: list, pdf_filename: str = "", pdf_bytes: bytes = None) -> str:
+    """Extract company name from financial statement data using LLM.
+    
+    Args:
+        rows: Extracted financial statement rows
+        pdf_filename: PDF filename for fallback
+        pdf_bytes: PDF file bytes to extract text from first page
+    
+    Returns:
+        Extracted company name
+    """
+    import json
+    from src.extraction.llm_client import get_client
+    from src.extraction.extraction_config import LLM_MODEL
+    
+    # Try to extract from PDF first page if available
+    pdf_text = ""
+    if pdf_bytes:
+        try:
+            import fitz
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            if len(doc) > 0:
+                # Get text from first page (usually has company name)
+                first_page = doc[0]
+                pdf_text = first_page.get_text()
+                # Get first 500 characters (header area)
+                pdf_text = pdf_text[:500]
+            doc.close()
+        except Exception as e:
+            print(f"Could not extract PDF text: {e}")
+    
+    # Get first 20 rows for context (usually contains company name)
+    sample_rows = rows[:20] if len(rows) > 20 else rows
+    
+    # Format rows as text
+    rows_text = []
+    for row in sample_rows:
+        if isinstance(row, dict):
+            label = row.get('label', '')
+            parent = row.get('parent', '')
+            if parent:
+                rows_text.append(f"{parent} > {label}")
+            else:
+                rows_text.append(label)
+        else:
+            rows_text.append(str(row))
+    
+        context = "\n".join(rows_text[:15])  # Use first 15 rows
+    
+    prompt = f"""
+Extract the company name from this financial statement.
+
+Filename: {pdf_filename}
+
+PDF Header (first page):
+{pdf_text if pdf_text else 'Not available'}
+
+Statement excerpt:
+{context}
+
+Instructions:
+1. FIRST, look for the company name in the PDF header (first page text)
+2. The company name is usually at the top of the first page, before the statement title
+3. Look for patterns like:
+   - "COMPANY NAME\nCONSOLIDATED STATEMENTS..."
+   - "Annual Report of COMPANY NAME"
+   - Company name in header/footer
+4. Return the full legal company name (e.g., "Apple Inc.", "Tesla, Inc.", "Alibaba Group Holding Limited")
+5. Include legal suffixes: Inc., Ltd., Limited, Corporation, Corp., Co., etc.
+6. Do NOT include:
+   - Report type (Annual Report, 10-K, etc.)
+   - Year or date
+   - Page numbers
+   - Statement type (Income Statement, etc.)
+7. If you cannot find a clear company name, use the filename as fallback
+
+Examples:
+- Good: "Apple Inc."
+- Good: "Alibaba Group Holding Limited"
+- Bad: "Apple Inc. Annual Report 2023"
+- Bad: "Income Statement"
+
+Respond with valid JSON only:
+{{
+  "company_name": "extracted company name",
+  "confidence": "high|medium|low",
+  "source": "pdf_header|statement|filename"
+}}
+"""
+    
+    try:
+        client = get_client()
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        company_name = result.get("company_name", "")
+        confidence = result.get("confidence", "low")
+        source = result.get("source", "unknown")
+        
+        print(f"\n📋 Company Name Extraction:")
+        print(f"  Name: {company_name}")
+        print(f"  Confidence: {confidence}")
+        print(f"  Source: {source}")
+        
+        return company_name if company_name else pdf_filename.replace('.pdf', '').replace('_', ' ').strip()
+    
+    except Exception as e:
+        print(f"⚠️ Company name extraction failed: {e}")
+        # Fallback to filename
+        return pdf_filename.replace('.pdf', '').replace('_', ' ').strip()
 
 
 # ==============================================================================
@@ -486,16 +627,112 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
 
         st.subheader("Step 1: Configuration")
 
-        col_name, col_year, col_region, col_template = st.columns([3, 1, 1, 2])
+        col_name, col_year, col_region = st.columns([3, 1, 1])
 
         with col_name:
-            bref_company_name = st.text_input(
-                "Company Name",
-                value="",
-                placeholder="Enter Company Name",
-                key=f"{key_prefix}_bref_company_{statement_type}",
-                help="Enter company name for BREF mapping"
-            )
+            # Auto-populate company name using LLM extraction from PDF content
+            auto_company_name = ""
+            extraction_cache_key = f"{key_prefix}_extracted_company_name_{statement_type}"
+            
+            # Check if we already extracted the company name (cache it)
+            if extraction_cache_key in st.session_state:
+                auto_company_name = st.session_state[extraction_cache_key]
+            else:
+                # Extract company name from PDF using LLM
+                report_title = ""
+                
+                # Get report title for fallback
+                if key_prefix == "manual" and hasattr(st.session_state, 'manual_extraction_report_title'):
+                    report_title = st.session_state.manual_extraction_report_title
+                elif key_prefix == "hkex" and hasattr(st.session_state, 'hkex_extraction_report_title'):
+                    report_title = st.session_state.hkex_extraction_report_title
+                elif key_prefix == "sec" and hasattr(st.session_state, 'sec_extraction_report_title'):
+                    report_title = st.session_state.sec_extraction_report_title
+                
+                                # Extract company name from the extracted rows using LLM
+                if rows and len(rows) > 0:
+                    with st.spinner("🔍 Extracting company name from PDF..."):
+                        # Get PDF bytes if available
+                        pdf_bytes = None
+                        if hasattr(st.session_state, 'uploaded_pdf_bytes'):
+                            pdf_bytes = st.session_state.uploaded_pdf_bytes
+                        
+                        auto_company_name = _extract_company_name_from_pdf(rows, report_title, pdf_bytes)
+                        # Cache the extracted name
+                        st.session_state[extraction_cache_key] = auto_company_name
+                else:
+                    # Fallback to filename or dropdown
+                    if report_title:
+                        auto_company_name = report_title.replace('.pdf', '').replace('_', ' ').strip()
+                    elif hasattr(st.session_state, 'selected_company_name') and st.session_state.selected_company_name:
+                        auto_company_name = st.session_state.selected_company_name
+                    elif hasattr(st.session_state, 'selected_company') and st.session_state.selected_company:
+                        auto_company_name = st.session_state.selected_company.get('name', '')
+            
+                                    # Initialize manual override state
+            manual_override_key = f"{key_prefix}_manual_company_override_{statement_type}"
+            if manual_override_key not in st.session_state:
+                st.session_state[manual_override_key] = False
+            
+            # Ensure bref_company_name is defined
+            bref_company_name = auto_company_name
+            
+            # Show input with Edit checkbox and Re-extract button if auto-populated
+            if auto_company_name:
+                col_input, col_checkbox, col_reextract = st.columns([3, 0.5, 0.7])
+                with col_input:
+                    if st.session_state[manual_override_key]:
+                        # Manual edit mode - editable input
+                        bref_company_name = st.text_input(
+                            "Company Name *",
+                            value=auto_company_name,
+                            placeholder="Enter Company Name",
+                            key=f"{key_prefix}_bref_company_{statement_type}",
+                            help="Company name extracted from PDF using AI"
+                        )
+                    else:
+                        # Auto-populated mode - disabled input
+                        st.text_input(
+                            "Company Name *",
+                            value=auto_company_name,
+                            key=f"{key_prefix}_bref_company_display_{statement_type}",
+                            disabled=True,
+                            help="🤖 Auto-extracted from PDF using AI"
+                        )
+                        bref_company_name = auto_company_name
+                
+                with col_checkbox:
+                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+                    # Use on_change instead of checking value to avoid rerun loop
+                    edit_enabled = st.checkbox(
+                        "Edit",
+                        value=st.session_state[manual_override_key],
+                        key=f"{key_prefix}_override_checkbox_{statement_type}",
+                        help="Enable manual editing of company name",
+                        on_change=lambda: setattr(st.session_state, manual_override_key, not st.session_state[manual_override_key])
+                    )
+                
+                with col_reextract:
+                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button("🔄", key=f"{key_prefix}_reextract_company_{statement_type}", help="Re-extract company name", use_container_width=True):
+                        # Clear cache and re-extract
+                        if extraction_cache_key in st.session_state:
+                            del st.session_state[extraction_cache_key]
+                        st.rerun()
+            else:
+                # No auto-populated name, show manual input
+                bref_company_name = st.text_input(
+                    "Company Name *",
+                    value="",
+                    placeholder="Enter Company Name (required)",
+                    key=f"{key_prefix}_bref_company_{statement_type}",
+                    help="Company name for BREF mapping (required)"
+                )
+            
+                        # Validation: Show error if company name is empty
+            if 'bref_company_name' not in locals() or not bref_company_name or bref_company_name.strip() == "":
+                st.error("⚠️ Company name is required for BREF mapping")
+                bref_company_name = ""  # Set to empty string to prevent errors
 
         with col_year:
             bref_target_year = st.number_input(
@@ -516,22 +753,12 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                 index=_default_idx,
                 key=f"{key_prefix}_bref_region_{statement_type}",
                 help="US uses I-prefix codes, APAC uses Q-prefix codes"
-            )
+                        )
 
-        with col_template:
-            st.markdown("**Download Template**")
-            template_bytes = load_nextera4_template()
-            if template_bytes:
-                st.download_button(
-                    "📥 Default Template",
-                    data=template_bytes,
-                    file_name=f"Default_Bref_Tempalte.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key=f"{key_prefix}_dl_template_{statement_type}"
-                )
-            else:
-                st.warning("⚠️ Default Template not found in project root")
+        # Model selection for BREF mapping
+        from src.extraction.model_config import render_model_selector
+        st.markdown("**Select AI Model for Mapping:**")
+        bref_provider, bref_model_id = render_model_selector(key_prefix=f"{key_prefix}_bref_{statement_type}")
 
         st.markdown("---")
 
@@ -547,68 +774,142 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             - No validation
             - Faster processing
             """)
+            
+            # Statement type selector for raw mapping
+            # Get current statement display name
+            current_stmt_name = STATEMENT_LABELS.get(statement_type, statement_type)
+            raw_statement_options = [current_stmt_name, "Income Statement", "Balance Sheet", "Cash Flow Statement", "ALL Statements"]
+            # Remove duplicate if current statement is already in the list
+            if raw_statement_options.count(current_stmt_name) > 1:
+                raw_statement_options = [current_stmt_name] + [opt for opt in raw_statement_options[1:] if opt != current_stmt_name]
+            
+            raw_statement_choice = st.selectbox(
+                "Select Statement(s) to Map",
+                options=raw_statement_options,
+                index=0,
+                key=f"{key_prefix}_raw_statement_choice_{statement_type}",
+                help=f"Default: {current_stmt_name} only. Choose 'ALL Statements' to map all three at once."
+                        )
 
-            if st.button("Start Raw Mapping", key=f"{key_prefix}_raw_map_{statement_type}", use_container_width=True, type="secondary"):
-                bref_field_dict = get_field_mappings(bref_region).get(statement_type, {})
-
-                if not bref_field_dict:
-                    st.warning(f"No BREF field mappings defined for {statement_type}")
+            # Disable button if company name is empty
+            is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
+            
+            if st.button(
+                "Start Raw Mapping",
+                key=f"{key_prefix}_raw_map_{statement_type}",
+                use_container_width=True,
+                type="secondary",
+                disabled=not is_company_name_valid,
+                help="Company name is required" if not is_company_name_valid else "Start mapping without validation"
+            ):
+                # Determine which statement to map based on dropdown selection
+                statement_map = {
+                    "Income Statement": "income_statement",
+                    "Balance Sheet": "balance_sheet",
+                    "Cash Flow Statement": "cash_flow",
+                    "cash_flow": "cash_flow"
+                }
+                
+                # Get the selected statement type from dropdown
+                if raw_statement_choice == current_stmt_name:
+                    # User selected current statement (default)
+                    selected_statement_type = statement_type
+                elif raw_statement_choice == "ALL Statements":
+                    # Handle ALL statements later
+                    selected_statement_type = None
                 else:
-                    try:
-                        with st.status("🔄 Running raw mapping...", expanded=True) as status:
-                            st.write("📋 Loading BREF field definitions...")
-                            fields = [
-                                {
-                                    "label": label,
-                                    "description": ", ".join(aliases) if isinstance(aliases, list) else aliases,
-                                    "reference_value": None,
-                                }
-                                for label, aliases in bref_field_dict.items()
-                            ]
-                            st.write(f"✅ Loaded {len(fields)} BREF fields")
-                            st.info(f"📊 Extracted {len(rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
+                    # User selected a specific statement from dropdown
+                    selected_statement_type = statement_map.get(raw_statement_choice, statement_type)
+                
+                # Get the appropriate extraction results based on selection
+                if selected_statement_type:
+                    # Get extraction results for the selected statement
+                    if key_prefix == "hkex" and hasattr(st.session_state, 'hkex_extraction_results'):
+                        extraction_results = st.session_state.hkex_extraction_results.get(selected_statement_type, {})
+                    elif key_prefix == "sec" and hasattr(st.session_state, 'sec_extraction_results'):
+                        extraction_results = st.session_state.sec_extraction_results.get(selected_statement_type, {})
+                    elif key_prefix == "manual" and hasattr(st.session_state, 'manual_extraction_results'):
+                        extraction_results = st.session_state.manual_extraction_results.get(selected_statement_type, {})
+                    else:
+                        # Fallback to current result
+                        extraction_results = result if selected_statement_type == statement_type else {}
+                    
+                    selected_rows = extraction_results.get("rows", [])
+                    
+                    if not selected_rows:
+                        st.warning(f"⚠️ No extracted data found for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}. Please extract this statement first.")
+                    else:
+                        bref_field_dict = get_field_mappings(bref_region).get(selected_statement_type, {})
 
-                            st.write("🤖 Mapping fields using AI...")
+                        if not bref_field_dict:
+                            st.warning(f"No BREF field mappings defined for {selected_statement_type}")
+                        else:
+                            try:
+                                with st.status(f"🔄 Running raw mapping for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}...", expanded=True) as status:
+                                    st.write("📋 Loading BREF field definitions...")
+                                    fields = []
+                                    for label, field_data in bref_field_dict.items():
+                                        if isinstance(field_data, dict):
+                                            aliases = field_data.get('aliases', [])
+                                            description = ", ".join(aliases) if aliases else ""
+                                        elif isinstance(field_data, list):
+                                            description = ", ".join(field_data)
+                                        else:
+                                            description = str(field_data)
+                                        
+                                        fields.append({
+                                            "label": label,
+                                            "description": description,
+                                            "reference_value": None,
+                                        })
+                                    
+                                    st.write(f"✅ Loaded {len(fields)} BREF fields")
+                                    st.info(f"📊 Extracted {len(selected_rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
 
-                            with st.expander("📝 Mapping Logs", expanded=True):
-                                mapping_log_placeholder = st.empty()
-                                mapping_logger = BREFLiveLogger(mapping_log_placeholder)
+                                    st.write("🤖 Mapping fields using AI...")
 
-                                import contextlib
-                                with contextlib.redirect_stdout(mapping_logger):
-                                    mapped_fields = map_all_fields(
-                                        fields=fields,
-                                        extracted_rows=rows,
-                                        company_name=bref_company_name,
-                                        target_year=bref_target_year
-                                    )
+                                    with st.expander("📝 Mapping Logs", expanded=True):
+                                        mapping_log_placeholder = st.empty()
+                                        mapping_logger = BREFLiveLogger(mapping_log_placeholder)
 
-                            for field in mapped_fields:
-                                field["mode"] = "raw"
-                                field["final_confidence"] = field.get("mapping_confidence", "low")
-                                field["validation_status"] = "unverified"
+                                        import contextlib
+                                        with contextlib.redirect_stdout(mapping_logger):
+                                            mapped_fields = map_all_fields(
+                                                fields=fields,
+                                                extracted_rows=selected_rows,
+                                                company_name=bref_company_name,
+                                                target_year=bref_target_year,
+                                                provider=bref_provider,
+                                                model=bref_model_id
+                                            )
 
-                            high_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'high')
-                            low_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'low')
-                            st.write(f"✅ Mapped {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
+                                    for field in mapped_fields:
+                                        field["mode"] = "raw"
+                                        field["final_confidence"] = field.get("mapping_confidence", "low")
+                                        field["validation_status"] = "unverified"
 
-                            mapping_key = f"{key_prefix}_mapping_{statement_type}"
-                            st.session_state.bref_mapping_results[mapping_key] = {
-                                "fields": mapped_fields,
-                                "mode": "raw",
-                                "target_year": bref_target_year,
-                                "statement_type": statement_type,
-                                "company_name": bref_company_name,
-                                "region": bref_region,
-                            }
+                                    high_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'high')
+                                    low_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'low')
+                                    st.write(f"✅ Mapped {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
 
-                            status.update(label="✅ Mapping completed successfully!", state="complete")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Mapping failed: {e}")
-                        import traceback
-                        with st.expander("🐛 Error Details", expanded=True):
-                            st.code(traceback.format_exc(), language="python")
+                                    mapping_key = f"{key_prefix}_mapping_{selected_statement_type}"
+                                    st.session_state.bref_mapping_results[mapping_key] = {
+                                        "fields": mapped_fields,
+                                        "mode": "raw",
+                                        "target_year": bref_target_year,
+                                        "statement_type": selected_statement_type,
+                                        "company_name": bref_company_name,
+                                        "region": bref_region,
+                                    }
+
+                                    status.update(label=f"✅ Mapping completed for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}!", state="complete")
+                            except Exception as e:
+                                st.error(f"❌ Mapping failed: {e}")
+                                import traceback
+                                with st.expander("🐛 Error Details", expanded=True):
+                                    st.code(traceback.format_exc(), language="python")
+                else:
+                    st.info("ALL Statements mapping is not yet implemented. Please select a specific statement.")
 
         with col2:
             st.markdown("### ✅ Mapping with Validation")
@@ -618,6 +919,20 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             - Higher accuracy
             - Human review for low confidence
             """)
+            
+            # Statement type selector for validated mapping (same as raw mapping)
+            validated_statement_options = [current_stmt_name, "Income Statement", "Balance Sheet", "Cash Flow Statement"]
+            # Remove duplicate if current statement is already in the list
+            if validated_statement_options.count(current_stmt_name) > 1:
+                validated_statement_options = [current_stmt_name] + [opt for opt in validated_statement_options[1:] if opt != current_stmt_name]
+            
+            validated_statement_choice = st.selectbox(
+                "Select Statement to Map",
+                options=validated_statement_options,
+                index=0,
+                key=f"{key_prefix}_validated_statement_choice_{statement_type}",
+                help=f"Default: {current_stmt_name} only."
+            )
 
             bref_file = st.file_uploader(
                 "Upload BREF Template",
@@ -636,200 +951,303 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             if bref_file:
                 st.caption(f"✅ {bref_file.name}")
 
-                if st.button("Start Validated Mapping", use_container_width=True, type="primary", key=f"{key_prefix}_validated_map_{statement_type}"):
-                    import tempfile
-                    import openpyxl
-                    import os
+                # Disable button if company name is empty
+                is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
+                
+                if st.button(
+                    "Start Validated Mapping",
+                    use_container_width=True,
+                    type="primary",
+                    key=f"{key_prefix}_validated_map_{statement_type}",
+                    disabled=not is_company_name_valid,
+                    help="Company name is required" if not is_company_name_valid else "Start mapping with validation"
+                ):
+                    # Determine which statement to map based on dropdown selection
+                    statement_map = {
+                        "Income Statement": "income_statement",
+                        "Balance Sheet": "balance_sheet",
+                        "Cash Flow Statement": "cash_flow",
+                    }
+                    
+                    # Get the selected statement type from dropdown
+                    if validated_statement_choice == current_stmt_name:
+                        # User selected current statement (default)
+                        selected_statement_type = statement_type
+                    else:
+                        # User selected a specific statement from dropdown
+                        selected_statement_type = statement_map.get(validated_statement_choice, statement_type)
+                    
+                    # Get extraction results for the selected statement
+                    if key_prefix == "hkex" and hasattr(st.session_state, 'hkex_extraction_results'):
+                        extraction_results = st.session_state.hkex_extraction_results.get(selected_statement_type, {})
+                    elif key_prefix == "sec" and hasattr(st.session_state, 'sec_extraction_results'):
+                        extraction_results = st.session_state.sec_extraction_results.get(selected_statement_type, {})
+                    elif key_prefix == "manual" and hasattr(st.session_state, 'manual_extraction_results'):
+                        extraction_results = st.session_state.manual_extraction_results.get(selected_statement_type, {})
+                    else:
+                        # Fallback to current result
+                        extraction_results = result if selected_statement_type == statement_type else {}
+                    
+                    selected_rows = extraction_results.get("rows", [])
+                    
+                    if not selected_rows:
+                        st.warning(f"⚠️ No extracted data found for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}. Please extract this statement first.")
+                    else:
+                        import tempfile
+                        import openpyxl
+                        import os
 
-                    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-                        tmp.write(bref_file.getvalue())
-                        tmp_path = tmp.name
+                        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                            tmp.write(bref_file.getvalue())
+                            tmp_path = tmp.name
 
-                    try:
-                        with st.status("🔄 Running validated mapping...", expanded=True) as status:
-                            st.write("📂 Loading BREF template...")
-                            wb = openpyxl.load_workbook(tmp_path)
-                            ws = wb.active
+                        try:
+                            with st.status(f"🔄 Running validated mapping for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}...", expanded=True) as status:
+                                st.write("📂 Loading BREF template...")
+                                wb = openpyxl.load_workbook(tmp_path)
+                                ws = wb.active
 
-                            ref_year = bref_target_year - 1
-                            ref_col = find_year_column(ws, ref_year)
-                            target_col = find_year_column(ws, bref_target_year)
+                                ref_year = bref_target_year - 1
+                                ref_col = find_year_column(ws, ref_year)
+                                target_col = find_year_column(ws, bref_target_year)
 
-                            if ref_col:
-                                st.write(f"✅ Found reference year ({ref_year}) in column {ref_col}")
-                            else:
-                                st.warning(f"⚠️ Reference year ({ref_year}) not found in template")
+                                if ref_col:
+                                    st.write(f"✅ Found reference year ({ref_year}) in column {ref_col}")
+                                else:
+                                    st.warning(f"⚠️ Reference year ({ref_year}) not found in template")
 
-                            if target_col:
-                                st.write(f"✅ Found target year ({bref_target_year}) in column {target_col}")
-                            else:
-                                st.warning(f"⚠️ Target year ({bref_target_year}) not found in template")
+                                if target_col:
+                                    st.write(f"✅ Found target year ({bref_target_year}) in column {target_col}")
+                                else:
+                                    st.warning(f"⚠️ Target year ({bref_target_year}) not found in template")
 
-                            wb.close()
+                                wb.close()
 
-                            st.write("📋 Loading BREF fields from template...")
-                            field_mappings_dict = get_field_mappings(bref_region).get(statement_type, {})
-                            fields = load_bref_fields(
-                                tmp_path,
-                                STATEMENT_SHEET_MAP[statement_type],
-                                bref_target_year,
-                                field_mappings=field_mappings_dict,
-                                ignore_extract_column=ignore_extract
-                            )
+                                st.write("📋 Loading BREF fields from template...")
+                                field_mappings_dict = get_field_mappings(bref_region).get(selected_statement_type, {})
+                                fields = load_bref_fields(
+                                    tmp_path,
+                                    STATEMENT_SHEET_MAP[selected_statement_type],
+                                    bref_target_year,
+                                    field_mappings=field_mappings_dict,
+                                    ignore_extract_column=ignore_extract
+                                )
 
-                            if not fields:
-                                st.error(f"❌ No BREF field mappings defined for {statement_type}")
-                                status.update(label="❌ Mapping failed", state="error")
-                            else:
-                                ref_count = sum(1 for f in fields if f['reference_value'] is not None)
-                                st.write(f"✅ Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
+                                if not fields:
+                                    st.error(f"❌ No BREF field mappings defined for {selected_statement_type}")
+                                    status.update(label="❌ Mapping failed", state="error")
+                                else:
+                                    ref_count = sum(1 for f in fields if f['reference_value'] is not None)
+                                    st.write(f"✅ Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
 
-                                st.write("🤖 Mapping fields using AI...")
+                                    st.write("🤖 Mapping fields using AI...")
 
-                                with st.expander("📝 Mapping Logs", expanded=True):
-                                    mapping_log_placeholder = st.empty()
-                                    mapping_logger = BREFLiveLogger(mapping_log_placeholder)
+                                    with st.expander("📝 Mapping Logs", expanded=True):
+                                        mapping_log_placeholder = st.empty()
+                                        mapping_logger = BREFLiveLogger(mapping_log_placeholder)
 
                                     import contextlib
                                     with contextlib.redirect_stdout(mapping_logger):
                                         mapped_fields = map_all_fields(
                                             fields=fields,
-                                            extracted_rows=rows,
+                                            extracted_rows=selected_rows,
                                             company_name=bref_company_name,
-                                            target_year=bref_target_year
+                                            target_year=bref_target_year,
+                                            provider=bref_provider,
+                                            model=bref_model_id
                                         )
 
-                                st.write(f"✅ Mapped {len(mapped_fields)} fields")
+                                    st.write(f"✅ Mapped {len(mapped_fields)} fields")
 
-                                st.write("✓ Validating mappings...")
+                                    st.write("✓ Validating mappings...")
 
-                                with st.expander("📝 Validation Logs", expanded=True):
-                                    validation_log_placeholder = st.empty()
-                                    validation_logger = BREFLiveLogger(validation_log_placeholder)
+                                    with st.expander("📝 Validation Logs", expanded=True):
+                                        validation_log_placeholder = st.empty()
+                                        validation_logger = BREFLiveLogger(validation_log_placeholder)
 
-                                    import contextlib
-                                    with contextlib.redirect_stdout(validation_logger):
-                                        validated_fields = validate_mappings(mapped_fields)
+                                        import contextlib
+                                        with contextlib.redirect_stdout(validation_logger):
+                                            validated_fields = validate_mappings(mapped_fields)
 
-                                high_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'high')
-                                low_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'low')
-                                validated_count = sum(1 for f in validated_fields if f.get('validation_status') == 'validated')
+                                    high_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'high')
+                                    low_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'low')
+                                    validated_count = sum(1 for f in validated_fields if f.get('validation_status') == 'validated')
 
-                                st.write(f"✅ Validation complete: {high_conf} high confidence, {low_conf} low confidence, {validated_count} validated")
+                                    st.write(f"✅ Validation complete: {high_conf} high confidence, {low_conf} low confidence, {validated_count} validated")
 
-                                st.write("📊 Generating Excel output...")
-                                excel_bytes = create_clean_output_excel(
-                                    validated_fields,
-                                    target_year=bref_target_year,
-                                    statement_type=statement_type
-                                )
+                                    st.write("📊 Generating Excel output...")
+                                    excel_bytes = create_clean_output_excel(
+                                        validated_fields,
+                                        target_year=bref_target_year,
+                                        statement_type=selected_statement_type
+                                    )
 
-                                mapping_key = f"{key_prefix}_mapping_{statement_type}"
-                                st.session_state.bref_mapping_results[mapping_key] = {
-                                    "fields": validated_fields,
-                                    "mode": "validated",
-                                    "target_year": bref_target_year,
-                                    "statement_type": statement_type,
-                                    "company_name": bref_company_name,
-                                    "template_name": bref_file.name,
-                                    "excel_bytes": excel_bytes,
-                                    "region": bref_region,
-                                }
+                                    mapping_key = f"{key_prefix}_mapping_{selected_statement_type}"
+                                    st.session_state.bref_mapping_results[mapping_key] = {
+                                        "fields": validated_fields,
+                                        "mode": "validated",
+                                        "target_year": bref_target_year,
+                                        "statement_type": selected_statement_type,
+                                        "company_name": bref_company_name,
+                                        "template_name": bref_file.name,
+                                        "excel_bytes": excel_bytes,
+                                        "region": bref_region,
+                                    }
 
-                                status.update(label="✅ Mapping completed successfully!", state="complete")
-                                st.rerun()
+                                    status.update(label=f"✅ Mapping completed for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}!", state="complete")
 
-                    except Exception as e:
-                        st.error(f"❌ Mapping failed: {e}")
-                        import traceback
-                        with st.expander("🐛 Error Details", expanded=True):
-                            st.code(traceback.format_exc(), language="python")
-                    finally:
-                        import os
-                        if os.path.exists(tmp_path):
-                            os.unlink(tmp_path)
+                        except Exception as e:
+                            st.error(f"❌ Mapping failed: {e}")
+                            import traceback
+                            with st.expander("🐛 Error Details", expanded=True):
+                                st.code(traceback.format_exc(), language="python")
+                        finally:
+                            import os
+                            if os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
 
-        st.markdown("---")
+                st.markdown("---")
 
-        # STEP 3: Display Results
-        mapping_key = f"{key_prefix}_mapping_{statement_type}"
-        if mapping_key in st.session_state.bref_mapping_results:
-            col_header, col_clear = st.columns([3, 1])
-            with col_header:
-                st.subheader("Step 3: Results & Review")
-            with col_clear:
-                if st.button("🗑️ Clear Results", key=f"{key_prefix}_clear_{statement_type}", use_container_width=True):
-                    del st.session_state.bref_mapping_results[mapping_key]
-                    st.success("✅ Results cleared - you can start fresh mapping")
-                    st.rerun()
+                # STEP 3: Display Results
+        current_mapping_key = f"{key_prefix}_mapping_{statement_type}"
+        if current_mapping_key in st.session_state.bref_mapping_results:
+            st.subheader("Step 3: Results & Review")
+            _display_mapping_results(current_mapping_key, statement_type, key_prefix)
 
-            mapping_results = st.session_state.bref_mapping_results[mapping_key]
-            fields = mapping_results["fields"]
-            mode = mapping_results["mode"]
+        # Also display results for a cross-tab mapping (dropdown selected a different statement)
+        _dropdown_key = f"{key_prefix}_raw_statement_choice_{statement_type}"
+        _dropdown_val = st.session_state.get(_dropdown_key, "")
+        _stmt_map = {"Income Statement": "income_statement", "Balance Sheet": "balance_sheet", "Cash Flow Statement": "cash_flow"}
+        _alt_stype = _stmt_map.get(_dropdown_val)
+        if _alt_stype and _alt_stype != statement_type:
+            _alt_key = f"{key_prefix}_mapping_{_alt_stype}"
+            if _alt_key in st.session_state.bref_mapping_results:
+                _alt_label = STATEMENT_LABELS.get(_alt_stype, _alt_stype)
+                st.subheader(f"Step 3: Results & Review — {_alt_label}")
+                _display_mapping_results(_alt_key, _alt_stype, f"{key_prefix}_{statement_type}")
 
-            col1, col2, col3, col4 = st.columns(4)
-            high_conf = sum(1 for f in fields if f.get('final_confidence', f.get('mapping_confidence')) == 'high')
-            low_conf = sum(1 for f in fields if f.get('final_confidence', f.get('mapping_confidence')) == 'low')
 
-            col1.metric("Total Fields", len(fields))
-            col2.metric("High Confidence", high_conf)
-            col3.metric("Low Confidence", low_conf)
-            col4.metric("Mode", mode.upper())
+def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: str):
+    """Display mapping results for a specific statement."""
+    if mapping_key not in st.session_state.bref_mapping_results:
+        return 
+    col_header, col_clear = st.columns([3, 1])
+    
+    with col_header:
+        st.markdown(f"**{STATEMENT_LABELS.get(statement_type, statement_type)}**")
+    
+    with col_clear:
+        # Use mapping_key directly to ensure uniqueness
+        # Don't add statement_type as it's already in mapping_key (e.g., manual_mapping_cash_flow)
+        clear_key = f"clear_{key_prefix}_{mapping_key}".replace('_', '-')
+        if st.button("🗑️ Clear", key=clear_key, use_container_width=True):
+            del st.session_state.bref_mapping_results[mapping_key]
+            st.success("✅ Results cleared")
+            st.rerun()
 
-            st.markdown("---")
+    mapping_results = st.session_state.bref_mapping_results[mapping_key]
+    fields = mapping_results["fields"]
+    mode = mapping_results["mode"]
+    bref_target_year = mapping_results.get("target_year", datetime.now().year)
 
-            render_human_review_ui(fields, mapping_key, bref_target_year)
+    col1, col2, col3, col4 = st.columns(4)
+    high_conf = sum(1 for f in fields if f.get('final_confidence', f.get('mapping_confidence')) == 'high')
+    low_conf = sum(1 for f in fields if f.get('final_confidence', f.get('mapping_confidence')) == 'low')
 
-            st.markdown("---")
+    col1.metric("Total Fields", len(fields))
+    col2.metric("High Confidence", high_conf)
+    col3.metric("Low Confidence", low_conf)
+    col4.metric("Mode", mode.upper())
 
-            st.subheader("📋 All Mapped Fields")
+    if low_conf > 0:
+        st.warning(f"⚠️ {low_conf} field(s) have low confidence — edit values directly in the table below, then click **Save Changes**.")
 
-            reference_year = bref_target_year - 1
+    st.markdown("---")
 
-            df_data = []
-            for field in fields:
-                row_data = {
-                    "Field": field.get("label"),
-                    "Matched Label": field.get("matched_label", "—"),
-                }
-                if mode == "validated":
-                    row_data[f"{reference_year} (Reference)"] = field.get("reference_value")
-                row_data[f"{bref_target_year} (Extracted)"] = field.get("target_value")
-                row_data["Confidence"] = field.get("final_confidence", field.get("mapping_confidence"))
-                row_data["Validation"] = field.get("validation_status", "—")
-                df_data.append(row_data)
+    reference_year = bref_target_year - 1
+    value_col = f"{bref_target_year} (Extracted)"
 
-            df = pd.DataFrame(df_data)
-            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+    df_data = []
+    for field in fields:
+        row_data = {
+            "Field": field.get("label"),
+            "Matched Label": field.get("matched_label", "—"),
+        }
+        if mode == "validated":
+            row_data[f"{reference_year} (Reference)"] = field.get("reference_value")
+        row_data[value_col] = field.get("target_value")
+        row_data["Confidence"] = field.get("final_confidence", field.get("mapping_confidence", ""))
+        row_data["Reason"] = field.get("reason", "")
+        df_data.append(row_data)
 
-            st.markdown("---")
+    df = pd.DataFrame(df_data)
 
-            st.subheader("📥 Download")
+    editor_key = f"{key_prefix}_editor_{statement_type}_{mapping_key}"
 
-            col1, col2 = st.columns(2)
+    column_config = {
+        "Field": st.column_config.TextColumn("Field", disabled=True),
+        "Matched Label": st.column_config.TextColumn("Matched Label", help="Edit to correct the matched label"),
+        value_col: st.column_config.NumberColumn(value_col, help="Edit to correct the extracted value", format="%.2f"),
+        "Confidence": st.column_config.SelectboxColumn("Confidence", options=["high", "low"], help="Set confidence level"),
+        "Reason": st.column_config.TextColumn("Reason", disabled=True),
+    }
+    if mode == "validated":
+        column_config[f"{reference_year} (Reference)"] = st.column_config.NumberColumn(
+            f"{reference_year} (Reference)", disabled=True, format="%.2f"
+        )
 
-            with col1:
-                st.download_button(
-                    "📄 Download as JSON",
-                    data=pd.DataFrame(fields).to_json(orient="records", indent=2),
-                    file_name=f"bref_results_{statement_type}_{bref_target_year}.json",
-                    mime="application/json",
-                    use_container_width=True,
-                    key=f"{key_prefix}_json_download_{statement_type}"
-                )
+    edited_df = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        height=min(400 + len(df) * 5, 800),
+        column_config=column_config,
+        key=editor_key,
+    )
 
-            with col2:
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, sheet_name="BREF Mapping", index=False)
-                output.seek(0)
+    _save_col, _dl_json_col, _dl_excel_col = st.columns([1, 1, 1])
 
-                st.download_button(
-                    "📊 Download BREF Output (Excel)",
-                    data=output.getvalue(),
-                    file_name=f"BREF_Output_{statement_type}_{bref_target_year}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    type="primary",
-                    key=f"{key_prefix}_excel_download_{statement_type}"
-                )
+    with _save_col:
+        save_key = f"{key_prefix}_save_{statement_type}_{mapping_key}".replace("_", "-")
+        if st.button("Save Changes", key=save_key, use_container_width=True, type="primary"):
+            for i, row in edited_df.iterrows():
+                fields[i]["matched_label"] = row.get("Matched Label", fields[i].get("matched_label"))
+                new_val = row.get(value_col)
+                if new_val is not None and str(new_val).strip() != "":
+                    try:
+                        fields[i]["target_value"] = float(new_val)
+                    except (ValueError, TypeError):
+                        pass
+                new_conf = row.get("Confidence", "")
+                if new_conf in ("high", "low"):
+                    fields[i]["final_confidence"] = new_conf
+                    fields[i]["mapping_confidence"] = new_conf
+                    if new_conf == "high" and fields[i].get("validation_status") != "validated":
+                        fields[i]["validation_status"] = "human_verified"
+            st.session_state.bref_mapping_results[mapping_key]["fields"] = fields
+            st.toast("Changes saved.")
+
+    with _dl_json_col:
+        st.download_button(
+            "Download JSON",
+            data=pd.DataFrame(fields).to_json(orient="records", indent=2),
+            file_name=f"bref_results_{statement_type}_{bref_target_year}.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"{key_prefix}_json_download_{statement_type}_{mapping_key}"
+        )
+
+    with _dl_excel_col:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name="BREF Mapping", index=False)
+        output.seek(0)
+
+        st.download_button(
+            "Download Excel",
+            data=output.getvalue(),
+            file_name=f"BREF_Output_{statement_type}_{bref_target_year}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"{key_prefix}_excel_download_{statement_type}_{mapping_key}"
+        )

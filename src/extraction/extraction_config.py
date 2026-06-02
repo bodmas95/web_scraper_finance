@@ -8,8 +8,12 @@ from config.config import load_config
 # Load configuration
 _cfg = load_config()
 
-# LLM settings
-LLM_MODEL = _cfg.get("LLM", "model", fallback="gpt-4o")
+# LLM settings - select model based on provider
+LLM_PROVIDER = _cfg.get("LLM", "provider", fallback="openai").lower()
+if LLM_PROVIDER == "maia":
+    LLM_MODEL = _cfg.get("LLM", "maia_model", fallback="gpt-4o-mini-2024-07-18")
+else:
+    LLM_MODEL = _cfg.get("LLM", "model", fallback="gpt-4o")
 
 # Statement heading variants — used for heading detection in the scanner
 # All comparisons are case-insensitive

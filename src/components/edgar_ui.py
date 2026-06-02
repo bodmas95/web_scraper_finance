@@ -21,6 +21,7 @@ from src.components.brefmap_ui import (
     render_pdf_panel,
     create_pdf_excel,
 )
+from src.extraction.model_config import render_model_selector
 
 # ==============================================================================
 # PDF EXTRACTION AVAILABILITY
@@ -473,11 +474,15 @@ def render_sec_edgar_section(company):
             with col_cb3:
                 sec_extract_cashflow = st.checkbox("Cash Flow", value=True, key="sec_cb_cashflow")
 
-            sec_selected_types = (
+                sec_selected_types = (
                 (["income_statement"] if sec_extract_income else []) +
                 (["balance_sheet"] if sec_extract_balance else []) +
                 (["cash_flow"] if sec_extract_cashflow else [])
             )
+            
+            # Model selection for SEC upload
+            st.markdown("**Select AI Model:**")
+            sec_provider, sec_model_id = render_model_selector(key_prefix="sec_upload")
 
             extract_disabled = not sec_selected_types
 
@@ -568,86 +573,104 @@ def render_sec_edgar_section(company):
                     with open(_pdf_path, "wb") as _f:
                         _f.write(sec_pdf.getvalue())
 
-                    for _stype in sec_selected_types:
+                    # Split into auto-detect vs manual-page types
+                    _auto_types = [s for s in sec_selected_types if not sec_pages_dict.get(s)]
+                    _manual_types = [s for s in sec_selected_types if sec_pages_dict.get(s)]
+
+                    # ── Auto-detect types: run in parallel ──────────────
+                    if _auto_types:
+                        from src.extraction.parallel import extract_statements_parallel
+                        with st.spinner(f"Extracting {len(_auto_types)} statement(s) in parallel..."):
+                            _par = extract_statements_parallel(
+                                pdf_path=_pdf_path,
+                                statement_types=_auto_types,
+                                stitch_fn=stitch_images_vertical,
+                                provider=sec_provider,
+                                model_id=sec_model_id,
+                                company_name=company_name,
+                                target_year=sec_pdf_year,
+                            )
+                        _new_results.update(_par["results"])
+                        _manual_needed.extend(_par["manual_needed"])
+                        for _stype in _auto_types:
+                            statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                            with st.expander(f"Extraction Log -- {statement_label}", expanded=True):
+                                st.text(_par["logs"].get(_stype, ""))
+                            if _stype in _par["errors"]:
+                                st.warning(f"Extraction failed for **{statement_label}**")
+                            elif _stype in _par["results"]:
+                                _r = _par["results"][_stype]
+                                st.success(f"Extracted {_r['total_rows']} rows from page {_r['page']}")
+                            elif _stype in _par["manual_needed"]:
+                                st.warning(f"Could not locate **{statement_label}** page -- skipped.")
+
+                    # ── Manual-page types: sequential (complex multi-page handling) ─
+                    for _stype in _manual_types:
                         _stype_result = None
                         statement_label = STATEMENT_LABELS.get(_stype, _stype)
-
                         with st.expander(f"Extraction Log -- {statement_label}", expanded=True):
                             _log_placeholder = st.empty()
                             _token_placeholder = st.empty()
                             _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
-
                             try:
                                 manual_page_num = sec_pages_dict.get(_stype)
-
-                                if manual_page_num:
-                                    import pdfplumber
-
-                                    if isinstance(manual_page_num, list):
-                                        _log_placeholder.info(f"Using manually specified pages {manual_page_num[0]}-{manual_page_num[-1]} for {statement_label}")
-                                        with contextlib.redirect_stdout(_logger):
-                                            _page = build_manual_candidate(_pdf_path, manual_page_num[0] - 1, _stype)
-
-                                        if _page and len(manual_page_num) > 1:
-                                            if _page.get("text_garbled"):
+                                import pdfplumber
+                                if isinstance(manual_page_num, list):
+                                    _log_placeholder.info(f"Using manually specified pages {manual_page_num[0]}-{manual_page_num[-1]} for {statement_label}")
+                                    with contextlib.redirect_stdout(_logger):
+                                        _page = build_manual_candidate(_pdf_path, manual_page_num[0] - 1, _stype)
+                                    if _page and len(manual_page_num) > 1:
+                                        if _page.get("text_garbled"):
+                                            for page_idx in range(1, len(manual_page_num)):
+                                                _page["all_page_nums"].append(manual_page_num[page_idx] - 1)
+                                        else:
+                                            with pdfplumber.open(_pdf_path) as pdf:
                                                 for page_idx in range(1, len(manual_page_num)):
-                                                    _page["all_page_nums"].append(manual_page_num[page_idx] - 1)
-                                            else:
-                                                with pdfplumber.open(_pdf_path) as pdf:
-                                                    for page_idx in range(1, len(manual_page_num)):
-                                                        pdf_page_num = manual_page_num[page_idx] - 1
-                                                        if pdf_page_num < len(pdf.pages):
-                                                            page_text = pdf.pages[pdf_page_num].extract_text() or ""
-                                                            _page["full_text"] += f"\n{page_text}"
-                                                            _page["all_page_nums"].append(pdf_page_num)
-                                    else:
-                                        with contextlib.redirect_stdout(_logger):
-                                            _page = build_manual_candidate(_pdf_path, manual_page_num - 1, _stype)
-                                        if _page:
-                                            _log_placeholder.info(f"Using manually specified page {manual_page_num} for {statement_label}")
+                                                    pdf_page_num = manual_page_num[page_idx] - 1
+                                                    if pdf_page_num < len(pdf.pages):
+                                                        page_text = pdf.pages[pdf_page_num].extract_text() or ""
+                                                        _page["full_text"] += f"\n{page_text}"
+                                                        _page["all_page_nums"].append(pdf_page_num)
                                 else:
                                     with contextlib.redirect_stdout(_logger):
-                                        _page = find_correct_page(_pdf_path, _stype)
+                                        _page = build_manual_candidate(_pdf_path, manual_page_num - 1, _stype)
+                                    if _page:
+                                        _log_placeholder.info(f"Using manually specified page {manual_page_num} for {statement_label}")
 
                                 if not _page:
-                                    if manual_page_num:
-                                        page_display = f"{manual_page_num[0]}-{manual_page_num[-1]}" if isinstance(manual_page_num, list) else str(manual_page_num)
-                                        st.error(f"Manual page(s) {page_display} specified but could not extract data from **{statement_label}**")
-                                    else:
-                                        st.warning(f"Could not locate **{statement_label}** page -- skipped.")
-                                        _manual_needed.append(_stype)
+                                    page_display = f"{manual_page_num[0]}-{manual_page_num[-1]}" if isinstance(manual_page_num, list) else str(manual_page_num)
+                                    st.error(f"Manual page(s) {page_display} specified but could not extract data from **{statement_label}**")
                                 else:
                                     with contextlib.redirect_stdout(_logger):
-                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
-
-                                        if not _table["rows"]:
-                                            st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
-                                            _manual_needed.append(_stype)
-                                        else:
-                                            _used_vision = _page.get("text_garbled", False)
-                                            _stype_result = {
-                                                "page": _page["page_display"],
-                                                "page_num": _page["page_num"],
-                                                "all_page_nums": _page.get("all_page_nums", [_page["page_num"]]),
-                                                "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
-                                                "rows": _table["rows"],
-                                                "year_headers": _table.get("year_headers", []),
-                                                "year_currencies": _table.get("year_currencies", {}),
-                                                "unit_scale": _table.get("unit_scale"),
-                                                "year_end_date": _table.get("year_end_date"),
-                                                "total_rows": _table["total_rows"],
-                                                "extraction_method": "vision" if _used_vision else "text",
-                                                "company": company_name,
-                                                "statement": _stype,
-                                                "target_year": sec_pdf_year,
-                                            }
-                                            st.success(f"Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
-
+                                        _table = extract_table_with_vision_fallback(
+                                            _page, _pdf_path, stitch_images_vertical,
+                                            provider=sec_provider, model=sec_model_id
+                                        )
+                                    if not _table["rows"]:
+                                        st.warning(f"Page found but no data extracted for **{statement_label}**.")
+                                    else:
+                                        _used_vision = _page.get("text_garbled", False)
+                                        _stype_result = {
+                                            "page": _page["page_display"],
+                                            "page_num": _page["page_num"],
+                                            "all_page_nums": _page.get("all_page_nums", [_page["page_num"]]),
+                                            "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
+                                            "rows": _table["rows"],
+                                            "year_headers": _table.get("year_headers", []),
+                                            "year_currencies": _table.get("year_currencies", {}),
+                                            "unit_scale": _table.get("unit_scale"),
+                                            "year_end_date": _table.get("year_end_date"),
+                                            "total_rows": _table["total_rows"],
+                                            "extraction_method": "vision" if _used_vision else "text",
+                                            "company": company_name,
+                                            "statement": _stype,
+                                            "target_year": sec_pdf_year,
+                                        }
+                                        st.success(f"Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
                             except Exception as _e:
                                 st.warning(f"Extraction failed for **{statement_label}**: {_e}")
                                 import traceback
                                 _logger.write(traceback.format_exc())
-
                         if _stype_result:
                             _new_results[_stype] = _stype_result
 
@@ -685,7 +708,10 @@ def render_sec_edgar_section(company):
                                             continue
 
                                         with contextlib.redirect_stdout(_logger):
-                                            _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                            _table = extract_table_with_vision_fallback(
+                                                _page, _pdf_path, stitch_images_vertical,
+                                                provider=sec_provider, model=sec_model_id
+                                            )
 
                                         if not _table["rows"]:
                                             st.warning(f"No data extracted from page {page_num_1based}.")

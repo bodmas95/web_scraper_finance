@@ -13,6 +13,7 @@ import streamlit as st
 
 from config.config import get_section as _get_section, SEARCH_URL
 from src import http_client
+from src.extraction.model_config import render_model_selector
 from src.parser.hkexnews.parser import HKEXParser
 from src.components.brefmap_ui import (
     stitch_images_vertical,
@@ -286,9 +287,12 @@ def render_hkex_section(company, hkex_ticker):
                         extract_income = st.checkbox("Income Statement", value=True, key=f"cb_income_{idx}")
                         extract_balance = st.checkbox("Balance Sheet", value=True, key=f"cb_balance_{idx}")
                         extract_cashflow = st.checkbox("Cash Flow", value=True, key=f"cb_cashflow_{idx}")
-
+                                                # Model selection
+                        st.markdown("**Select AI Model:**")
+                        provider, model_id = render_model_selector(key_prefix=f"hkex_{idx}")
+                        
                         # Add force re-extract checkbox
-                        force_reextract = st.checkbox("🔄 Force re-extract (ignore cache)", value=False, key=f"cb_force_{idx}", help="Clear cached results and run fresh extraction")
+                        force_reextract = st.checkbox("Force re-extract (ignore cache)", value=False, key=f"cb_force_{idx}", help="Clear cached results and run fresh extraction")
 
                         selected_types = (
                             (["income_statement"] if extract_income else []) +
@@ -360,59 +364,39 @@ def render_hkex_section(company, hkex_ticker):
                                     with open(_pdf_path, "wb") as _f:
                                         _f.write(pdf_bytes)
 
+                                    # ── Parallel extraction ──────────────────────
+                                    from src.extraction.parallel import extract_statements_parallel
+                                    _company_name = bref_company_name if 'bref_company_name' in locals() else company.get('name', 'Unknown')
+                                    _target_yr = bref_target_year if 'bref_target_year' in locals() else (fiscal_year if fiscal_year != 'N/A' else datetime.now().year)
+
+                                    with st.spinner(f"Extracting {len(selected_types)} statement(s) in parallel..."):
+                                        _par = extract_statements_parallel(
+                                            pdf_path=_pdf_path,
+                                            statement_types=selected_types,
+                                            stitch_fn=stitch_images_vertical,
+                                            provider=provider,
+                                            model_id=model_id,
+                                            company_name=_company_name,
+                                            target_year=_target_yr,
+                                        )
+
+                                    _new_results = _par["results"]
+                                    _manual_needed = _par["manual_needed"]
+
                                     for _stype in selected_types:
-                                        _stype_result = None
                                         statement_label = STATEMENT_LABELS.get(_stype, _stype)
-
                                         with st.expander(f"Extraction Log — {statement_label}", expanded=True):
-                                            _log_placeholder = st.empty()
-                                            _token_placeholder = st.empty()
-                                            _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
+                                            st.text(_par["logs"].get(_stype, ""))
 
-                                            try:
-                                                # Find correct page with detailed logging
-                                                with contextlib.redirect_stdout(_logger):
-                                                    _page = find_correct_page(_pdf_path, _stype)
-
-                                                if not _page:
-                                                    st.warning(f"Could not locate **{statement_label}** automatically. Manual page input required.")
-                                                    _manual_needed.append(_stype)
-                                                else:
-                                                    # Extract table with detailed logging (auto-falls back to vision for garbled PDFs)
-                                                    with contextlib.redirect_stdout(_logger):
-                                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
-
-                                                    if not _table["rows"]:
-                                                        st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
-                                                        _manual_needed.append(_stype)
-                                                    else:
-                                                                                                                                                                                _stype_result = {
-                                                            "page": _page["page_display"],
-                                                            "page_num": _page["page_num"],
-                                                            "all_page_nums": _page.get("all_page_nums", [_page["page_num"]]),
-                                                            "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
-                                                            "rows": _table["rows"],
-                                                            "year_headers": _table.get("year_headers", []),
-                                                            "year_currencies": _table.get("year_currencies", {}),
-                                                            "unit_scale": _table.get("unit_scale"),
-                                                            "year_end_date": _table.get("year_end_date"),
-                                                            "total_rows": _table["total_rows"],
-                                                            "extraction_method": "text",
-                                                            #"company": company.get('name', 'Unknown'),
-                                                            "company": bref_company_name if 'bref_company_name' in locals() else company.get('name', 'Unknown'),
-                                                            "target_year": bref_target_year if 'bref_target_year' in locals() else (fiscal_year if fiscal_year != 'N/A' else datetime.now().year),
-                                                            "statement": _stype,
-                                                            #"target_year": fiscal_year if fiscal_year != 'N/A' else datetime.now().year,
-                                                        }
-                                                    st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}")
-
-                                            except Exception as _e:
-                                                st.warning(f"Extraction failed for **{statement_label}**: {_e}")
-                                                import traceback
-                                                _logger.write(traceback.format_exc())
-
-                                        if _stype_result:
-                                            _new_results[_stype] = _stype_result
+                                        if _stype in _par["errors"]:
+                                            st.warning(f"Extraction failed for **{statement_label}**")
+                                            with st.expander(f"Error — {statement_label}"):
+                                                st.code(_par["errors"][_stype], language="python")
+                                        elif _stype in _par["results"]:
+                                            _r = _par["results"][_stype]
+                                            st.success(f"Extracted {_r['total_rows']} rows from page {_r['page']}")
+                                        elif _stype in _manual_needed:
+                                            st.warning(f"Could not locate **{statement_label}** automatically. Manual page input required.")
 
                                 if _manual_needed:
                                     st.markdown("---")
@@ -582,6 +566,10 @@ def render_hkex_section(company, hkex_ticker):
                 (["balance_sheet"] if manual_extract_balance else []) +
                 (["cash_flow"] if manual_extract_cashflow else [])
             )
+            
+            # Model selection for manual upload
+            st.markdown("**Select AI Model:**")
+            manual_provider, manual_model_id = render_model_selector(key_prefix="manual_upload")
 
             extract_disabled = not manual_selected_types
 
@@ -753,10 +741,13 @@ def render_hkex_section(company, hkex_ticker):
                                     else:
                                         st.warning(f"Could not locate **{statement_label}** page — skipped.")
                                 else:
-                                                                            # Extract table with detailed logging
+                                                                                                                # Extract table with detailed logging
                                     print(f"Extracting table from {len(_page.get('all_page_nums', []))} page(s): {[p+1 for p in _page.get('all_page_nums', [])]}")
                                     with contextlib.redirect_stdout(_logger):
-                                        _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                        _table = extract_table_with_vision_fallback(
+                                            _page, _pdf_path, stitch_images_vertical,
+                                            provider=manual_provider, model=manual_model_id
+                                        )
 
                                         if not _table["rows"]:
                                             st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
@@ -822,7 +813,10 @@ def render_hkex_section(company, hkex_ticker):
                                             continue
 
                                         with contextlib.redirect_stdout(_logger):
-                                            _table = extract_table_with_vision_fallback(_page, _pdf_path, stitch_images_vertical)
+                                            _table = extract_table_with_vision_fallback(
+                                                _page, _pdf_path, stitch_images_vertical,
+                                                provider=manual_provider, model=manual_model_id
+                                            )
 
                                         if not _table["rows"]:
                                             st.warning(f"No data extracted from page {page_num_1based}.")

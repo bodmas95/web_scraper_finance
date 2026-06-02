@@ -7,11 +7,17 @@ Extracts Income Statement, Balance Sheet, and Cash Flow from PDF annual reports
 import json
 import tempfile
 import os
+import warnings
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import fitz  # PyMuPDF
 from config.config import load_config
 from .llm_client import get_client
+
+# Suppress pdfminer warnings about color components
+warnings.filterwarnings('ignore', category=UserWarning, module='pdfminer')
+logging.getLogger('pdfminer').setLevel(logging.ERROR)
 
 # Import statement headings and configuration from extraction_config
 from .extraction_config import (
