@@ -577,7 +577,7 @@ def render_sec_edgar_section(company):
                     _auto_types = [s for s in sec_selected_types if not sec_pages_dict.get(s)]
                     _manual_types = [s for s in sec_selected_types if sec_pages_dict.get(s)]
 
-                    # ── Auto-detect types: run in parallel ──────────────
+                                        # ── Auto-detect types: run in parallel ──────────────
                     if _auto_types:
                         from src.extraction.parallel import extract_statements_parallel
                         with st.spinner(f"Extracting {len(_auto_types)} statement(s) in parallel..."):
@@ -590,8 +590,10 @@ def render_sec_edgar_section(company):
                                 company_name=company_name,
                                 target_year=sec_pdf_year,
                             )
+                        
                         _new_results.update(_par["results"])
                         _manual_needed.extend(_par["manual_needed"])
+                        
                         for _stype in _auto_types:
                             statement_label = STATEMENT_LABELS.get(_stype, _stype)
                             with st.expander(f"Extraction Log -- {statement_label}", expanded=True):
