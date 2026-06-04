@@ -364,8 +364,9 @@ def render_hkex_section(company, hkex_ticker):
                                     with open(_pdf_path, "wb") as _f:
                                         _f.write(pdf_bytes)
 
-                                    # ── Parallel extraction ──────────────────────
+                                                                        # ── Parallel extraction ──────────────────────
                                     from src.extraction.parallel import extract_statements_parallel
+                                    
                                     _company_name = bref_company_name if 'bref_company_name' in locals() else company.get('name', 'Unknown')
                                     _target_yr = bref_target_year if 'bref_target_year' in locals() else (fiscal_year if fiscal_year != 'N/A' else datetime.now().year)
 
