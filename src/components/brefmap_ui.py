@@ -903,6 +903,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                     }
 
                                     status.update(label=f"✅ Mapping completed for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}!", state="complete")
+                                    st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Mapping failed: {e}")
                                 import traceback
@@ -1095,6 +1096,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                     }
 
                                     status.update(label=f"✅ Mapping completed for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}!", state="complete")
+                                    st.rerun()
 
                         except Exception as e:
                             st.error(f"❌ Mapping failed: {e}")
@@ -1114,11 +1116,23 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             st.subheader("Step 3: Results & Review")
             _display_mapping_results(current_mapping_key, statement_type, key_prefix)
 
-        # Also display results for a cross-tab mapping (dropdown selected a different statement)
-        _dropdown_key = f"{key_prefix}_raw_statement_choice_{statement_type}"
-        _dropdown_val = st.session_state.get(_dropdown_key, "")
+                # Also display results for a cross-tab mapping (dropdown selected a different statement)
+        # Check both raw and validated mapping dropdowns
         _stmt_map = {"Income Statement": "income_statement", "Balance Sheet": "balance_sheet", "Cash Flow Statement": "cash_flow"}
-        _alt_stype = _stmt_map.get(_dropdown_val)
+        
+        # Check raw mapping dropdown
+        _raw_dropdown_key = f"{key_prefix}_raw_statement_choice_{statement_type}"
+        _raw_dropdown_val = st.session_state.get(_raw_dropdown_key, "")
+        _alt_stype_raw = _stmt_map.get(_raw_dropdown_val)
+        
+        # Check validated mapping dropdown
+        _validated_dropdown_key = f"{key_prefix}_validated_statement_choice_{statement_type}"
+        _validated_dropdown_val = st.session_state.get(_validated_dropdown_key, "")
+        _alt_stype_validated = _stmt_map.get(_validated_dropdown_val)
+        
+        # Display results for whichever dropdown has a different statement selected
+        _alt_stype = _alt_stype_validated if _alt_stype_validated and _alt_stype_validated != statement_type else _alt_stype_raw
+        
         if _alt_stype and _alt_stype != statement_type:
             _alt_key = f"{key_prefix}_mapping_{_alt_stype}"
             if _alt_key in st.session_state.bref_mapping_results:
