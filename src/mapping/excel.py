@@ -117,7 +117,7 @@ def load_bref_fields(excel_path: str, sheet_name: str, target_year: int, field_m
         
         # Skip header/section rows (those that don't start with field codes)
         label_str = str(label).strip()
-        if not any(label_str.startswith(prefix) for prefix in ["I", "B", "L", "ACF", "CF", "Q", "ITRR"]):
+        if not any(label_str.startswith(prefix) for prefix in ["I", "B", "L", "ACF", "CF", "Q", "ITRR", "U", "ICF"]):
             continue
         
         # Check Extract column if COL_EXTRACT and COL_DESC are different
@@ -176,7 +176,7 @@ def load_bref_fields(excel_path: str, sheet_name: str, target_year: int, field_m
         print(f"  Total rows scanned: {ws.max_row}")
         raise ValueError(
             f"No valid fields found in sheet '{sheet_name}'. "
-            f"Make sure rows have field labels starting with I, B, L, ACF, or CF."
+            f"Make sure rows have field labels starting with I, B, L, ACF, CF, Q, U, or ICF."
         )
     
     print(f"Loaded {len(fields)} fields from '{sheet_name}'")
