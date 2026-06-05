@@ -174,7 +174,7 @@ def render_hkex_section(company, hkex_ticker):
 
         if reports:
             st.success(f"✅ Found {len(reports)} annual reports")
-            st.rerun()
+            # Note: No st.rerun() - reports display automatically below
         else:
             st.warning("No annual reports found for the selected date range")
 
@@ -472,7 +472,7 @@ def render_hkex_section(company, hkex_ticker):
                                                 if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
                                                     del st.session_state[_k]
                                             st.success(f"✅ Manual extraction complete! {len(_new_results)} statement(s) extracted.")
-                                            st.rerun()
+                                            # Note: No st.rerun() - results display automatically below
 
                                 # Store results in session state to display outside the table
                                 if _new_results:
@@ -483,7 +483,7 @@ def render_hkex_section(company, hkex_ticker):
                                         if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
                                             del st.session_state[_k]
                                     st.success(f"✅ Extraction complete! {len(_new_results)} statement(s) extracted. Scroll down to view results.")
-                                    st.rerun()
+                                    # Note: No st.rerun() - results display automatically below
                                 else:
                                     st.error("No statements could be extracted.")
                             else:
@@ -517,10 +517,12 @@ def render_hkex_section(company, hkex_ticker):
             for tab, statement_type in zip(tabs, statement_types):
                 with tab:
                     render_pdf_panel(statement_type, results[statement_type], key_prefix="hkex")
-
-            # Download button for extracted data
-            st.markdown("")
-            create_pdf_excel(results, results[list(results.keys())[0]].get("target_year", datetime.now().year))
+            
+            # ==================================================================
+            # BREF MAPPING - Multi-Statement UI (OUTSIDE tabs)
+            # ==================================================================
+            from src.components.brefmap_multi_ui import render_multi_statement_mapping
+            render_multi_statement_mapping(results, key_prefix="hkex")
 
             # Clear results button
             if st.button("❌ Clear Results", key="clear_hkex_extraction"):
@@ -856,7 +858,7 @@ def render_hkex_section(company, hkex_ticker):
                                         if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
                                             del st.session_state[_k]
                                     st.success(f"✅ Manual extraction complete! {len(_new_results)} statement(s) extracted.")
-                                    st.rerun()
+                                            # Note: No st.rerun() - results display automatically below
 
 
                                                                     # Display results inline with side-by-side view (moved outside loop)
@@ -868,7 +870,7 @@ def render_hkex_section(company, hkex_ticker):
                         st.session_state.uploaded_pdf_bytes = manual_pdf.getvalue()
 
                         st.success(f"✅ Extraction complete! {len(_new_results)} statement(s) extracted. Scroll down to view results.")
-                        st.rerun()
+                                    # Note: No st.rerun() - results display automatically below
                     else:
                         st.error("No statements could be extracted.")
 
@@ -891,10 +893,12 @@ def render_hkex_section(company, hkex_ticker):
             for tab, statement_type in zip(tabs, statement_types):
                 with tab:
                     render_pdf_panel(statement_type, results[statement_type], key_prefix="manual")
-
-            # Download button for extracted data
-            st.markdown("")
-            create_pdf_excel(results, results[list(results.keys())[0]].get("target_year", datetime.now().year))
+            
+            # ==================================================================
+            # BREF MAPPING - Multi-Statement UI (OUTSIDE tabs)
+            # ==================================================================
+            from src.components.brefmap_multi_ui import render_multi_statement_mapping
+            render_multi_statement_mapping(results, key_prefix="manual")
 
             # Clear results button
             if st.button("❌ Clear Results", key="clear_manual_extraction"):
