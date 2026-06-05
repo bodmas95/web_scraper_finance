@@ -447,10 +447,12 @@ def render_sec_edgar_section(company):
                     key="sec_dl_excel",
                 )
 
+            # ==================================================================
+    # PDF UPLOAD + EXTRACTION + BREF MAPPING (DISABLED FOR AMER REGION)
     # ==================================================================
-    # PDF UPLOAD + EXTRACTION + BREF MAPPING (AMER region)
-    # ==================================================================
-    if PDF_EXTRACTION_AVAILABLE:
+    # UPLOAD FEATURE DISABLED - Only available for APAC region via HKEX UI
+    # if PDF_EXTRACTION_AVAILABLE:
+    if False:  # Manual upload disabled for AMER region
         st.markdown("---")
         st.subheader("Upload Annual Report PDF for Extraction & BREF Mapping")
         st.caption("Upload a PDF annual report to extract financial statements and map to BREF fields.")
@@ -764,7 +766,7 @@ def render_sec_edgar_section(company):
                 elif not _manual_needed:
                     st.error("No statements could be extracted.")
 
-    # Display SEC PDF extraction results
+    # Display SEC PDF extraction results (OUTSIDE the upload block - always visible if results exist)
     if st.session_state.get("sec_extraction_results") and PDF_EXTRACTION_AVAILABLE:
         st.markdown("---")
         st.header(f"Extraction Results from {st.session_state.get('sec_extraction_report_title', 'Uploaded PDF')}")
@@ -781,9 +783,12 @@ def render_sec_edgar_section(company):
             for tab, statement_type in zip(tabs, statement_types):
                 with tab:
                     render_pdf_panel(statement_type, results[statement_type], key_prefix="sec")
-
-            st.markdown("")
-            create_pdf_excel(results, results[list(results.keys())[0]].get("target_year", datetime.now().year))
+            
+            # ==================================================================
+            # BREF MAPPING - Multi-Statement UI (OUTSIDE tabs)
+            # ==================================================================
+            from src.components.brefmap_multi_ui import render_multi_statement_mapping
+            render_multi_statement_mapping(results, key_prefix="sec")
 
             if st.button("Clear Results", key="clear_sec_extraction"):
                 st.session_state.sec_extraction_results = None
