@@ -97,6 +97,52 @@ class BREFLiveLogger:
         pass
 
 
+import threading
+import time as _time
+
+def keep_alive_heartbeat(placeholder, stop_event, interval=3):
+    """Send periodic updates to keep WebSocket connection alive.
+    
+    Args:
+        placeholder: Streamlit placeholder to update
+        stop_event: Threading event to signal when to stop
+        interval: Seconds between updates (default 3)
+    """
+    elapsed = 0
+    while not stop_event.is_set():
+        _time.sleep(interval)
+        elapsed += interval
+        if not stop_event.is_set():
+            placeholder.info(f"🔄 Mapping in progress... ({elapsed}s elapsed)")
+
+
+def run_with_heartbeat(func, progress_placeholder, *args, **kwargs):
+    """Run a function with periodic heartbeat updates to keep connection alive.
+    
+    Args:
+        func: Function to run
+        progress_placeholder: Streamlit placeholder for progress updates
+        *args, **kwargs: Arguments to pass to func
+    
+    Returns:
+        Result of func
+    """
+    stop_event = threading.Event()
+    heartbeat_thread = threading.Thread(
+        target=keep_alive_heartbeat,
+        args=(progress_placeholder, stop_event),
+        daemon=True
+    )
+    
+    try:
+        heartbeat_thread.start()
+        result = func(*args, **kwargs)
+        return result
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=1)
+
+
 @st.dialog("Full View", width="large")
 def zoom_dialog(pdf_bytes, page_nums, crop_bbox):
     """Render zoomed PDF page in a modal dialog."""
@@ -619,526 +665,15 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             st.info("No data extracted")
 
     # ==================================================================
-    # BREF MAPPING SECTION
+    # BREF MAPPING SECTION - DISABLED
     # ==================================================================
-    if BREF_MAPPING_AVAILABLE and rows:
-        st.markdown("---")
-        st.header("🎯 BREF Mapping")
-
-        st.subheader("Step 1: Configuration")
-
-        col_name, col_year, col_region = st.columns([3, 1, 1])
-
-        with col_name:
-            # Auto-populate company name using LLM extraction from PDF content
-            auto_company_name = ""
-            extraction_cache_key = f"{key_prefix}_extracted_company_name_{statement_type}"
-            
-            # Check if we already extracted the company name (cache it)
-            if extraction_cache_key in st.session_state:
-                auto_company_name = st.session_state[extraction_cache_key]
-            else:
-                # Extract company name from PDF using LLM
-                report_title = ""
-                
-                # Get report title for fallback
-                if key_prefix == "manual" and hasattr(st.session_state, 'manual_extraction_report_title'):
-                    report_title = st.session_state.manual_extraction_report_title
-                elif key_prefix == "hkex" and hasattr(st.session_state, 'hkex_extraction_report_title'):
-                    report_title = st.session_state.hkex_extraction_report_title
-                elif key_prefix == "sec" and hasattr(st.session_state, 'sec_extraction_report_title'):
-                    report_title = st.session_state.sec_extraction_report_title
-                
-                                # Extract company name from the extracted rows using LLM
-                if rows and len(rows) > 0:
-                    with st.spinner("🔍 Extracting company name from PDF..."):
-                        # Get PDF bytes if available
-                        pdf_bytes = None
-                        if hasattr(st.session_state, 'uploaded_pdf_bytes'):
-                            pdf_bytes = st.session_state.uploaded_pdf_bytes
-                        
-                        auto_company_name = _extract_company_name_from_pdf(rows, report_title, pdf_bytes)
-                        # Cache the extracted name
-                        st.session_state[extraction_cache_key] = auto_company_name
-                else:
-                    # Fallback to filename or dropdown
-                    if report_title:
-                        auto_company_name = report_title.replace('.pdf', '').replace('_', ' ').strip()
-                    elif hasattr(st.session_state, 'selected_company_name') and st.session_state.selected_company_name:
-                        auto_company_name = st.session_state.selected_company_name
-                    elif hasattr(st.session_state, 'selected_company') and st.session_state.selected_company:
-                        auto_company_name = st.session_state.selected_company.get('name', '')
-            
-                                    # Initialize manual override state
-            manual_override_key = f"{key_prefix}_manual_company_override_{statement_type}"
-            if manual_override_key not in st.session_state:
-                st.session_state[manual_override_key] = False
-            
-            # Ensure bref_company_name is defined
-            bref_company_name = auto_company_name
-            
-            # Show input with Edit checkbox and Re-extract button if auto-populated
-            if auto_company_name:
-                col_input, col_checkbox, col_reextract = st.columns([3, 0.5, 0.7])
-                with col_input:
-                    if st.session_state[manual_override_key]:
-                        # Manual edit mode - editable input
-                        bref_company_name = st.text_input(
-                            "Company Name *",
-                            value=auto_company_name,
-                            placeholder="Enter Company Name",
-                            key=f"{key_prefix}_bref_company_{statement_type}",
-                            help="Company name extracted from PDF using AI"
-                        )
-                    else:
-                        # Auto-populated mode - disabled input
-                        st.text_input(
-                            "Company Name *",
-                            value=auto_company_name,
-                            key=f"{key_prefix}_bref_company_display_{statement_type}",
-                            disabled=True,
-                            help="🤖 Auto-extracted from PDF using AI"
-                        )
-                        bref_company_name = auto_company_name
-                
-                with col_checkbox:
-                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-                    # Use on_change instead of checking value to avoid rerun loop
-                    edit_enabled = st.checkbox(
-                        "Edit",
-                        value=st.session_state[manual_override_key],
-                        key=f"{key_prefix}_override_checkbox_{statement_type}",
-                        help="Enable manual editing of company name",
-                        on_change=lambda: setattr(st.session_state, manual_override_key, not st.session_state[manual_override_key])
-                    )
-                
-                with col_reextract:
-                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-                    if st.button("🔄", key=f"{key_prefix}_reextract_company_{statement_type}", help="Re-extract company name", use_container_width=True):
-                        # Clear cache and re-extract
-                        if extraction_cache_key in st.session_state:
-                            del st.session_state[extraction_cache_key]
-                        st.rerun()
-            else:
-                # No auto-populated name, show manual input
-                bref_company_name = st.text_input(
-                    "Company Name *",
-                    value="",
-                    placeholder="Enter Company Name (required)",
-                    key=f"{key_prefix}_bref_company_{statement_type}",
-                    help="Company name for BREF mapping (required)"
-                )
-            
-                        # Validation: Show error if company name is empty
-            if 'bref_company_name' not in locals() or not bref_company_name or bref_company_name.strip() == "":
-                st.error("⚠️ Company name is required for BREF mapping")
-                bref_company_name = ""  # Set to empty string to prevent errors
-
-        with col_year:
-            bref_target_year = st.number_input(
-                "Target Year",
-                min_value=2000,
-                max_value=2030,
-                value=result.get("target_year", datetime.now().year),
-                step=1,
-                key=f"{key_prefix}_bref_year_{statement_type}"
-            )
-
-        with col_region:
-            _app_region = st.session_state.get("selected_region", "")
-            _default_idx = 1 if _app_region == "APAC" else 0
-            bref_region = st.selectbox(
-                "Region",
-                options=["US", "APAC"],
-                index=_default_idx,
-                key=f"{key_prefix}_bref_region_{statement_type}",
-                help="US uses I-prefix codes, APAC uses Q-prefix codes"
-                        )
-
-        # Model selection for BREF mapping
-        from src.extraction.model_config import render_model_selector
-        st.markdown("**Select AI Model for Mapping:**")
-        bref_provider, bref_model_id = render_model_selector(key_prefix=f"{key_prefix}_bref_{statement_type}")
-
-        st.markdown("---")
-
-        st.subheader("Step 2: Select Mapping Mode")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("### Raw Mapping")
-            st.markdown("""
-            - Uses `field_mappings.py`
-            - No Excel template needed
-            - No validation
-            - Faster processing
-            """)
-            
-            # Statement type selector for raw mapping
-            # Get current statement display name
-            current_stmt_name = STATEMENT_LABELS.get(statement_type, statement_type)
-            raw_statement_options = [current_stmt_name, "Income Statement", "Balance Sheet", "Cash Flow Statement", "ALL Statements"]
-            # Remove duplicate if current statement is already in the list
-            if raw_statement_options.count(current_stmt_name) > 1:
-                raw_statement_options = [current_stmt_name] + [opt for opt in raw_statement_options[1:] if opt != current_stmt_name]
-            
-            raw_statement_choice = st.selectbox(
-                "Select Statement(s) to Map",
-                options=raw_statement_options,
-                index=0,
-                key=f"{key_prefix}_raw_statement_choice_{statement_type}",
-                help=f"Default: {current_stmt_name} only. Choose 'ALL Statements' to map all three at once."
-                        )
-
-            # Disable button if company name is empty
-            is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
-            
-            if st.button(
-                "Start Raw Mapping",
-                key=f"{key_prefix}_raw_map_{statement_type}",
-                use_container_width=True,
-                type="secondary",
-                disabled=not is_company_name_valid,
-                help="Company name is required" if not is_company_name_valid else "Start mapping without validation"
-            ):
-                # Determine which statement to map based on dropdown selection
-                statement_map = {
-                    "Income Statement": "income_statement",
-                    "Balance Sheet": "balance_sheet",
-                    "Cash Flow Statement": "cash_flow",
-                    "cash_flow": "cash_flow"
-                }
-                
-                # Get the selected statement type from dropdown
-                if raw_statement_choice == current_stmt_name:
-                    # User selected current statement (default)
-                    selected_statement_type = statement_type
-                elif raw_statement_choice == "ALL Statements":
-                    # Handle ALL statements later
-                    selected_statement_type = None
-                else:
-                    # User selected a specific statement from dropdown
-                    selected_statement_type = statement_map.get(raw_statement_choice, statement_type)
-                
-                # Get the appropriate extraction results based on selection
-                if selected_statement_type:
-                    # Get extraction results for the selected statement
-                    if key_prefix == "hkex" and hasattr(st.session_state, 'hkex_extraction_results'):
-                        extraction_results = st.session_state.hkex_extraction_results.get(selected_statement_type, {})
-                    elif key_prefix == "sec" and hasattr(st.session_state, 'sec_extraction_results'):
-                        extraction_results = st.session_state.sec_extraction_results.get(selected_statement_type, {})
-                    elif key_prefix == "manual" and hasattr(st.session_state, 'manual_extraction_results'):
-                        extraction_results = st.session_state.manual_extraction_results.get(selected_statement_type, {})
-                    else:
-                        # Fallback to current result
-                        extraction_results = result if selected_statement_type == statement_type else {}
-                    
-                    selected_rows = extraction_results.get("rows", [])
-                    
-                    if not selected_rows:
-                        st.warning(f"⚠️ No extracted data found for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}. Please extract this statement first.")
-                    else:
-                        bref_field_dict = get_field_mappings(bref_region).get(selected_statement_type, {})
-
-                        if not bref_field_dict:
-                            st.warning(f"No BREF field mappings defined for {selected_statement_type}")
-                        else:
-                            try:
-                                with st.status(f"🔄 Running raw mapping for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}...", expanded=True) as status:
-                                    st.write("📋 Loading BREF field definitions...")
-                                    fields = []
-                                    for label, field_data in bref_field_dict.items():
-                                        if isinstance(field_data, dict):
-                                            aliases = field_data.get('aliases', [])
-                                            description = ", ".join(aliases) if aliases else ""
-                                        elif isinstance(field_data, list):
-                                            description = ", ".join(field_data)
-                                        else:
-                                            description = str(field_data)
-                                        
-                                        fields.append({
-                                            "label": label,
-                                            "description": description,
-                                            "reference_value": None,
-                                        })
-                                    
-                                    st.write(f"✅ Loaded {len(fields)} BREF fields")
-                                    st.info(f"📊 Extracted {len(selected_rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
-
-                                    st.write("🤖 Mapping fields using AI...")
-
-                                    with st.expander("📝 Mapping Logs", expanded=True):
-                                        mapping_log_placeholder = st.empty()
-                                        mapping_logger = BREFLiveLogger(mapping_log_placeholder)
-
-                                        import contextlib
-                                        with contextlib.redirect_stdout(mapping_logger):
-                                            mapped_fields = map_all_fields(
-                                                fields=fields,
-                                                extracted_rows=selected_rows,
-                                                company_name=bref_company_name,
-                                                target_year=bref_target_year,
-                                                provider=bref_provider,
-                                                model=bref_model_id
-                                            )
-
-                                    for field in mapped_fields:
-                                        field["mode"] = "raw"
-                                        field["final_confidence"] = field.get("mapping_confidence", "low")
-                                        field["validation_status"] = "unverified"
-
-                                    high_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'high')
-                                    low_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'low')
-                                    st.write(f"✅ Mapped {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
-
-                                    mapping_key = f"{key_prefix}_mapping_{selected_statement_type}"
-                                    st.session_state.bref_mapping_results[mapping_key] = {
-                                        "fields": mapped_fields,
-                                        "mode": "raw",
-                                        "target_year": bref_target_year,
-                                        "statement_type": selected_statement_type,
-                                        "company_name": bref_company_name,
-                                        "region": bref_region,
-                                    }
-
-                                    status.update(label=f"✅ Mapping completed for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}!", state="complete")
-                                    st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Mapping failed: {e}")
-                                import traceback
-                                with st.expander("🐛 Error Details", expanded=True):
-                                    st.code(traceback.format_exc(), language="python")
-                else:
-                    st.info("ALL Statements mapping is not yet implemented. Please select a specific statement.")
-
-        with col2:
-            st.markdown("### ✅ Mapping with Validation")
-            st.markdown("""
-            - Requires Excel template
-            - Validates against reference year
-            - Higher accuracy
-            - Human review for low confidence
-            """)
-            
-            # Statement type selector for validated mapping (same as raw mapping)
-            validated_statement_options = [current_stmt_name, "Income Statement", "Balance Sheet", "Cash Flow Statement"]
-            # Remove duplicate if current statement is already in the list
-            if validated_statement_options.count(current_stmt_name) > 1:
-                validated_statement_options = [current_stmt_name] + [opt for opt in validated_statement_options[1:] if opt != current_stmt_name]
-            
-            validated_statement_choice = st.selectbox(
-                "Select Statement to Map",
-                options=validated_statement_options,
-                index=0,
-                key=f"{key_prefix}_validated_statement_choice_{statement_type}",
-                help=f"Default: {current_stmt_name} only."
-            )
-
-            bref_file = st.file_uploader(
-                "Upload BREF Template",
-                type=["xlsx"],
-                key=f"{key_prefix}_bref_upload_{statement_type}",
-                help="Upload NEXTERA or similar template"
-            )
-
-            ignore_extract = st.checkbox(
-                "Load all fields (ignore Extract column)",
-                value=False,
-                key=f"{key_prefix}_ignore_extract2_{statement_type}",
-                help="If checked, loads all fields regardless of Extract column value."
-            )
-
-            if bref_file:
-                st.caption(f"✅ {bref_file.name}")
-
-                # Disable button if company name is empty
-                is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
-                
-                if st.button(
-                    "Start Validated Mapping",
-                    use_container_width=True,
-                    type="primary",
-                    key=f"{key_prefix}_validated_map_{statement_type}",
-                    disabled=not is_company_name_valid,
-                    help="Company name is required" if not is_company_name_valid else "Start mapping with validation"
-                ):
-                    # Determine which statement to map based on dropdown selection
-                    statement_map = {
-                        "Income Statement": "income_statement",
-                        "Balance Sheet": "balance_sheet",
-                        "Cash Flow Statement": "cash_flow",
-                    }
-                    
-                    # Get the selected statement type from dropdown
-                    if validated_statement_choice == current_stmt_name:
-                        # User selected current statement (default)
-                        selected_statement_type = statement_type
-                    else:
-                        # User selected a specific statement from dropdown
-                        selected_statement_type = statement_map.get(validated_statement_choice, statement_type)
-                    
-                    # Get extraction results for the selected statement
-                    if key_prefix == "hkex" and hasattr(st.session_state, 'hkex_extraction_results'):
-                        extraction_results = st.session_state.hkex_extraction_results.get(selected_statement_type, {})
-                    elif key_prefix == "sec" and hasattr(st.session_state, 'sec_extraction_results'):
-                        extraction_results = st.session_state.sec_extraction_results.get(selected_statement_type, {})
-                    elif key_prefix == "manual" and hasattr(st.session_state, 'manual_extraction_results'):
-                        extraction_results = st.session_state.manual_extraction_results.get(selected_statement_type, {})
-                    else:
-                        # Fallback to current result
-                        extraction_results = result if selected_statement_type == statement_type else {}
-                    
-                    selected_rows = extraction_results.get("rows", [])
-                    
-                    if not selected_rows:
-                        st.warning(f"⚠️ No extracted data found for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}. Please extract this statement first.")
-                    else:
-                        import tempfile
-                        import openpyxl
-                        import os
-
-                        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-                            tmp.write(bref_file.getvalue())
-                            tmp_path = tmp.name
-
-                        try:
-                            with st.status(f"🔄 Running validated mapping for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}...", expanded=True) as status:
-                                st.write("📂 Loading BREF template...")
-                                wb = openpyxl.load_workbook(tmp_path)
-                                ws = wb.active
-
-                                ref_year = bref_target_year - 1
-                                ref_col = find_year_column(ws, ref_year)
-                                target_col = find_year_column(ws, bref_target_year)
-
-                                if ref_col:
-                                    st.write(f"✅ Found reference year ({ref_year}) in column {ref_col}")
-                                else:
-                                    st.warning(f"⚠️ Reference year ({ref_year}) not found in template")
-
-                                if target_col:
-                                    st.write(f"✅ Found target year ({bref_target_year}) in column {target_col}")
-                                else:
-                                    st.warning(f"⚠️ Target year ({bref_target_year}) not found in template")
-
-                                wb.close()
-
-                                st.write("📋 Loading BREF fields from template...")
-                                field_mappings_dict = get_field_mappings(bref_region).get(selected_statement_type, {})
-                                fields = load_bref_fields(
-                                    tmp_path,
-                                    STATEMENT_SHEET_MAP[selected_statement_type],
-                                    bref_target_year,
-                                    field_mappings=field_mappings_dict,
-                                    ignore_extract_column=ignore_extract
-                                )
-
-                                if not fields:
-                                    st.error(f"❌ No BREF field mappings defined for {selected_statement_type}")
-                                    status.update(label="❌ Mapping failed", state="error")
-                                else:
-                                    ref_count = sum(1 for f in fields if f['reference_value'] is not None)
-                                    st.write(f"✅ Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
-
-                                    st.write("🤖 Mapping fields using AI...")
-
-                                    with st.expander("📝 Mapping Logs", expanded=True):
-                                        mapping_log_placeholder = st.empty()
-                                        mapping_logger = BREFLiveLogger(mapping_log_placeholder)
-
-                                    import contextlib
-                                    with contextlib.redirect_stdout(mapping_logger):
-                                        mapped_fields = map_all_fields(
-                                            fields=fields,
-                                            extracted_rows=selected_rows,
-                                            company_name=bref_company_name,
-                                            target_year=bref_target_year,
-                                            provider=bref_provider,
-                                            model=bref_model_id
-                                        )
-
-                                    st.write(f"✅ Mapped {len(mapped_fields)} fields")
-
-                                    st.write("✓ Validating mappings...")
-
-                                    with st.expander("📝 Validation Logs", expanded=True):
-                                        validation_log_placeholder = st.empty()
-                                        validation_logger = BREFLiveLogger(validation_log_placeholder)
-
-                                        import contextlib
-                                        with contextlib.redirect_stdout(validation_logger):
-                                            validated_fields = validate_mappings(mapped_fields)
-
-                                    high_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'high')
-                                    low_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'low')
-                                    validated_count = sum(1 for f in validated_fields if f.get('validation_status') == 'validated')
-
-                                    st.write(f"✅ Validation complete: {high_conf} high confidence, {low_conf} low confidence, {validated_count} validated")
-
-                                    st.write("📊 Generating Excel output...")
-                                    excel_bytes = create_clean_output_excel(
-                                        validated_fields,
-                                        target_year=bref_target_year,
-                                        statement_type=selected_statement_type
-                                    )
-
-                                    mapping_key = f"{key_prefix}_mapping_{selected_statement_type}"
-                                    st.session_state.bref_mapping_results[mapping_key] = {
-                                        "fields": validated_fields,
-                                        "mode": "validated",
-                                        "target_year": bref_target_year,
-                                        "statement_type": selected_statement_type,
-                                        "company_name": bref_company_name,
-                                        "template_name": bref_file.name,
-                                        "excel_bytes": excel_bytes,
-                                        "region": bref_region,
-                                    }
-
-                                    status.update(label=f"✅ Mapping completed for {STATEMENT_LABELS.get(selected_statement_type, selected_statement_type)}!", state="complete")
-                                    st.rerun()
-
-                        except Exception as e:
-                            st.error(f"❌ Mapping failed: {e}")
-                            import traceback
-                            with st.expander("🐛 Error Details", expanded=True):
-                                st.code(traceback.format_exc(), language="python")
-                        finally:
-                            import os
-                            if os.path.exists(tmp_path):
-                                os.unlink(tmp_path)
-
-                st.markdown("---")
-
-                # STEP 3: Display Results
-        current_mapping_key = f"{key_prefix}_mapping_{statement_type}"
-        if current_mapping_key in st.session_state.bref_mapping_results:
-            st.subheader("Step 3: Results & Review")
-            _display_mapping_results(current_mapping_key, statement_type, key_prefix)
-
-                # Also display results for a cross-tab mapping (dropdown selected a different statement)
-        # Check both raw and validated mapping dropdowns
-        _stmt_map = {"Income Statement": "income_statement", "Balance Sheet": "balance_sheet", "Cash Flow Statement": "cash_flow"}
-        
-        # Check raw mapping dropdown
-        _raw_dropdown_key = f"{key_prefix}_raw_statement_choice_{statement_type}"
-        _raw_dropdown_val = st.session_state.get(_raw_dropdown_key, "")
-        _alt_stype_raw = _stmt_map.get(_raw_dropdown_val)
-        
-        # Check validated mapping dropdown
-        _validated_dropdown_key = f"{key_prefix}_validated_statement_choice_{statement_type}"
-        _validated_dropdown_val = st.session_state.get(_validated_dropdown_key, "")
-        _alt_stype_validated = _stmt_map.get(_validated_dropdown_val)
-        
-        # Display results for whichever dropdown has a different statement selected
-        _alt_stype = _alt_stype_validated if _alt_stype_validated and _alt_stype_validated != statement_type else _alt_stype_raw
-        
-        if _alt_stype and _alt_stype != statement_type:
-            _alt_key = f"{key_prefix}_mapping_{_alt_stype}"
-            if _alt_key in st.session_state.bref_mapping_results:
-                _alt_label = STATEMENT_LABELS.get(_alt_stype, _alt_stype)
-                st.subheader(f"Step 3: Results & Review — {_alt_label}")
-                _display_mapping_results(_alt_key, _alt_stype, f"{key_prefix}_{statement_type}")
+    # The old single-statement mapping UI has been replaced by the new
+    # multi-statement UI (brefmap_multi_ui.py) which allows mapping
+    # multiple statements at once using checkboxes.
+    # This section is completely disabled - no mapping UI in individual tabs
+    # All mapping functionality is now in render_multi_statement_mapping()
+    # The old code (500+ lines) has been removed to clean up the file.
+    pass  # End of render_pdf_panel function
 
 
 def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: str):
