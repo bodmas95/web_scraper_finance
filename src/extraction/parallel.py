@@ -20,6 +20,7 @@ _log = logging.getLogger(__name__)
 def _extract_one_statement(args):
     """
     Extract a single financial statement from a PDF.
+    Uses Gemma by default, falls back to GPT-4o on failure.
 
     Args:
         args: tuple of (pdf_path, statement_type, stitch_fn, provider, model_id,
@@ -34,6 +35,7 @@ def _extract_one_statement(args):
     try:
         from src.extraction.page_validator import find_correct_page
         from src.extraction.extractor import extract_table_with_vision_fallback
+        from src.extraction.model_config import get_fallback_model
 
         with contextlib.redirect_stdout(log_buf):
             page = find_correct_page(pdf_path, stype)
@@ -47,11 +49,24 @@ def _extract_one_statement(args):
                 "manual_needed": True,
             }
 
-        with contextlib.redirect_stdout(log_buf):
-            table = extract_table_with_vision_fallback(
-                page, pdf_path, stitch_fn,
-                provider=provider, model=model_id,
-            )
+        # Try with primary model (Gemma)
+        try:
+            with contextlib.redirect_stdout(log_buf):
+                table = extract_table_with_vision_fallback(
+                    page, pdf_path, stitch_fn,
+                    provider=provider, model=model_id,
+                )
+        except Exception as e:
+            # Fallback to GPT-4o
+            log_buf.write(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}\n")
+            log_buf.write("🔄 Falling back to GPT-4o...\n")
+            
+            fallback_provider, fallback_model = get_fallback_model()
+            with contextlib.redirect_stdout(log_buf):
+                table = extract_table_with_vision_fallback(
+                    page, pdf_path, stitch_fn,
+                    provider=fallback_provider, model=fallback_model,
+                )
 
         if not table["rows"]:
             return {
