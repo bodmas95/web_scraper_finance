@@ -12,10 +12,40 @@ This application provides a beautiful user interface for:
 import streamlit as st
 import pandas as pd
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent))
+
+# ============================================================================
+# WEBSOCKET KEEPALIVE - Prevent corporate proxy timeout
+# ============================================================================
+def websocket_keepalive():
+    """
+    Send periodic empty updates to keep WebSocket connection alive.
+    This prevents corporate proxy from killing the connection during long operations.
+    Runs in background thread.
+    """
+    while True:
+        try:
+            # Send a ping every 25 seconds (before 30-second proxy timeout)
+            time.sleep(25)
+            # Force a minimal UI update to keep connection alive
+            # This is invisible to the user but keeps the WebSocket active
+            if 'websocket_ping_counter' not in st.session_state:
+                st.session_state.websocket_ping_counter = 0
+            st.session_state.websocket_ping_counter += 1
+        except Exception:
+            # Silently ignore errors (thread will continue)
+            pass
+
+# Start keepalive thread (only once per session)
+if 'websocket_keepalive_started' not in st.session_state:
+    keepalive_thread = threading.Thread(target=websocket_keepalive, daemon=True)
+    keepalive_thread.start()
+    st.session_state.websocket_keepalive_started = True
 
 from src.components.common import (
     load_regions_from_mongodb,
@@ -241,17 +271,23 @@ def main():
                     st.session_state.countries = load_countries_by_region(st.session_state.selected_region)
 
                 if st.session_state.countries:
-                    # Country selector with proper index handling
-                    country_index = 0
+                    # Country selector - use placeholder if no country selected
+                    country_options = ["-- Select Country --"] + st.session_state.countries
+                    
+                    country_index = 0  # Default to placeholder
                     if st.session_state.selected_country and st.session_state.selected_country in st.session_state.countries:
-                        country_index = st.session_state.countries.index(st.session_state.selected_country)
+                        country_index = country_options.index(st.session_state.selected_country)
 
                     selected_country = st.selectbox(
                         "Select Country",
-                        options=st.session_state.countries,
+                        options=country_options,
                         index=country_index,
                         key="country_selector"
                     )
+                    
+                    # Only process if a real country is selected (not placeholder)
+                    if selected_country == "-- Select Country --":
+                        selected_country = None
 
                     # Check if country changed
                     if selected_country != st.session_state.selected_country:
@@ -286,11 +322,14 @@ def main():
                 if st.session_state.filtered_companies:
                     company_names = [f"{c.get('name', 'Unknown')}"
                                      for c in st.session_state.filtered_companies]
+                    
+                    # Add placeholder option
+                    company_options = ["-- Select Company --"] + company_names
 
                     # Company selector - only use saved index if the company name is in the current list
-                    company_index = 0
+                    company_index = 0  # Default to placeholder
                     if st.session_state.selected_company_name and st.session_state.selected_company_name in company_names:
-                        company_index = company_names.index(st.session_state.selected_company_name)
+                        company_index = company_options.index(st.session_state.selected_company_name)
                     else:
                         # If saved company is not in the list, reset it
                         st.session_state.selected_company_name = None
@@ -299,13 +338,13 @@ def main():
 
                     selected_company_name = st.selectbox(
                         "Select Company",
-                        options=company_names,
+                        options=company_options,
                         index=company_index,
                         key="company_selector"
                     )
-
-                    # Always validate and update when a company is selected from the dropdown
-                    if selected_company_name:
+                    
+                    # Only process if a real company is selected (not placeholder)
+                    if selected_company_name and selected_company_name != "-- Select Company --":
                         # Get selected company
                         selected_idx = company_names.index(selected_company_name)
                         company = st.session_state.filtered_companies[selected_idx]
@@ -347,17 +386,17 @@ def main():
 
     st.markdown("---")
 
-    # Validate that all three selections are made and company is validated
+        # Validate that all three selections are made and company is validated
     if not st.session_state.selected_region:
-        st.info("Please select a region to continue")
+        st.info("ℹ️ Please select a region to continue")
         return
 
     if not st.session_state.selected_country:
-        st.info("Please select a country to continue")
+        st.info("ℹ️ Please select a country to continue")
         return
 
     if not st.session_state.selected_company or not st.session_state.is_company_validated:
-        st.info("Please select a company to continue")
+        st.info("ℹ️ Please select a company to continue")
         return
 
     # All validations passed - proceed with company information display
@@ -439,30 +478,6 @@ def main():
             st.info("No data sources found for this company")
 
         st.markdown("---")
-
-    # Show date range for HKEX only
-    if company_type == 'HKEX':
-        from datetime import timedelta
-        st.markdown("### Search Configuration")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            date_from = st.date_input(
-                "From Date",
-                value=st.session_state.date_from,
-                help="Start date for report search"
-            )
-            st.session_state.date_from = date_from
-
-        with col2:
-            date_to = st.date_input(
-                "To Date",
-                value=st.session_state.date_to,
-                help="End date for report search"
-            )
-            st.session_state.date_to = date_to
-
-    st.markdown("---")
 
     # ==================================================================
     # ROUTE TO WORKSTREAM COMPONENTS
