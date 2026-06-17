@@ -188,6 +188,7 @@ def map_all_fields(
 
     _model = model or LLM_MODEL
     print(f"Mapping {len(fields)} fields in a single pass  (model: {_model})\n")
+    print(f"⏳ Waiting for LLM response... (this may take 30-60 seconds)\n")
 
     stream = client.chat.completions.create(
         model=_model,
@@ -199,15 +200,33 @@ def map_all_fields(
     )
 
     full_content = ""
+    chunk_count = 0
+    last_progress_time = 0
+    import time
+    import sys
+    
     for chunk in stream:
         delta = chunk.choices[0].delta.content if chunk.choices else ""
         if delta:
             full_content += delta
             print(delta, end="", flush=True)
+            chunk_count += 1
+            
+            # CRITICAL: Send progress updates every 2 seconds to keep WebSocket alive
+            # Reduced from 5 to 2 seconds for more aggressive keep-alive
+            # This prevents "tornado.websocket.WebSocketClosedError" during long operations
+            current_time = time.time()
+            if current_time - last_progress_time >= 2:
+                # Force flush to ensure message reaches Streamlit immediately
+                progress_msg = f"\n[⏳ Mapping in progress... {len(full_content)} chars received, {chunk_count} chunks processed]\n"
+                print(progress_msg, flush=True)
+                sys.stdout.flush()  # Extra flush to ensure it reaches Streamlit
+                last_progress_time = current_time
         if chunk.usage:
             track_usage(chunk)
 
-    print("\n")
+    print(f"\n\n✅ Received complete response ({len(full_content)} chars, {chunk_count} chunks)\n")
+    sys.stdout.flush()
     
     # Clean up excessive decimal places in the JSON string before parsing
     # This prevents issues with numbers like 28987.000000...000
