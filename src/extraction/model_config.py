@@ -17,11 +17,6 @@ GEMMA_MODELS = {
     "gemma3-27b-it/": "Gemma 3 27B",
 }
 
-# Available Azure OpenAI models (deployment names)
-AZURE_MODELS = {
-    "gpt-5.1": "GPT-5.1 (Azure)",
-}
-
 def get_all_models():
     """
     Get all available models from both providers.
@@ -38,11 +33,7 @@ def get_all_models():
     # Add Gemma models with provider prefix (internal use only)
     for model_id, display_name in GEMMA_MODELS.items():
         all_models[f"gemma:{model_id}"] = display_name
-
-    # Add Azure OpenAI models with provider prefix
-    for model_id, display_name in AZURE_MODELS.items():
-        all_models[f"azure:{model_id}"] = display_name
-
+    
     return all_models
 
 
@@ -74,12 +65,33 @@ def get_default_model():
     if provider == "maia":
         model = _cfg.get("LLM", "maia_model", fallback="gpt-5.1-2025-11-13")
         return f"maia:{model}"
-    elif provider == "azure":
-        model = _cfg.get("LLM", "model", fallback="gpt-5.1")
-        return f"azure:{model}"
     else:
         model = _cfg.get("LLM", "model", fallback="gemma3-27b-it/")
         return f"gemma:{model}"
+
+
+def get_extraction_model():
+    """
+    Get the model to use for extraction (no UI selection).
+    Uses Gemma by default.
+    
+    Returns:
+        tuple: (provider, model_id)
+    """
+    # Always use Gemma for extraction
+    return "gemma", "gemma3-27b-it/"
+
+
+def get_fallback_model():
+    """
+    Get the fallback model if primary model fails.
+    Uses Maia GPT-5.5.
+    
+    Returns:
+        tuple: (provider, model_id)
+    """
+    # Use Maia GPT-5.5 as fallback
+    return "maia", "gpt-5.5-2026-04-24"
 
 
 def render_model_selector(key_prefix=""):
@@ -91,6 +103,9 @@ def render_model_selector(key_prefix=""):
     
     Returns:
         tuple: (provider, model_id) selected by user
+    
+    Note: This function is kept for backward compatibility with BREF mapping.
+    For extraction pipeline, use get_extraction_model() instead.
     """
     import streamlit as st
     from config.config import load_config
@@ -105,14 +120,9 @@ def render_model_selector(key_prefix=""):
     # Filter out Maia models if credentials not configured
     if not has_maia_credentials:
         all_models = {k: v for k, v in all_models.items() if not k.startswith("maia:")}
-
-    # Filter out Azure models if provider is not azure
-    has_azure = _cfg.get("LLM", "provider", fallback="").lower() == "azure"
-    if not has_azure:
-        all_models = {k: v for k, v in all_models.items() if not k.startswith("azure:")}
-
-    if not all_models:
-        all_models = {"gemma:gemma3-27b-it/": "Gemma 3 27B"}
+        if not all_models:
+            # Fallback to Gemma if no models available
+            all_models = {"gemma:gemma3-27b-it/": "Gemma 3 27B"}
     
     default_selection = get_default_model()
     
