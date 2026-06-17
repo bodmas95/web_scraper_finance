@@ -107,13 +107,26 @@ def keep_alive_heartbeat(placeholder, stop_event, interval=3):
         placeholder: Streamlit placeholder to update
         stop_event: Threading event to signal when to stop
         interval: Seconds between updates (default 3)
+    
+    Note: This function runs in a background thread and may lose session context.
+    We catch NoSessionContext errors to prevent crashes.
     """
+    from streamlit.errors import NoSessionContext
+    
     elapsed = 0
     while not stop_event.is_set():
         _time.sleep(interval)
         elapsed += interval
         if not stop_event.is_set():
-            placeholder.info(f"🔄 Mapping in progress... ({elapsed}s elapsed)")
+            try:
+                placeholder.info(f"🔄 Mapping in progress... ({elapsed}s elapsed)")
+            except NoSessionContext:
+                # Session context lost - this is expected in background threads
+                # The mapping is still running, just can't update the UI
+                pass
+            except Exception:
+                # Ignore other errors to keep the heartbeat running
+                pass
 
 
 def run_with_heartbeat(func, progress_placeholder, *args, **kwargs):
@@ -448,7 +461,7 @@ def render_human_review_ui(fields: list, mapping_key: str, target_year: int):
             col1, col2 = st.columns([3, 2])
             with col1:
                 st.text_input(
-                    "Matched Label",
+                    "Annual Report Label",
                     value=field.get('matched_label', ''),
                     key=f"{mapping_key}_matched_{idx}",
                     help="The label from the extracted data"
@@ -734,8 +747,8 @@ def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: 
     editor_key = f"{key_prefix}_editor_{statement_type}_{mapping_key}"
 
     column_config = {
-        "Field": st.column_config.TextColumn("Field", disabled=True),
-        "Matched Label": st.column_config.TextColumn("Matched Label", help="Edit to correct the matched label"),
+        "BREF Field": st.column_config.TextColumn("Field", disabled=True),
+        "Annual Report Label": st.column_config.TextColumn("Matched Label", help="Edit to correct the matched label"),
         value_col: st.column_config.NumberColumn(value_col, help="Edit to correct the extracted value", format="%.2f"),
         "Confidence": st.column_config.SelectboxColumn("Confidence", options=["high", "low"], help="Set confidence level"),
         "Reason": st.column_config.TextColumn("Reason", disabled=True),
