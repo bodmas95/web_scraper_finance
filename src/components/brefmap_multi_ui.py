@@ -27,13 +27,13 @@ try:
         create_clean_output_excel,
         STATEMENT_SHEET_MAP,
     )
+    from src.mapping.fast_mapper import fast_map_fields
     BREF_MAPPING_AVAILABLE = True
 except ImportError:
     BREF_MAPPING_AVAILABLE = False
 
 from src.components.brefmap_ui import (
     BREFLiveLogger,
-    run_with_heartbeat,
     _extract_company_name_from_pdf,
     find_year_column,
 )
@@ -62,123 +62,173 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
     if 'bref_mapping_results' not in st.session_state:
         st.session_state.bref_mapping_results = {}
     
-    # ==================================================================
-    # STEP 1: Configuration
-    # ==================================================================
-    st.subheader("Step 1: Configuration")
+    # Memory cleanup: Clear old mapping results if too many
+    if len(st.session_state.bref_mapping_results) > 10:
+        # Keep only the 5 most recent mappings
+        keys_to_keep = list(st.session_state.bref_mapping_results.keys())[-5:]
+        st.session_state.bref_mapping_results = {
+            k: v for k, v in st.session_state.bref_mapping_results.items() 
+            if k in keys_to_keep
+        }
     
-    col_name, col_year, col_region = st.columns([3, 1, 1])
+    # Determine configuration based on client type and source
+    is_manual_upload = (key_prefix == "manual" and 
+                       'manual_pdf_fiscal_year' in st.session_state and
+                       st.session_state.manual_pdf_fiscal_year is not None)
     
-    with col_name:
-        # Auto-extract company name from first available statement
-        auto_company_name = ""
-        extraction_cache_key = f"{key_prefix}_multi_extracted_company_name"
-        
-        if extraction_cache_key in st.session_state:
-            auto_company_name = st.session_state[extraction_cache_key]
-        else:
-            # Get first available statement for company name extraction
-            first_statement = next(iter(extraction_results.values()), {})
-            rows = first_statement.get("rows", [])
-            
-            if rows:
-                with st.spinner("🔍 Extracting company name from PDF..."):
-                    pdf_bytes = st.session_state.get('uploaded_pdf_bytes')
-                    report_title = st.session_state.get(f'{key_prefix}_extraction_report_title', '')
-                    auto_company_name = _extract_company_name_from_pdf(rows, report_title, pdf_bytes)
-                    st.session_state[extraction_cache_key] = auto_company_name
-        
-        # Company name input
-        manual_override_key = f"{key_prefix}_multi_manual_company_override"
-        if manual_override_key not in st.session_state:
-            st.session_state[manual_override_key] = False
-        
-        if auto_company_name:
-            col_input, col_checkbox, col_reextract = st.columns([3, 0.5, 0.7])
-            with col_input:
-                if st.session_state[manual_override_key]:
-                    bref_company_name = st.text_input(
-                        "Company Name *",
-                        value=auto_company_name,
-                        key=f"{key_prefix}_multi_bref_company",
-                        help="Company name extracted from PDF using AI"
-                    )
-                else:
-                    st.text_input(
-                        "Company Name *",
-                        value=auto_company_name,
-                        key=f"{key_prefix}_multi_bref_company_display",
-                        disabled=True,
-                        help="🤖 Auto-extracted from PDF using AI"
-                    )
-                    bref_company_name = auto_company_name
-            
-            with col_checkbox:
-                st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-                st.checkbox(
-                    "Edit",
-                    value=st.session_state[manual_override_key],
-                    key=f"{key_prefix}_multi_override_checkbox",
-                    help="Enable manual editing of company name",
-                    on_change=lambda: setattr(st.session_state, manual_override_key, not st.session_state[manual_override_key])
-                )
-            
-            with col_reextract:
-                st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("🔄", key=f"{key_prefix}_multi_reextract_company", help="Re-extract company name", use_container_width=True):
-                    if extraction_cache_key in st.session_state:
-                        del st.session_state[extraction_cache_key]
-                    st.rerun()
-        else:
-            bref_company_name = st.text_input(
-                "Company Name *",
-                value="",
-                placeholder="Enter Company Name (required)",
-                key=f"{key_prefix}_multi_bref_company",
-                help="Company name for BREF mapping (required)"
-            )
-    
-    with col_year:
-        # Get target year from first available result
-        first_result = next(iter(extraction_results.values()), {})
-        default_year = first_result.get("target_year", datetime.now().year)
-        
-        bref_target_year = st.number_input(
-            "Target Year",
-            min_value=2000,
-            max_value=2030,
-            value=default_year,
-            step=1,
-            key=f"{key_prefix}_multi_bref_year"
-        )
-    
-    with col_region:
+    # Get configuration values
+    if is_manual_upload:
+        # Manual upload: Use stored values from extraction
+        bref_company_name = st.session_state.get('manual_extraction_report_title', 'Unknown Company').replace('.pdf', '')
+        bref_target_year = st.session_state.get('manual_pdf_fiscal_year', datetime.now().year)
         _app_region = st.session_state.get("selected_region", "")
-        _default_idx = 1 if _app_region == "APAC" else 0
-        bref_region = st.selectbox(
-            "Region",
-            options=["US", "APAC"],
-            index=_default_idx,
-            key=f"{key_prefix}_multi_bref_region",
-            help="US uses I-prefix codes, APAC uses Q-prefix codes"
-        )
+        # Map region: APAC and EMEA use same codes, US uses different codes
+        bref_region = _app_region if _app_region in ("APAC", "EMEA") else "US"
+        is_company_name_valid = True
+        
+        st.info(f"📝 Using fiscal year **{bref_target_year}** from manual upload")
+    else:
+        # HKEX/SEC: Get from extraction results
+        first_result = next(iter(extraction_results.values()), {})
+        bref_company_name = first_result.get("company", "Unknown Company")
+        bref_target_year = first_result.get("target_year", datetime.now().year)
+        _app_region = st.session_state.get("selected_region", "")
+        # Map region: APAC and EMEA use same codes, US uses different codes
+        bref_region = _app_region if _app_region in ("APAC", "EMEA") else "US"
+        is_company_name_valid = True
+        
+        st.info(f"📝 Company: **{bref_company_name}** | Fiscal Year: **{bref_target_year}** | Region: **{bref_region}**")
     
-    # Model selection
-    from src.extraction.model_config import render_model_selector
-    st.markdown("**Select AI Model for Mapping:**")
-    bref_provider, bref_model_id = render_model_selector(key_prefix=f"{key_prefix}_multi_bref")
-    
-    # Validate company name
-    is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
-    if not is_company_name_valid:
-        st.error("⚠️ Company name is required for BREF mapping")
+    # Use Gemma by default for BREF mapping (no UI selection)
+    from src.extraction.model_config import get_extraction_model
+    bref_provider, bref_model_id = get_extraction_model()
     
     st.markdown("---")
     
+    # Skip old Step 1 configuration entirely
+    if False:  # This block is now disabled
+        st.subheader("Step 1: Configuration")
+        
+        col_name, col_year, col_region = st.columns([3, 1, 1])
+        
+        with col_name:
+            # Auto-extract company name from first available statement
+            auto_company_name = ""
+            extraction_cache_key = f"{key_prefix}_multi_extracted_company_name"
+            
+            if extraction_cache_key in st.session_state:
+                auto_company_name = st.session_state[extraction_cache_key]
+            else:
+                # Get first available statement for company name extraction
+                first_statement = next(iter(extraction_results.values()), {})
+                rows = first_statement.get("rows", [])
+                
+                if rows:
+                    with st.spinner("🔍 Extracting company name from PDF..."):
+                        pdf_bytes = st.session_state.get('uploaded_pdf_bytes')
+                        report_title = st.session_state.get(f'{key_prefix}_extraction_report_title', '')
+                        auto_company_name = _extract_company_name_from_pdf(rows, report_title, pdf_bytes)
+                        st.session_state[extraction_cache_key] = auto_company_name
+            
+            # Company name input
+            manual_override_key = f"{key_prefix}_multi_manual_company_override"
+            if manual_override_key not in st.session_state:
+                st.session_state[manual_override_key] = False
+            
+            if auto_company_name:
+                col_input, col_checkbox, col_reextract = st.columns([3, 0.5, 0.7])
+                with col_input:
+                    if st.session_state[manual_override_key]:
+                        bref_company_name = st.text_input(
+                            "Company Name *",
+                            value=auto_company_name,
+                            key=f"{key_prefix}_multi_bref_company",
+                            help="Company name extracted from PDF using AI"
+                        )
+                    else:
+                        st.text_input(
+                            "Company Name *",
+                            value=auto_company_name,
+                            key=f"{key_prefix}_multi_bref_company_display",
+                            disabled=True,
+                            help="🤖 Auto-extracted from PDF using AI"
+                        )
+                        bref_company_name = auto_company_name
+                
+                with col_checkbox:
+                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+                    st.checkbox(
+                        "Edit",
+                        value=st.session_state[manual_override_key],
+                        key=f"{key_prefix}_multi_override_checkbox",
+                        help="Enable manual editing of company name",
+                        on_change=lambda: setattr(st.session_state, manual_override_key, not st.session_state[manual_override_key])
+                    )
+                
+                with col_reextract:
+                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button("🔄", key=f"{key_prefix}_multi_reextract_company", help="Re-extract company name", use_container_width=True):
+                        if extraction_cache_key in st.session_state:
+                            del st.session_state[extraction_cache_key]
+                            st.rerun()
+            else:
+                bref_company_name = st.text_input(
+                    "Company Name *",
+                    value="",
+                    placeholder="Enter Company Name (required)",
+                    key=f"{key_prefix}_multi_bref_company",
+                    help="Company name for BREF mapping (required)"
+                )
+        
+        with col_year:
+            # Get target year from first available result
+            first_result = next(iter(extraction_results.values()), {})
+            default_year = first_result.get("target_year", datetime.now().year)
+            
+            bref_target_year = st.number_input(
+                "Target Year",
+                min_value=2000,
+                max_value=2030,
+                value=default_year,
+                step=1,
+                key=f"{key_prefix}_multi_bref_year"
+            )
+        
+        with col_region:
+            _app_region = st.session_state.get("selected_region", "")
+            _default_idx = 1 if _app_region == "APAC" else 0
+            bref_region = st.selectbox(
+                "Region",
+                options=["US", "APAC"],
+                index=_default_idx,
+                key=f"{key_prefix}_multi_bref_region",
+                help="US uses I-prefix codes, APAC uses Q-prefix codes"
+            )
+        
+            # Model selection
+            from src.extraction.model_config import render_model_selector
+            st.markdown("**Select AI Model for Mapping:**")
+            bref_provider, bref_model_id = render_model_selector(key_prefix=f"{key_prefix}_multi_bref")
+            
+            # Validate company name
+            is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
+            if not is_company_name_valid:
+                st.error("⚠️ Company name is required for BREF mapping")
+            
+            st.markdown("---")
+    
     # ==================================================================
-    # STEP 2: Select Statements to Map
+    # STEP 1: Select Statements to Map
     # ==================================================================
-    st.subheader("Step 2: Select Statements to Map")
+    st.subheader("Step 1: Select Statements to Map")
+    
+    # Client Type Selection inside Step 1
+    client_type = st.selectbox(
+        "Select Client Type",
+        options=["New Client", "Existing Client"],
+        key=f"{key_prefix}_client_type",
+        help="New Client: Raw mapping without validation | Existing Client: Mapping with validation against template"
+    )
     
     st.markdown("**Select which statements to map:**")
     
@@ -226,26 +276,35 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
     st.markdown("---")
     
     # ==================================================================
-    # STEP 3: Select Mapping Mode
+    # STEP 2: Mapping Mode (Based on Client Type)
     # ==================================================================
-    st.subheader("Step 3: Select Mapping Mode")
+    st.subheader("Step 2: Start Mapping")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### Raw Mapping")
+    if client_type == "New Client":
+        # Raw Mapping for New Client
+        st.markdown("### 🚀 New Client Mapping)")
         st.markdown("""
         - Uses `field_mappings.py`
         - No Excel template needed
         - No validation
-        - Faster processing
+        - **Fast alias matching + calculations**
+        - LLM only for unmatched fields
         """)
+        
+        # Temporarily commented out - always use fast mapping
+        # use_fast_mapping = st.checkbox(
+        #     "Use fast mapping (alias + calculations)",
+        #     value=True,
+        #     key=f"{key_prefix}_multi_use_fast_mapping",
+        #     help="Enable fast alias matching and automatic calculations. Disable to use LLM for all fields."
+        # )
+        use_fast_mapping = True  # Always enabled for now
         
         if st.button(
             f"🚀 Start Raw Mapping ({len(selected_statements)} statements)",
             key=f"{key_prefix}_multi_raw_map",
             use_container_width=True,
-            type="secondary",
+            type="primary",
             disabled=not is_company_name_valid,
             help="Company name is required" if not is_company_name_valid else f"Map {len(selected_statements)} statement(s) without validation"
         ):
@@ -258,11 +317,13 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
                 provider=bref_provider,
                 model_id=bref_model_id,
                 key_prefix=key_prefix,
-                mode="raw"
+                mode="raw",
+                use_fast_mapping=use_fast_mapping
             )
     
-    with col2:
-        st.markdown("### ✅ Mapping with Validation")
+    else:  # Existing Client
+        # Validated Mapping for Existing Client
+        st.markdown("### ✅ Existing Client Mapping")
         st.markdown("""
         - Requires Excel template
         - Validates against reference year
@@ -319,9 +380,8 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
     available_results = [key for key in mapping_keys if key in st.session_state.bref_mapping_results]
     
     if available_results:
-        st.subheader("Step 4: Results & Review")
+        st.subheader("Step 3: Results & Review")
         
-        # Create tabs for each mapped statement
         # Extract statement type from mapping key (e.g., "hkex_mapping_income_statement" -> "income_statement")
         statement_types_from_keys = []
         for key in available_results:
@@ -329,6 +389,12 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
             parts = key.replace(f"{key_prefix}_mapping_", "")
             statement_types_from_keys.append(parts)
         
+        # Get target year and company name from first result (for later use in download)
+        first_mapping = st.session_state.bref_mapping_results[available_results[0]]
+        result_target_year = first_mapping.get("target_year", datetime.now().year)
+        result_company_name = first_mapping.get("company_name", "Company")
+        
+        # Create tabs for each mapped statement
         tab_labels = [
             STATEMENT_LABELS.get(stmt_type, stmt_type) 
             for stmt_type in statement_types_from_keys
@@ -338,6 +404,11 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
         for tab, mapping_key, statement_type in zip(tabs, available_results, statement_types_from_keys):
             with tab:
                 _display_mapping_results_tab(mapping_key, statement_type, key_prefix)
+        
+        # Combined download button AFTER tabs
+        st.markdown("---")
+        st.markdown("### 📥 Download All Results")
+        _render_combined_download(available_results, statement_types_from_keys, key_prefix, result_target_year, result_company_name)
 
 
 def _run_multi_statement_mapping(
@@ -351,15 +422,24 @@ def _run_multi_statement_mapping(
     key_prefix: str,
     mode: str = "raw",
     bref_file=None,
-    ignore_extract: bool = False
+    ignore_extract: bool = False,
+    use_fast_mapping: bool = True
 ):
     """Run mapping for multiple statements sequentially."""
     
     total_statements = len(selected_statements)
     
+    # Show warning about long operation
+    st.warning(f"⏳ **IMPORTANT:** Mapping {total_statements} statements may take 3-5 minutes. Please keep this page open and do NOT refresh!")
+    
+    # Create a progress bar
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
+    
     with st.status(f"🔄 Mapping {total_statements} statement(s)...", expanded=True) as status:
         for idx, statement_type in enumerate(selected_statements, 1):
             st.write(f"**[{idx}/{total_statements}] Mapping {STATEMENT_LABELS.get(statement_type, statement_type)}...**")
+            st.write(f"  ⏳ This may take 60-90 seconds. Progress updates will appear in the logs below.")
             
             # Get extraction results for this statement
             result = extraction_results.get(statement_type, {})
@@ -380,7 +460,8 @@ def _run_multi_statement_mapping(
                         region=region,
                         provider=provider,
                         model_id=model_id,
-                        key_prefix=key_prefix
+                        key_prefix=key_prefix,
+                        use_fast_mapping=use_fast_mapping
                     )
                 else:
                     # Validated mapping
@@ -416,9 +497,16 @@ def _map_single_statement_raw(
     region: str,
     provider: str,
     model_id: str,
-    key_prefix: str
+    key_prefix: str,
+    use_fast_mapping: bool = True
 ):
-    """Map a single statement using raw mapping (no validation)."""
+    """Map a single statement using raw mapping (no validation).
+    
+    Also extracts all available years from the extraction results.
+    
+    Args:
+        use_fast_mapping: If True, use fast alias matching + calculations before LLM
+    """
     
     # Get field mappings
     bref_field_dict = get_field_mappings(region).get(statement_type, {})
@@ -443,33 +531,215 @@ def _map_single_statement_raw(
             "reference_value": None,
         })
     
-    st.write(f"  📋 Loaded {len(fields)} BREF fields")
-    st.write(f"  🤖 Mapping using AI...")
+    st.write(f"  📋 Comparing {len(fields)} BREF fields")
     
-    # Create progress placeholder for keep-alive
-    progress_placeholder = st.empty()
-    progress_placeholder.info("🔄 Mapping in progress...")
+    # Extract all available years from the extraction results
+    available_years = []
+    if rows:
+        first_row = rows[0]
+        # Debug: Show all column names
+        all_columns = list(first_row.keys())
+        st.write(f"  🔍 DEBUG: All columns in extraction: {all_columns}")
+        
+        available_years = [k for k in first_row.keys() if k not in ['label', 'parent'] and k.isdigit()]
+        available_years = sorted([int(y) for y in available_years])  # Sort ascending (2023, 2024, 2025...)
+        
+        st.write(f"  🔍 DEBUG: Years found (isdigit check): {available_years}")
+    
+    # Ensure reference year (target_year - 1) is included in available_years
+    reference_year = target_year - 1
+    if reference_year not in available_years:
+        # Check if reference year exists in the data
+        if rows and str(reference_year) in rows[0]:
+            available_years.append(reference_year)
+            available_years = sorted(available_years)  # Sort ascending
+            st.write(f"  ✅ Added reference year {reference_year} to available_years")
+        else:
+            st.write(f"  ⚠️ Reference year {reference_year} not found in extraction data")
+    
+    st.write(f"  📅 Available years: {', '.join(map(str, available_years))}")
+    st.write(f"  📅 Target year: {target_year}, Reference year: {reference_year}")
+    
+    # Initialize mapped_fields
+    mapped_fields = []
     
     # Create logger
-    with st.expander("📝 Mapping Logs", expanded=False):
+    with st.expander("📝 Mapping Logs", expanded=True):
         mapping_log_placeholder = st.empty()
         mapping_logger = BREFLiveLogger(mapping_log_placeholder)
         
         import contextlib
         
-        def _run_mapping():
-            with contextlib.redirect_stdout(mapping_logger):
-                return map_all_fields(
-                    fields=fields,
-                    extracted_rows=rows,
-                    company_name=company_name,
-                    target_year=target_year,
-                    provider=provider,
-                    model=model_id
-                )
+        with contextlib.redirect_stdout(mapping_logger):
+            # Phase 1: Fast mapping (alias matching + calculations)
+            print("\n" + "="*60)
+            print("FAST MAPPING (Alias Matching + Calculations)")
+            print("="*60)
+            
+            matched_fields, unmatched_fields = fast_map_fields(
+                fields=fields,
+                extraction_rows=rows,
+                available_years=available_years,
+                field_mappings=bref_field_dict
+            )
+            
+            # Phase 2: LLM mapping for unmatched fields only
+            if unmatched_fields:
+                print("\n" + "="*60)
+                print(f"LLM MAPPING ({len(unmatched_fields)} unmatched fields)")
+                print("="*60)
+                
+                # Try with Gemma first, fallback to GPT-5.5 if it fails
+                try:
+                    llm_mapped_fields = map_all_fields(
+                        fields=unmatched_fields,
+                        extracted_rows=rows,
+                        company_name=company_name,
+                        target_year=target_year,
+                        provider=provider,
+                        model=model_id
+                    )
+                except Exception as e:
+                    print(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}")
+                    print("🔄 Falling back to GPT-5.5...\n")
+                    
+                    from src.extraction.model_config import get_fallback_model
+                    fallback_provider, fallback_model = get_fallback_model()
+                    
+                    llm_mapped_fields = map_all_fields(
+                        fields=unmatched_fields,
+                        extracted_rows=rows,
+                        company_name=company_name,
+                        target_year=target_year,
+                        provider=fallback_provider,
+                        model=fallback_model
+                    )
+                
+                # Combine results
+                mapped_fields.extend(llm_mapped_fields)
+            
+            print("\n" + "="*60)
+            print("MAPPING COMPLETE")
+            print("="*60)
+    
+    # mapped_fields is now defined and available outside the context manager
+    
+    # ==================================================================
+    # CALCULATED FIELDS - Add derived fields based on formulas
+    # ==================================================================
+    from src.mapping.bref_calculated import (
+        calculate_all_fields,
+        create_ordered_output,
+        get_calculated_fields
+    )
+    
+    print("\n" + "="*60)
+    print("CALCULATING DERIVED FIELDS")
+    print("="*60)
+    
+    # Convert mapped_fields list to dict for calculation
+    mapped_dict = {}
+    for field in mapped_fields:
+        label = field.get("label")
+        target_value = field.get("target_value")
+        if label and target_value is not None:
+            mapped_dict[label] = target_value
+    
+    # Calculate all derived fields
+    mapped_with_calculated = calculate_all_fields(
+        mapped_values=mapped_dict,
+        statement_type=statement_type,
+        region=region
+    )
+    
+    # Create ordered output (all fields in NEXTERA order)
+    final_ordered = create_ordered_output(
+        mapped_values=mapped_with_calculated,
+        statement_type=statement_type,
+        region=region
+    )
+    
+    # Convert back to list format for storage
+    # Merge calculated fields back into mapped_fields
+    calculated_fields_dict = get_calculated_fields(statement_type, region)
+    
+    for field_key, value in final_ordered.items():
+        # Check if this is a calculated field (starts with *)
+        is_calc_field = field_key.startswith("*")
+        clean_key = field_key.lstrip("*")
         
-        mapped_fields = run_with_heartbeat(_run_mapping, progress_placeholder)
-        progress_placeholder.success("✅ Mapping completed")
+        # Find if field already exists in mapped_fields
+        existing_field = next((f for f in mapped_fields if f.get("label") == clean_key), None)
+        
+        # Check for validation flags
+        validation_status = mapped_with_calculated.get(clean_key + "_validation")
+        calculated_alt_value = mapped_with_calculated.get(clean_key + "_calculated")
+        diff_percent = mapped_with_calculated.get(clean_key + "_diff_percent")
+        
+        if is_calc_field and value != "":
+            # This is a calculated field with a value
+            if existing_field:
+                # Field was both extracted AND calculated
+                # Update with validation info
+                existing_field["target_value"] = value
+                existing_field["is_calculated"] = True
+                
+                if validation_status == "VALIDATED":
+                    # Extracted and calculated values match
+                    existing_field["mapping_method"] = "extracted+validated"
+                    existing_field["mapping_confidence"] = "high"
+                    existing_field["reason"] = f"Extracted value validated by calculation (formula: {calculated_fields_dict.get(clean_key, {}).get('calculation', 'N/A')})"
+                elif validation_status == "MISMATCH":
+                    # Extracted and calculated values don't match - flag for review
+                    existing_field["mapping_method"] = "extracted+mismatch"
+                    existing_field["mapping_confidence"] = "low"
+                    existing_field["reason"] = f"⚠️ MISMATCH: Extracted={value}, Calculated={calculated_alt_value} (diff: {diff_percent:.1f}%). Please review!"
+                    existing_field["calculated_value"] = calculated_alt_value
+                    existing_field["diff_percent"] = diff_percent
+                elif validation_status == "EXTRACTED_ONLY":
+                    # Could not calculate for validation
+                    existing_field["mapping_method"] = existing_field.get("mapping_method", "extracted")
+                    existing_field["reason"] = existing_field.get("reason", "") + " (Could not validate via calculation)"
+            else:
+                # Add new calculated field (not extracted)
+                confidence = "high" if validation_status == "CALCULATED_ONLY" else "medium"
+                mapped_fields.append({
+                    "label": clean_key,
+                    "target_value": value,
+                    "mapping_method": "calculation",
+                    "mapping_confidence": confidence,
+                    "matched_label": "(Calculated)",
+                    "reason": f"Calculated using formula: {calculated_fields_dict.get(clean_key, {}).get('calculation', 'N/A')}",
+                    "is_calculated": True
+                })
+        elif not is_calc_field and value == "" and not existing_field:
+            # This is an unmapped field - add it as blank
+            mapped_fields.append({
+                "label": clean_key,
+                "target_value": None,
+                "mapping_method": "unmapped",
+                "mapping_confidence": "low",
+                "matched_label": "—",
+                "reason": "Not found in annual report",
+                "is_calculated": False
+            })
+    
+    print(f"\n✅ Final output: {len(final_ordered)} fields (including calculated and unmapped)")
+    print("="*60)
+    
+    # ==================================================================
+    # REORDER FIELDS - Sort according to template order
+    # ==================================================================
+    # Create a mapping of field labels to their order in the template
+    field_order = {label: idx for idx, label in enumerate(bref_field_dict.keys())}
+    
+    # Sort mapped_fields according to template order
+    def get_field_order(field):
+        label = field.get("label")
+        return field_order.get(label, 999999)  # Put unknown fields at the end
+    
+    mapped_fields.sort(key=get_field_order)
+    print(f"\n✅ Sorted {len(mapped_fields)} fields according to template order")
     
     # Add metadata
     for field in mapped_fields:
@@ -477,11 +747,25 @@ def _map_single_statement_raw(
         field["final_confidence"] = field.get("mapping_confidence", "low")
         field["validation_status"] = "unverified"
     
+    # Count by mapping method
+    alias_matched = sum(1 for f in mapped_fields if f.get('mapping_method') == 'alias_match')
+    calculated = sum(1 for f in mapped_fields if f.get('mapping_method') == 'calculation')
+    llm_mapped = sum(1 for f in mapped_fields if f.get('mapping_method') not in ['alias_match', 'calculation', 'unmapped'])
+    
     high_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'high')
     low_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'low')
-    st.write(f"  ✅ {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
     
-    # Store results
+    st.write(f"  ✅ {len(mapped_fields)} fields mapped:")
+    st.write(f"     🎯 {alias_matched} via alias matching (instant)")
+    st.write(f"     🧠 {calculated} via calculations (instant)")
+    st.write(f"     🤖 {llm_mapped} via LLM (slow)")
+    st.write(f"     ✅ {high_conf} high confidence, ⚠️ {low_conf} low confidence")
+    
+    # Note: available_years already includes reference year from earlier in the function
+    # Don't re-extract it here as it would overwrite the corrected list
+    st.write(f"  📅 Storing results with {len(available_years)} years: {', '.join(map(str, available_years))}")
+    
+    # Store results with all years (including reference year)
     mapping_key = f"{key_prefix}_mapping_{statement_type}"
     st.session_state.bref_mapping_results[mapping_key] = {
         "fields": mapped_fields,
@@ -490,6 +774,8 @@ def _map_single_statement_raw(
         "statement_type": statement_type,
         "company_name": company_name,
         "region": region,
+        "available_years": available_years,
+        "extraction_rows": rows,  # Store original rows for multi-year display
     }
 
 
@@ -546,12 +832,8 @@ def _map_single_statement_validated(
             raise ValueError(f"No BREF fields loaded from template for {statement_type}")
         
         ref_count = sum(1 for f in fields if f['reference_value'] is not None)
-        st.write(f"  📋 Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
+        st.write(f"  📋 Comparing {len(fields)} BREF fields ({ref_count} with reference values)")
         st.write(f"  🤖 Mapping using AI...")
-        
-        # Create progress placeholder
-        progress_placeholder = st.empty()
-        progress_placeholder.info("🔄 Mapping in progress...")
         
         # Map fields
         with st.expander("📝 Mapping Logs", expanded=False):
@@ -560,9 +842,10 @@ def _map_single_statement_validated(
             
             import contextlib
             
-            def _run_mapping():
-                with contextlib.redirect_stdout(mapping_logger):
-                    return map_all_fields(
+            with contextlib.redirect_stdout(mapping_logger):
+                # Try with Gemma first, fallback to GPT-5.5 if it fails
+                try:
+                    mapped_fields = map_all_fields(
                         fields=fields,
                         extracted_rows=rows,
                         company_name=company_name,
@@ -570,9 +853,21 @@ def _map_single_statement_validated(
                         provider=provider,
                         model=model_id
                     )
-            
-            mapped_fields = run_with_heartbeat(_run_mapping, progress_placeholder)
-            progress_placeholder.success("✅ Mapping completed")
+                except Exception as e:
+                    print(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}")
+                    print("🔄 Falling back to GPT-5.5...\n")
+                    
+                    from src.extraction.model_config import get_fallback_model
+                    fallback_provider, fallback_model = get_fallback_model()
+                    
+                    mapped_fields = map_all_fields(
+                        fields=fields,
+                        extracted_rows=rows,
+                        company_name=company_name,
+                        target_year=target_year,
+                        provider=fallback_provider,
+                        model=fallback_model
+                    )
         
         st.write(f"  ✓ Validating mappings...")
         
@@ -616,6 +911,85 @@ def _map_single_statement_validated(
             os.unlink(tmp_path)
 
 
+def _render_combined_download(mapping_keys: list, statement_types: list, key_prefix: str, target_year: int, company_name: str):
+    """Render combined download button for all mapped statements."""
+    
+    # Create combined Excel with all statements
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for mapping_key, statement_type in zip(mapping_keys, statement_types):
+            if mapping_key in st.session_state.bref_mapping_results:
+                mapping_results = st.session_state.bref_mapping_results[mapping_key]
+                fields = mapping_results["fields"]
+                mode = mapping_results["mode"]
+                available_years = mapping_results.get("available_years", [target_year])
+                
+                # Build dataframe
+                reference_year = target_year - 1
+                
+                df_data = []
+                for field in fields:
+                    # Build row_data in Excel column order: BREF Field, Years (2023, 2024...), Annual Report Label, Confidence, Reason
+                    row_data = {
+                        "BREF Field": field.get("label"),
+                    }
+                    
+                    # Add reference year first
+                    ref_value = field.get("reference_value")
+                    if ref_value is None:
+                        # Try extracted_reference_value (used by LLM mapper)
+                        ref_value = field.get("extracted_reference_value")
+                    if ref_value is None and "year_values" in field:
+                        ref_value = field["year_values"].get(str(reference_year))
+                    row_data[str(reference_year)] = ref_value
+                    
+                    # Add all available years in ascending order
+                    for year in available_years:
+                        year_str = str(year)
+                        year_value = None
+                        
+                        # Try year_values first
+                        if "year_values" in field and year_str in field["year_values"]:
+                            year_value = field["year_values"][year_str]
+                        
+                        # Fallback to target_value for target year
+                        if year_value is None and year == target_year:
+                            year_value = field.get("target_value")
+                        
+                        row_data[year_str] = year_value
+                    
+                    # Add Annual Report Label, Confidence, and Reason AFTER years
+                    row_data["Annual Report Label"] = field.get("matched_label", "—")
+                    row_data["Confidence"] = field.get("final_confidence", field.get("mapping_confidence", ""))
+                    row_data["Reason"] = field.get("reason", "")
+                    df_data.append(row_data)
+                
+                df = pd.DataFrame(df_data)
+                
+                # Use statement label as sheet name (truncate to 31 chars for Excel limit)
+                sheet_name = STATEMENT_LABELS.get(statement_type, statement_type)[:31]
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    output.seek(0)
+    
+    # Display download button
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.download_button(
+            "📥 Download All Statements (Excel)",
+            data=output.getvalue(),
+            file_name=f"BREF_Mapping_{company_name.replace(' ', '_')}_{target_year}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+            key=f"{key_prefix}_multi_download_all"
+        )
+    
+    # Show summary
+    st.info(f"✅ Ready to download {len(statement_types)} statement(s): {', '.join([STATEMENT_LABELS.get(s, s) for s in statement_types])}")
+
+
 def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_prefix: str):
     """Display mapping results for a single statement in a tab."""
     
@@ -627,6 +1001,8 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
     fields = mapping_results["fields"]
     mode = mapping_results["mode"]
     target_year = mapping_results.get("target_year", datetime.now().year)
+    available_years = mapping_results.get("available_years", [target_year])
+    extraction_rows = mapping_results.get("extraction_rows", [])
     
     # Metrics
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -637,26 +1013,109 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
     col2.metric("High Confidence", high_conf)
     col3.metric("Low Confidence", low_conf)
     col4.metric("Mode", mode.upper())
-    col5.metric("Year", target_year)
+    col5.metric("Years", f"{len(available_years)} years" if available_years else str(target_year))
     
     if low_conf > 0:
         st.warning(f"⚠️ {low_conf} field(s) have low confidence — edit values directly in the table below")
     
     st.markdown("---")
     
-    # Build dataframe
+    # Build dataframe with all available years
     reference_year = target_year - 1
-    value_col = f"{target_year} (Extracted)"
+    
+    # Create a lookup dict for extraction rows by label
+    extraction_lookup = {}
+    if extraction_rows:
+        for row in extraction_rows:
+            label = row.get('label', '')
+            if label:
+                extraction_lookup[label.lower().strip()] = row
+    
+    # Get field mappings to access indent_level
+    from src.mapping.field_mappings import get_field_mappings
+    field_mappings_dict = get_field_mappings(mapping_results.get("region", "US"))
+    statement_fields = field_mappings_dict.get(statement_type, {})
     
     df_data = []
     for field in fields:
+        # Mark calculated fields with * prefix
+        field_label = field.get("label")
+        
+        # Get indent level from field mappings, or infer from field name
+        field_def = statement_fields.get(field_label, {})
+        indent_level = field_def.get("indent_level")
+        
+        # If indent_level not defined, infer from field name
+        if indent_level is None:
+            # Fields starting with "o/w" are indented (child fields)
+            if "o/w" in field_label.lower():
+                indent_level = 1
+            else:
+                indent_level = 0
+        
+        # Add indentation using non-breaking spaces (Streamlit strips regular spaces)
+        # Use Unicode non-breaking space (\u00A0) which Streamlit preserves
+        indent_prefix = "\u00A0\u00A0\u00A0\u00A0" * indent_level
+        
+        # Apply indentation FIRST (before any prefixes)
+        field_label = indent_prefix + field_label
+        
+        # Then add calculated field marker
+        if field.get("is_calculated", False):
+            field_label = "*" + field_label
+        
+        # Add warning emoji for mismatched fields
+        mapping_method = field.get("mapping_method", "")
+        if "mismatch" in mapping_method.lower():
+            field_label = "⚠️ " + field_label
+        
+        # Build row_data in Excel column order: BREF Field, Years (2023, 2024...), Annual Report Label, Confidence, Reason
         row_data = {
-            "Field": field.get("label"),
-            "Matched Label": field.get("matched_label", "—"),
+            "BREF Field": field_label,
         }
-        if mode == "validated":
-            row_data[f"{reference_year} (Reference)"] = field.get("reference_value")
-        row_data[value_col] = field.get("target_value")
+        
+        # Add reference year first
+        ref_year_str = str(reference_year)
+        ref_value = None
+        
+        # Try reference_value first (used by fast_mapper)
+        ref_value = field.get("reference_value")
+        
+        # Try extracted_reference_value (used by LLM mapper)
+        if ref_value is None:
+            ref_value = field.get("extracted_reference_value")
+        
+        # Try year_values
+        if ref_value is None and "year_values" in field and field["year_values"]:
+            ref_value = field["year_values"].get(ref_year_str)
+        
+        row_data[ref_year_str] = ref_value
+        
+        # Add all other years in ascending order
+        for year in available_years:
+            year_str = str(year)
+            year_value = None
+            
+            # PRIORITY 1: Use year_values from field
+            if "year_values" in field and field["year_values"]:
+                year_value = field["year_values"].get(year_str)
+            
+            # PRIORITY 2: Use target_value for target year
+            if year_value is None and year == target_year:
+                year_value = field.get("target_value")
+            
+            # PRIORITY 3: Fallback to extraction rows
+            if year_value is None:
+                matched_label = field.get("matched_label", "")
+                if matched_label and extraction_lookup:
+                    extraction_row = extraction_lookup.get(matched_label.lower().strip())
+                    if extraction_row and year_str in extraction_row:
+                        year_value = extraction_row[year_str]
+            
+            row_data[year_str] = year_value
+        
+        # Add Annual Report Label, Confidence, and Reason AFTER years
+        row_data["Annual Report Label"] = field.get("matched_label", "—")
         row_data["Confidence"] = field.get("final_confidence", field.get("mapping_confidence", ""))
         row_data["Reason"] = field.get("reason", "")
         df_data.append(row_data)
@@ -665,16 +1124,34 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
     
     # Data editor
     column_config = {
-        "Field": st.column_config.TextColumn("Field", disabled=True),
-        "Matched Label": st.column_config.TextColumn("Matched Label", help="Edit to correct the matched label"),
-        value_col: st.column_config.NumberColumn(value_col, help="Edit to correct the extracted value", format="%.2f"),
-        "Confidence": st.column_config.SelectboxColumn("Confidence", options=["high", "low"], help="Set confidence level"),
-        "Reason": st.column_config.TextColumn("Reason", disabled=True),
+        "BREF Field": st.column_config.TextColumn("BREF Field", disabled=True, width="large"),
+        "Annual Report Label": st.column_config.TextColumn("Annual Report Label", help="Edit to correct the matched label", width="large"),
     }
-    if mode == "validated":
-        column_config[f"{reference_year} (Reference)"] = st.column_config.NumberColumn(
-            f"{reference_year} (Reference)", disabled=True, format="%.2f"
+    
+    # Add reference year column (always show it, for both raw and validated modes)
+    ref_year_col = str(reference_year)
+    if ref_year_col in df.columns:
+        column_config[ref_year_col] = st.column_config.NumberColumn(
+            ref_year_col, 
+            help=f"Reference year value ({reference_year})",
+            format="%.2f"
         )
+    
+    # Add all year columns (excluding reference year as it's already added)
+    for year in available_years:
+        year_col = str(year)
+        if year_col in df.columns and year != reference_year:
+            column_config[year_col] = st.column_config.NumberColumn(
+                year_col, 
+                help=f"Value for year {year}",
+                format="%.2f"
+            )
+    
+    # Add confidence and reason columns
+    column_config["Confidence"] = st.column_config.SelectboxColumn(
+        "Confidence", options=["high", "low"], help="Set confidence level"
+    )
+    column_config["Reason"] = st.column_config.TextColumn("Reason", disabled=True)
     
     edited_df = st.data_editor(
         df,
@@ -685,52 +1162,128 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
         key=f"{key_prefix}_multi_editor_{statement_type}",
     )
     
-    # Action buttons
-    col_save, col_json, col_excel, col_clear = st.columns([1, 1, 1, 1])
+    # Action buttons - Save and Clear only (download is at the top for all statements)
+    col_save, col_clear = st.columns([1, 1])
     
     with col_save:
         if st.button("💾 Save Changes", key=f"{key_prefix}_multi_save_{statement_type}", use_container_width=True, type="primary"):
+            # Import recalculation functions
+            from src.mapping.bref_calculated import recalculate_dependent_fields
+            
+            # Track which fields were updated
+            updated_fields = {}
+            
             for i, row in edited_df.iterrows():
-                fields[i]["matched_label"] = row.get("Matched Label", fields[i].get("matched_label"))
-                new_val = row.get(value_col)
-                if new_val is not None and str(new_val).strip() != "":
-                    try:
-                        fields[i]["target_value"] = float(new_val)
-                    except (ValueError, TypeError):
-                        pass
+                fields[i]["matched_label"] = row.get("Annual Report Label", fields[i].get("matched_label"))
+                
+                # Save reference year value (to both reference_value and extracted_reference_value)
+                ref_year_str = str(reference_year)
+                if ref_year_str in row:
+                    ref_val = row.get(ref_year_str)
+                    if ref_val is not None and str(ref_val).strip() != "":
+                        try:
+                            ref_val_float = float(ref_val)
+                            fields[i]["reference_value"] = ref_val_float
+                            fields[i]["extracted_reference_value"] = ref_val_float  # Also save to LLM mapper field
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Save target year value and track changes
+                target_year_str = str(target_year)
+                if target_year_str in row:
+                    new_val = row.get(target_year_str)
+                    if new_val is not None and str(new_val).strip() != "":
+                        try:
+                            new_val_float = float(new_val)
+                            old_val = fields[i].get("target_value")
+                            
+                            # Check if value changed
+                            if old_val != new_val_float:
+                                fields[i]["target_value"] = new_val_float
+                                field_label = fields[i].get("label")
+                                updated_fields[field_label] = new_val_float
+                        except (ValueError, TypeError):
+                            pass
+                    elif new_val is None or str(new_val).strip() == "":
+                        # Value was cleared - also track this as an update
+                        old_val = fields[i].get("target_value")
+                        if old_val is not None:
+                            fields[i]["target_value"] = None
+                            field_label = fields[i].get("label")
+                            updated_fields[field_label] = None
+                
+                # Save all year values to a separate dict (including reference year)
+                if "year_values" not in fields[i]:
+                    fields[i]["year_values"] = {}
+                
+                # Save reference year to year_values
+                if ref_year_str in row:
+                    ref_val = row.get(ref_year_str)
+                    if ref_val is not None and str(ref_val).strip() != "":
+                        try:
+                            fields[i]["year_values"][ref_year_str] = float(ref_val)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Save all other year values
+                for year in available_years:
+                    year_str = str(year)
+                    if year_str in row:
+                        year_val = row.get(year_str)
+                        if year_val is not None and str(year_val).strip() != "":
+                            try:
+                                fields[i]["year_values"][year_str] = float(year_val)
+                            except (ValueError, TypeError):
+                                pass
+                
                 new_conf = row.get("Confidence", "")
                 if new_conf in ("high", "low"):
                     fields[i]["final_confidence"] = new_conf
                     fields[i]["mapping_confidence"] = new_conf
                     if new_conf == "high" and fields[i].get("validation_status") != "validated":
                         fields[i]["validation_status"] = "human_verified"
+            
+            # Recalculate dependent fields if any values were updated
+            if updated_fields:
+                st.info(f"🔄 Recalculating {len(updated_fields)} updated field(s)...")
+                
+                # Build current values dict
+                current_values = {}
+                for field in fields:
+                    label = field.get("label")
+                    value = field.get("target_value")
+                    if label and value is not None:
+                        current_values[label] = value
+                
+                # Recalculate for each updated field
+                all_recalculated = {}
+                for field_label, new_value in updated_fields.items():
+                    recalculated = recalculate_dependent_fields(
+                        updated_field=field_label,
+                        updated_value=new_value,
+                        current_values=current_values,
+                        statement_type=statement_type,
+                        region=mapping_results.get("region", "US")
+                    )
+                    all_recalculated.update(recalculated)
+                    # Update current_values for cascading calculations
+                    current_values.update(recalculated)
+                
+                # Update fields with recalculated values
+                if all_recalculated:
+                    for field in fields:
+                        field_label = field.get("label")
+                        if field_label in all_recalculated:
+                            field["target_value"] = all_recalculated[field_label]
+                            field["mapping_confidence"] = "high"
+                            field["final_confidence"] = "high"
+                            field["reason"] = f"Recalculated due to dependency update"
+                    
+                    st.success(f"♻️ Recalculated {len(all_recalculated)} dependent field(s): {', '.join([k.split(' |')[0] for k in all_recalculated.keys()])}")
+            
             st.session_state.bref_mapping_results[mapping_key]["fields"] = fields
             st.toast("✅ Changes saved")
-    
-    with col_json:
-        st.download_button(
-            "📄 Download JSON",
-            data=pd.DataFrame(fields).to_json(orient="records", indent=2),
-            file_name=f"bref_{statement_type}_{target_year}.json",
-            mime="application/json",
-            use_container_width=True,
-            key=f"{key_prefix}_multi_json_{statement_type}"
-        )
-    
-    with col_excel:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name="BREF Mapping", index=False)
-        output.seek(0)
-        
-        st.download_button(
-            "📊 Download Excel",
-            data=output.getvalue(),
-            file_name=f"BREF_{statement_type}_{target_year}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key=f"{key_prefix}_multi_excel_{statement_type}"
-        )
+            st.rerun()  # Refresh to show recalculated values
     
     with col_clear:
         if st.button("🗑️ Clear", key=f"{key_prefix}_multi_clear_{statement_type}", use_container_width=True):
