@@ -21,7 +21,7 @@ from src.components.brefmap_ui import (
     render_pdf_panel,
     create_pdf_excel,
 )
-from src.extraction.model_config import render_model_selector
+from src.extraction.model_config import get_extraction_model, get_fallback_model
 
 # ==============================================================================
 # PDF EXTRACTION AVAILABILITY
@@ -304,6 +304,71 @@ def _build_edgar_excel(parsed_data: dict, ticker: str, year: int) -> bytes:
     return out.read()
 
 
+def _convert_edgar_to_extraction_format(financials: dict, company_name: str, target_year: int) -> dict:
+    """
+    Convert EDGAR financial data format to extraction results format for BREF mapping.
+    
+    EDGAR format:
+    {
+        "balance_sheet": [{"label": "...", "concept": "...", "2024": 123, "2023": 456}, ...],
+        "income_statement": [...],
+        "cash_flow_statement": [...]
+    }
+    
+    Extraction format:
+    {
+        "balance_sheet": {
+            "rows": [{"label": "...", "2024": 123, "2023": 456}, ...],
+            "company": "...",
+            "target_year": 2024,
+            "statement": "balance_sheet"
+        },
+        ...
+    }
+    """
+    extraction_results = {}
+    
+    # Map EDGAR statement names to extraction format
+    statement_mapping = {
+        "balance_sheet": "balance_sheet",
+        "income_statement": "income_statement",
+        "cash_flow_statement": "cash_flow"
+    }
+    
+    for edgar_name, extraction_name in statement_mapping.items():
+        records = financials.get(edgar_name, [])
+        if not records:
+            continue
+        
+        # Convert records to extraction format
+        rows = []
+        for record in records:
+            # Create a row with label and year columns
+            row = {"label": record.get("label", "")}
+            
+            # Add all year columns (skip non-year fields)
+            for key, value in record.items():
+                if key not in ["label", "concept", "standard_concept", "level", "parent_concept", "index"]:
+                    # This is likely a year column
+                    row[key] = value
+            
+            rows.append(row)
+        
+        # Create extraction result structure
+        extraction_results[extraction_name] = {
+            "rows": rows,
+            "company": company_name,
+            "target_year": target_year,
+            "statement": extraction_name,
+            "total_rows": len(rows),
+            "page": "N/A (EDGAR API)",
+            "page_num": 0,
+            "extraction_method": "edgar_api"
+        }
+    
+    return extraction_results
+
+
 # ==============================================================================
 # MAIN RENDER FUNCTION
 # ==============================================================================
@@ -446,6 +511,18 @@ def render_sec_edgar_section(company):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="sec_dl_excel",
                 )
+        
+        # ==================================================================
+        # BREF MAPPING - For EDGAR Fetched Data
+        # ==================================================================
+        st.markdown("---")
+        
+        # Convert EDGAR data format to extraction results format for BREF mapping
+        edgar_extraction_results = _convert_edgar_to_extraction_format(fin, res_company, res_year)
+        
+        if edgar_extraction_results:
+            from src.components.brefmap_multi_ui import render_multi_statement_mapping
+            render_multi_statement_mapping(edgar_extraction_results, key_prefix="edgar")
 
             # ==================================================================
     # PDF UPLOAD + EXTRACTION + BREF MAPPING (DISABLED FOR AMER REGION)
@@ -482,11 +559,10 @@ def render_sec_edgar_section(company):
                 (["cash_flow"] if sec_extract_cashflow else [])
             )
             
-            # Model selection for SEC upload
-            st.markdown("**Select AI Model:**")
-            sec_provider, sec_model_id = render_model_selector(key_prefix="sec_upload")
+            # Use Gemma by default (no UI selection)
+                sec_provider, sec_model_id = get_extraction_model()
 
-            extract_disabled = not sec_selected_types
+                sec_extract_disabled = not sec_selected_types
 
             with st.expander("Specify pages manually (if automatic detection fails)"):
                 st.warning("**IMPORTANT**: Enter the **PDF viewer page number** (what your PDF reader shows), NOT the document page number printed on the page!")
@@ -598,7 +674,7 @@ def render_sec_edgar_section(company):
                         
                         for _stype in _auto_types:
                             statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                            with st.expander(f"Extraction Log -- {statement_label}", expanded=True):
+                            with st.expander(f"📝 Extraction Log — {statement_label}", expanded=False):
                                 st.text(_par["logs"].get(_stype, ""))
                             if _stype in _par["errors"]:
                                 st.warning(f"Extraction failed for **{statement_label}**")
@@ -612,7 +688,7 @@ def render_sec_edgar_section(company):
                     for _stype in _manual_types:
                         _stype_result = None
                         statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                        with st.expander(f"Extraction Log -- {statement_label}", expanded=True):
+                        with st.expander(f"📝 Extraction Log — {statement_label}", expanded=False):
                             _log_placeholder = st.empty()
                             _token_placeholder = st.empty()
                             _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
