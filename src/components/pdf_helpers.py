@@ -555,7 +555,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                     st.warning(f"No BREF field mappings defined for {statement_type}")
                 else:
                     try:
-                        with st.status("🔄 Running raw mapping...", expanded=True) as status:
+                        with st.status("🔄 Running New Client Mapping...", expanded=True) as status:
                             st.write("📋 Loading BREF field definitions...")
                             fields = [
                                 {
@@ -565,7 +565,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                 }
                                 for label, aliases in bref_field_dict.items()
                             ]
-                            st.write(f"✅ Loaded {len(fields)} BREF fields")
+                            st.write(f"✅ Compared {len(fields)} BREF fields")
                             st.info(f"📊 Extracted {len(rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
 
                             st.write("🤖 Mapping fields using AI...")
@@ -611,7 +611,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                             st.code(traceback.format_exc(), language="python")
 
         with col2:
-            st.markdown("### ✅ Mapping with Validation")
+            st.markdown("### ✅ Existing Client Mapping")
             st.markdown("""
             - Requires Excel template
             - Validates against reference year
