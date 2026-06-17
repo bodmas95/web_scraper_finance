@@ -1292,3 +1292,144 @@ def render_xbrl_section(company, lei):
                         st.warning(f"Could not build XBRL facts Excel: {_exc}")
                 else:
                     st.info("No raw XBRL facts available — parse filings first.")
+
+    # ------------------------------------------------------------------
+    # Block 5 — BREF Mapping Section
+    # ------------------------------------------------------------------
+    if (st.session_state.get("company_type") == "XBRL"
+            and st.session_state.get("consolidated_data")):
+        
+        # Import BREF mapping UI
+        try:
+            from src.components.brefmap_multi_ui import render_multi_statement_mapping
+            BREF_MAPPING_AVAILABLE = True
+        except ImportError:
+            BREF_MAPPING_AVAILABLE = False
+        
+        if BREF_MAPPING_AVAILABLE:
+            st.markdown("---")
+            
+            # Convert consolidated XBRL data to extraction results format
+            # The consolidated_data has structure: {statement_type: DataFrame}
+            # We need to convert to: {statement_type: {"rows": [...], "target_year": ..., "company": ...}}
+            
+            consolidated_data = st.session_state.consolidated_data
+            
+            # Determine target year from column names (get the most recent year)
+            all_year_cols = []
+            for stmt_type, df in consolidated_data.items():
+                if df is not None and not df.empty:
+                    # Get year columns (exclude label and concept columns)
+                    year_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                    all_year_cols.extend(year_cols)
+            
+            # Extract years from column names
+            # For balance sheet: columns are dates like "31-Dec-2024"
+            # For income/cash flow: columns are like "FY2024"
+            years = []
+            for col in all_year_cols:
+                if col.startswith("FY"):
+                    try:
+                        years.append(int(col.replace("FY", "")))
+                    except ValueError:
+                        pass
+                elif "-" in col:  # Date format like "31-Dec-2024"
+                    try:
+                        year = int(col.split("-")[-1])
+                        years.append(year)
+                    except (ValueError, IndexError):
+                        pass
+            
+            target_year = max(years) if years else datetime.now().year
+            company_name = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else ""
+            
+            # Map XBRL statement types to BREF statement types
+            xbrl_to_bref_map = {
+                "Income Statement": "income_statement",
+                "Assets": "balance_sheet",  # Assets part of balance sheet
+                "Liabilities": "balance_sheet",  # Liabilities part of balance sheet
+                "Cash Flow": "cash_flow",
+            }
+            
+                        # XBRL companies are European (EMEA), so use EMEA region
+            # EMEA uses the same field codes as APAC (Q-prefix codes)
+            # Set session state so brefmap_multi_ui can read it
+            st.session_state.selected_region = "EMEA"
+            
+            # Convert consolidated data to extraction results format
+            extraction_results = {}
+            
+            for stmt_type, df in consolidated_data.items():
+                if df is None or df.empty:
+                    continue
+                
+                bref_stmt_type = xbrl_to_bref_map.get(stmt_type)
+                if not bref_stmt_type:
+                    continue
+                
+                # For balance sheet, we need to combine Assets and Liabilities
+                if bref_stmt_type == "balance_sheet":
+                    if bref_stmt_type not in extraction_results:
+                        extraction_results[bref_stmt_type] = {
+                            "rows": [],
+                            "target_year": target_year,
+                            "company": company_name,
+                        }
+                else:
+                    extraction_results[bref_stmt_type] = {
+                        "rows": [],
+                        "target_year": target_year,
+                        "company": company_name,
+                    }
+                
+                # Convert DataFrame rows to extraction format
+                # Each row should have: {"label": ..., "2024": ..., "2023": ..., etc.}
+                for _, row in df.iterrows():
+                    # Use English Label as the primary label
+                    label = row.get("English Label", row.get("French Label", ""))
+                    if not label:
+                        continue
+                    
+                    row_dict = {"label": label}
+                    
+                    # Add all year columns
+                    for col in df.columns:
+                        if col in ("French Label", "English Label", "Concept"):
+                            continue
+                        
+                        # Extract year from column name
+                        year_str = None
+                        if col.startswith("FY"):
+                            year_str = col.replace("FY", "")
+                        elif "-" in col:  # Date format
+                            try:
+                                year_str = col.split("-")[-1]
+                            except IndexError:
+                                continue
+                        
+                        if year_str:
+                            # Convert value to numeric if possible
+                            value = row.get(col, "")
+                            if value and value != "":
+                                # Remove commas and convert to float
+                                try:
+                                    if isinstance(value, str):
+                                        value = value.replace(",", "")
+                                        value = float(value)
+                                except (ValueError, AttributeError):
+                                    pass
+                            row_dict[year_str] = value
+                    
+                    extraction_results[bref_stmt_type]["rows"].append(row_dict)
+            
+            # Render BREF mapping UI
+            if extraction_results:
+                render_multi_statement_mapping(
+                    extraction_results=extraction_results,
+                    key_prefix="xbrl"
+                )
+            else:
+                st.info("No data available for BREF mapping. Please consolidate financial statements first.")
+        else:
+            st.markdown("---")
+            st.warning("BREF mapping module not available. Please ensure all dependencies are installed.")
