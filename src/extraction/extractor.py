@@ -170,7 +170,42 @@ def extract_table(
     print(raw_response)
     print("="*80 + "\n")
     
-    result       = json.loads(raw_response)
+    # Try to parse JSON with error handling
+    try:
+        result = json.loads(raw_response)
+    except json.JSONDecodeError as e:
+        print(f"\n⚠️ JSON parsing error at line {e.lineno}, column {e.colno}: {e.msg}")
+        print(f"Error position (char {e.pos}): ...{raw_response[max(0, e.pos-50):e.pos+50]}...")
+        
+        # Try to repair common JSON issues
+        print("\nAttempting to repair JSON...")
+        repaired = raw_response
+        
+        # Fix common issues:
+        # 1. Remove trailing commas before closing braces/brackets
+        import re
+        repaired = re.sub(r',\s*}', '}', repaired)
+        repaired = re.sub(r',\s*]', ']', repaired)
+        
+        # 2. Fix unescaped quotes in strings (basic attempt)
+        # This is tricky - we'll try to escape quotes that appear to be in the middle of values
+        
+        # 3. Try parsing again
+        try:
+            result = json.loads(repaired)
+            print("✅ JSON repaired successfully!")
+        except json.JSONDecodeError as e2:
+            print(f"❌ JSON repair failed. Error: {e2}")
+            print("\nReturning empty result. Please check the LLM response above.")
+            return {
+                "rows": [],
+                "year_headers": [],
+                "year_currencies": {},
+                "unit_scale": None,
+                "year_end_date": None,
+                "total_rows": 0,
+                "error": f"JSON parsing failed: {str(e)}"
+            }
     year_headers = result.get("year_headers", [])
     # Fix: Handle None values in label field
     rows         = [r for r in result.get("rows", []) if r.get("label") and str(r.get("label", "")).strip()]
@@ -238,7 +273,39 @@ def extract_table_from_image(image_bytes: bytes, provider: str = None, model: st
     print(raw_response)
     print("="*80 + "\n")
     
-    result        = json.loads(raw_response)
+    # Try to parse JSON with error handling
+    try:
+        result = json.loads(raw_response)
+    except json.JSONDecodeError as e:
+        print(f"\n⚠️ JSON parsing error at line {e.lineno}, column {e.colno}: {e.msg}")
+        print(f"Error position (char {e.pos}): ...{raw_response[max(0, e.pos-50):e.pos+50]}...")
+        
+        # Try to repair common JSON issues
+        print("\nAttempting to repair JSON...")
+        repaired = raw_response
+        
+        # Fix common issues:
+        # 1. Remove trailing commas before closing braces/brackets
+        import re
+        repaired = re.sub(r',\s*}', '}', repaired)
+        repaired = re.sub(r',\s*]', ']', repaired)
+        
+        # 2. Try parsing again
+        try:
+            result = json.loads(repaired)
+            print("✅ JSON repaired successfully!")
+        except json.JSONDecodeError as e2:
+            print(f"❌ JSON repair failed. Error: {e2}")
+            print("\nReturning empty result. Please check the LLM response above.")
+            return {
+                "rows": [],
+                "year_headers": [],
+                "year_currencies": {},
+                "unit_scale": None,
+                "year_end_date": None,
+                "total_rows": 0,
+                "error": f"JSON parsing failed: {str(e)}"
+            }
     year_headers  = result.get("year_headers", [])
         # Fix: Handle None values in label field
     rows         = [r for r in result.get("rows", []) if r.get("label") and str(r.get("label", "")).strip()]
