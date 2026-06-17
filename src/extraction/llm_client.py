@@ -4,18 +4,13 @@ Handles both OpenAI-compatible APIs (Gemma) and Maia API
 Supports switching between providers via config.ini
 """
 
-import threading
-from openai import OpenAI, AzureOpenAI
+from openai import OpenAI
 from config.config import load_config
 import logging
 
 # Load configuration
 _cfg = load_config()
-LLM_PROVIDER = _cfg.get("LLM", "provider", fallback="openai").lower()  # openai, azure, gemma, or maia
-
-# Client cache — avoids recreating OpenAI/AzureOpenAI clients on every call
-_client_cache: dict = {}
-_client_lock = threading.Lock()
+LLM_PROVIDER = _cfg.get("LLM", "provider", fallback="openai").lower()  # openai or maia
 
 # Select model based on provider
 if LLM_PROVIDER == "maia":
@@ -27,7 +22,6 @@ else:
     LLM_MODEL = _cfg.get("LLM", "model")
     LLM_URL = _cfg.get("LLM", "url")
     LLM_API_KEY = _cfg.get("LLM", "api_key")
-    LLM_API_VERSION = _cfg.get("LLM", "api_version", fallback="")
     MAIA_CREDENTIALS = ""
 
 # Token usage accumulator — reset at the start of each extraction run
@@ -57,41 +51,25 @@ def track_usage(response) -> None:
 
 def get_client(provider: str = None, model: str = None):
     """
-    Get LLM client instance based on provider (cached, thread-safe).
-
+    Get LLM client instance based on provider.
+    
     Args:
-        provider: "maia", "azure", "openai", or "gemma" (optional, uses config if not provided)
+        provider: "maia" or "openai"/"gemma" (optional, uses config if not provided)
         model: Model ID to use (optional, uses config if not provided)
-
+    
     Returns:
-        OpenAI-compatible client (either OpenAI, AzureOpenAI, or MaiaOpenAIAdapter)
+        OpenAI-compatible client (either OpenAI or MaiaOpenAIAdapter)
+    
+    Raises:
+        ValueError: If required configuration is missing
     """
-    _provider = provider or LLM_PROVIDER
-    _model = model or LLM_MODEL
-    cache_key = (_provider, _model)
-
-    cached = _client_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    with _client_lock:
-        cached = _client_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        client = _create_client(_provider, _model)
-        _client_cache[cache_key] = client
-        logging.info("LLM client cached for provider=%s model=%s", _provider, _model)
-        return client
-
-
-def _create_client(provider: str, model: str):
-    """Create a new LLM client instance (not cached — use get_client instead)."""
     import httpx
     import os
-
-    _provider = provider
-    _model = model
-
+    
+    # Use provided values or fall back to config
+    _provider = provider or LLM_PROVIDER
+    _model = model or LLM_MODEL
+    
     # Check provider type
     if _provider == "maia":
         # Use Maia API - reload credentials dynamically in case provider was changed
@@ -175,25 +153,6 @@ def _create_client(provider: str, model: str):
             else:
                 return get_maia_client(_maia_creds, _model, proxies=None, use_proxy=True)
     
-    # Use Azure OpenAI API
-    if _provider == "azure":
-        if not LLM_API_KEY:
-            raise ValueError("LLM API key not configured in config.ini [LLM] section")
-        if not LLM_URL:
-            raise ValueError("LLM URL (Azure endpoint) not configured in config.ini [LLM] section")
-        _api_version = LLM_API_VERSION
-        if not _api_version:
-            raise ValueError(
-                "api_version not configured in config.ini [LLM] section. "
-                "Required for Azure OpenAI (e.g. 2025-04-01-preview)"
-            )
-        logging.info(f"Using Azure OpenAI with deployment: {_model}, endpoint: {LLM_URL}")
-        return AzureOpenAI(
-            azure_endpoint=LLM_URL,
-            api_key=LLM_API_KEY,
-            api_version=_api_version,
-        )
-
     # Use OpenAI-compatible API (Gemma, etc.) if provider is openai/gemma or after fallback
     if _provider == "openai" or _provider == "gemma":
         # Use OpenAI-compatible API (Gemma, etc.)
