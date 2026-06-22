@@ -1,0 +1,30 @@
+# Minimal Streamlit Configuration
+# Only essential settings for the application
+ 
+[server]
+# CRITICAL: Maximum file upload size in MB
+maxUploadSize = 1024
+ 
+# Server address (0.0.0.0 allows external connections)
+address = "0.0.0.0"
+ 
+# Enable CORS (required for XSRF protection)
+enableCORS = true
+ 
+# Enable XSRF protection
+enableXsrfProtection = true
+ 
+# Run in headless mode (no browser auto-open)
+headless = true
+ 
+[browser]
+# Disable usage statistics
+gatherUsageStats = false
+ 
+[runner]
+# Don't clear session state during long operations
+postScriptGC = false
+ 
+[logger]
+# Log level
+level = "info"
