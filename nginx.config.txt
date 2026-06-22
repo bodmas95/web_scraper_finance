@@ -1,0 +1,120 @@
+# Enhanced Nginx configuration with WebSocket keepalive for Streamlit
+# Replace /etc/nginx/conf.d/streamlit.conf with this file
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+upstream streamlit_backend {
+    # ip_hash ensures same client goes to same backend
+    # This is required for Streamlit session state to work
+    ip_hash;
+    
+    server 127.0.0.1:8515 max_fails=3 fail_timeout=1200s;
+    server 127.0.0.1:8516 max_fails=3 fail_timeout=1200s;
+    server 127.0.0.1:8517 max_fails=3 fail_timeout=1200s;
+    server 127.0.0.1:8518 max_fails=3 fail_timeout=1200s;
+    
+    # CRITICAL: Keep upstream connections alive
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name 10.19.26.145;
+    
+    # Large file uploads
+    client_max_body_size 1024M;
+    client_body_timeout 1200s;
+    
+    # Access log with upstream info for debugging
+    access_log /var/log/nginx/streamlit_access.log;
+    error_log /var/log/nginx/streamlit_error.log;
+    
+    # =========================================================================
+    # DEDICATED WEBSOCKET BLOCK FOR STREAMLIT CORE STREAM
+    # =========================================================================
+    # Streamlit uses /_stcore/stream for WebSocket communication
+    # This block has explicit WebSocket keepalive settings
+    location /_stcore/stream {
+        proxy_pass http://streamlit_backend;
+        
+        # WebSocket support (CRITICAL)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        
+        # Headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CRITICAL: WebSocket keepalive to prevent corporate proxy timeout
+        # Note: proxy_socket_keepalive requires nginx 1.15.6+
+        # If your nginx is older, this line will be ignored (commented out)
+        # proxy_socket_keepalive on;
+        
+        # Timeouts for long-running operations (20 minutes = 1200 seconds)
+        proxy_connect_timeout 1200s;
+        proxy_send_timeout 1200s;
+        proxy_read_timeout 1200s;
+        
+        # Send timeout (CRITICAL for WebSocket)
+        send_timeout 1200s;
+        
+        # Disable buffering for WebSocket streaming
+        proxy_request_buffering off;
+        proxy_buffering off;
+        
+        # Prevent nginx from closing connection on upstream errors
+        proxy_next_upstream off;
+        
+        # CRITICAL: Increase buffer sizes for large messages
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+    }
+    
+    # =========================================================================
+    # REGULAR HTTP REQUESTS (non-WebSocket)
+    # =========================================================================
+    location / {
+        proxy_pass http://streamlit_backend;
+        
+        # WebSocket support (for initial upgrade)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        
+        # Headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Timeouts for long-running operations
+        proxy_connect_timeout 1200s;
+        proxy_send_timeout 1200s;
+        proxy_read_timeout 1200s;
+        
+        # WebSocket keepalive
+        send_timeout 1200s;
+        keepalive_timeout 1200s;
+        
+        # Disable buffering for uploads and streaming
+        proxy_request_buffering off;
+        proxy_buffering off;
+        
+        # Health check
+        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503;
+    }
+    
+    # Health check endpoint
+    location /_health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+}
