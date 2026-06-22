@@ -1,0 +1,82 @@
+#!/bin/bash
+# Deploy WebSocket keepalive fixes
+
+echo "=========================================="
+echo "WebSocket Keepalive Deployment"
+echo "=========================================="
+echo ""
+
+cd /hr1as01/work/DE_manish/bref-latest-v2
+
+# Step 1: Backup current nginx config
+echo "Step 1: Backing up nginx config..."
+sudo cp /etc/nginx/conf.d/streamlit.conf /etc/nginx/conf.d/streamlit.conf.backup.$(date +%Y%m%d_%H%M%S)
+echo "✓ Backup created"
+echo ""
+
+# Step 2: Deploy new nginx config
+echo "Step 2: Deploying new nginx config..."
+sudo cp scripts/nginx_streamlit_websocket.conf /etc/nginx/conf.d/streamlit.conf
+echo "✓ Config deployed"
+echo ""
+
+# Step 3: Test nginx config
+echo "Step 3: Testing nginx config..."
+sudo nginx -t
+if [ $? -ne 0 ]; then
+    echo "✗ Nginx config test failed!"
+    echo "Restoring backup..."
+    BACKUP_FILE=$(ls -t /etc/nginx/conf.d/streamlit.conf.backup.* 2>/dev/null | head -1)
+    if [ -n "$BACKUP_FILE" ]; then
+        sudo cp "$BACKUP_FILE" /etc/nginx/conf.d/streamlit.conf
+        echo "✓ Backup restored"
+    fi
+    exit 1
+fi
+echo "✓ Nginx config valid"
+echo ""
+
+# Step 4: Reload nginx
+echo "Step 4: Reloading nginx..."
+sudo systemctl reload nginx
+echo "✓ Nginx reloaded"
+echo ""
+
+# Step 5: Restart Streamlit services
+echo "Step 5: Restarting Streamlit services..."
+bash scripts/restart_streamlit_systemd.sh
+echo "✓ Services restarted"
+echo ""
+
+# Step 6: Verify
+echo "=========================================="
+echo "Verification"
+echo "=========================================="
+echo ""
+
+echo "Nginx status:"
+sudo systemctl status nginx --no-pager | head -5
+echo ""
+
+echo "Streamlit services:"
+for PORT in 8515 8516 8517 8518; do
+    STATUS=$(sudo systemctl is-active streamlit@$PORT.service)
+    echo "  Port $PORT: $STATUS"
+done
+echo ""
+
+echo "=========================================="
+echo "Deployment Complete!"
+echo "=========================================="
+echo ""
+echo "Next steps:"
+echo "1. Clear browser cache (Ctrl+Shift+R)"
+echo "2. Test BREF mapping with all 3 statements"
+echo "3. Monitor for WebSocket errors"
+echo ""
+echo "To check proxy timeout:"
+echo "  bash scripts/check_proxy_timeout.sh"
+echo ""
+echo "To monitor in real-time:"
+echo "  sudo journalctl -u streamlit@8517.service -f"
+echo ""
