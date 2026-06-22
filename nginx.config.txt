@@ -3,34 +3,22 @@
 # Environment : Red Hat Linux, Nginx 1.14.1
 # =============================================================================
 #
-# SUMMARY OF CHANGES FROM YOUR ORIGINAL FILE:
+# CHANGES FROM PREVIOUS VERSION (nginx validation fix):
 #
-#   CHANGE 1 : Added keepalive_requests and keepalive_timeout to upstream block
-#              to properly sustain persistent connections to Streamlit backends.
+#   FIX 1 : Removed keepalive_requests from upstream block
+#            keepalive_requests inside upstream{} requires nginx 1.15.3+.
+#            On nginx 1.14.1 this causes: "unknown directive keepalive_requests"
+#            and nginx -t fails. Removed entirely — not available in 1.14.1.
 #
-#   CHANGE 2 : Removed proxy_socket_keepalive — NOT supported in nginx 1.14.1
-#              (requires nginx 1.15.6+). Leaving it in would silently fail or
-#              cause nginx -t to error on some RHEL builds.
+#   FIX 2 : Removed keepalive_timeout from upstream block
+#            keepalive_timeout inside upstream{} also requires nginx 1.15.3+.
+#            Same error as above. Removed entirely.
+#            The workaround is proxy_read_timeout in each location block,
+#            which controls how long nginx holds the upstream connection open
+#            and is fully supported in nginx 1.14.1.
 #
-#   CHANGE 3 : Added OS-level TCP keepalive headers via proxy_set_header as
-#              a workaround for the missing proxy_socket_keepalive directive.
-#
-#   CHANGE 4 : Added proxy_set_header Connection "" to the HTTP (non-WebSocket)
-#              location block so upstream HTTP keepalive works correctly.
-#              Without this, nginx closes the upstream connection after every
-#              request, making the upstream keepalive pool useless.
-#
-#   CHANGE 5 : Increased proxy_buffer_size and proxy_buffers in the WebSocket
-#              block to handle large Streamlit payloads without dropping data.
-#
-#   CHANGE 6 : Added proxy_socket_keepalive workaround using tcp_nodelay and
-#              tcp_nopush for nginx 1.14.x compatibility.
-#
-#   CHANGE 7 : Added gzip off explicitly for WebSocket block — compression
-#              interferes with WebSocket frames and causes silent data loss.
-#
-#   CHANGE 8 : Added explicit error_log level to "warn" to surface real
-#              upstream disconnect events without noise.
+# WHAT IS STILL SUPPORTED IN NGINX 1.14.1 UPSTREAM BLOCK:
+#   keepalive 32  — available since nginx 1.1.4, works fine on 1.14.1
 #
 # =============================================================================
 
@@ -45,24 +33,21 @@ upstream streamlit_backend {
     # stored in-process (not shared across workers).
     ip_hash;
 
-    server 127.0.0.1:8515 max_fails=3 fail_timeout=1200s;
-    server 127.0.0.1:8516 max_fails=3 fail_timeout=1200s;
-    server 127.0.0.1:8517 max_fails=3 fail_timeout=1200s;
-    server 127.0.0.1:8518 max_fails=3 fail_timeout=1200s;
+    server 127.0.0.1:8515 max_fails=3 fail_timeout=7200s;
+    server 127.0.0.1:8516 max_fails=3 fail_timeout=7200s;
+    server 127.0.0.1:8517 max_fails=3 fail_timeout=7200s;
+    server 127.0.0.1:8518 max_fails=3 fail_timeout=7200s;
 
     # keepalive: number of idle keepalive connections nginx holds open
-    # to the upstream pool. Without this, every request opens a new
-    # TCP connection to Streamlit, which is slow and unstable.
+    # to the upstream pool. Supported since nginx 1.1.4 — safe on 1.14.1.
+    # Without this, every request opens a new TCP connection to Streamlit.
     keepalive 32;
 
-    # CHANGE 1a: keepalive_requests — max requests per keepalive connection
-    # before nginx recycles it. Default is 100 which is too low for long
-    # sessions. Set high so connections are not prematurely closed.
-    keepalive_requests 1000;
-
-    # CHANGE 1b: keepalive_timeout — how long an idle upstream connection
-    # is kept alive. Match this to your proxy_read_timeout value.
-    keepalive_timeout 1200s;
+    # FIX 1 + FIX 2: keepalive_requests and keepalive_timeout are NOT
+    # included here because both require nginx 1.15.3+ and cause
+    # "unknown directive" errors on nginx 1.14.1.
+    # The connection lifetime is instead controlled by proxy_read_timeout
+    # in each location block below, which IS supported in 1.14.1.
 }
 
 server {
@@ -74,10 +59,8 @@ server {
 
     # How long nginx waits for the client to send the full request body.
     # Set high for large uploads over slow internal networks.
-    client_body_timeout 1200s;
+    client_body_timeout 7200s;
 
-    # CHANGE 8: Set error log to warn level so real upstream errors
-    # (like WebSocket disconnects) are visible without debug noise.
     access_log /var/log/nginx/streamlit_access.log;
     error_log  /var/log/nginx/streamlit_error.log warn;
 
@@ -87,8 +70,6 @@ server {
     # Streamlit sends ALL real-time UI updates through this WebSocket path.
     # If this connection drops, the browser shows a blank screen or spinner
     # even though the Python process is still running on the server.
-    # This block is isolated from the HTTP block so WebSocket-specific
-    # settings do not interfere with normal HTTP requests.
     # =========================================================================
     location /_stcore/stream {
         proxy_pass http://streamlit_backend;
@@ -105,58 +86,38 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # CHANGE 2: proxy_socket_keepalive is REMOVED because nginx 1.14.1
-        # does not support it (added in nginx 1.15.6). On some RHEL builds
-        # it causes "unknown directive" errors and blocks nginx from starting.
-        # DO NOT add it back unless you upgrade nginx to 1.15.6+.
-
-        # CHANGE 3: Workaround for missing proxy_socket_keepalive.
-        # These headers instruct the upstream (Streamlit) to keep the TCP
-        # connection open. This is not as effective as proxy_socket_keepalive
-        # but provides partial keepalive behavior on nginx 1.14.x.
+        # proxy_socket_keepalive is NOT included — requires nginx 1.15.6+.
+        # Workaround: X-Accel-Buffering tells Streamlit not to buffer responses,
+        # and tcp_nodelay sends WebSocket frames immediately (Nagle algo off).
         proxy_set_header X-Accel-Buffering no;
-
-        # CHANGE 6: tcp_nodelay forces nginx to send small WebSocket frames
-        # immediately without waiting to batch them (Nagle algorithm off).
-        # This prevents artificial delays in real-time Streamlit updates.
         tcp_nodelay on;
 
-        # Timeouts: set to 1200s (20 minutes) to allow long-running Python
-        # operations to complete before nginx gives up and closes the socket.
-        # proxy_read_timeout is the most critical one — it controls how long
-        # nginx waits between data frames on the WebSocket connection.
-        proxy_connect_timeout 1200s;
-        proxy_send_timeout    1200s;
-        proxy_read_timeout    1200s;
+        # Timeouts set to 7200s (2 hours) for long-running mapping operations.
+        # proxy_read_timeout is the most critical — it controls how long nginx
+        # waits between WebSocket data frames before closing the connection.
+        # This also acts as the upstream keepalive lifetime workaround for
+        # the missing keepalive_timeout in the upstream block on 1.14.1.
+        proxy_connect_timeout 7200s;
+        proxy_send_timeout    7200s;
+        proxy_read_timeout    7200s;
+        send_timeout          7200s;
 
-        # How long nginx waits to send data to the client browser.
-        send_timeout 1200s;
-
-        # Disable request buffering: nginx will stream the request body
-        # directly to Streamlit without buffering it to disk first.
-        # Required for large file uploads and streaming operations.
+        # Disable buffering — required for WebSocket streaming.
         proxy_request_buffering off;
+        proxy_buffering         off;
 
-        # Disable response buffering: nginx will forward Streamlit responses
-        # to the browser immediately rather than collecting them first.
-        # Critical for WebSocket — buffering breaks the real-time stream.
-        proxy_buffering off;
-
-        # Do NOT try another upstream server if this one fails mid-stream.
-        # For WebSocket, failover is not meaningful — the session is lost
-        # the moment the connection drops, so failing fast is correct.
+        # Do NOT try another backend if this one fails mid-WebSocket.
+        # Session state is lost the moment the connection drops.
         proxy_next_upstream off;
 
-        # CHANGE 5: Increased buffer sizes to handle large Streamlit messages.
-        # Default (4k/8k) is too small for Streamlit's component payloads,
-        # causing "upstream sent too big header" errors and dropped frames.
+        # Increased buffer sizes to handle large Streamlit DataFrame payloads.
+        # Default (4k/8k) causes "upstream sent too big header" on large results.
         proxy_buffer_size       256k;
         proxy_buffers           8 256k;
         proxy_busy_buffers_size 512k;
 
-        # CHANGE 7: Disable gzip for WebSocket connections.
-        # Compression is incompatible with WebSocket framing and causes
-        # silent data corruption or connection resets.
+        # Disable gzip — compression is incompatible with WebSocket framing
+        # and causes silent data corruption or connection resets.
         gzip off;
     }
 
@@ -164,70 +125,41 @@ server {
     # BLOCK 2: ALL OTHER HTTP REQUESTS
     # =========================================================================
     # Handles page loads, static assets, API calls, and file uploads.
-    # WebSocket upgrade headers are included here too because the browser
-    # sends the initial HTTP request before upgrading to WebSocket.
     # =========================================================================
     location / {
         proxy_pass http://streamlit_backend;
 
-        # HTTP/1.1 is required to use the upstream keepalive pool defined above.
-        # HTTP/1.0 does not support keepalive and will cause nginx to open a
-        # new TCP connection to Streamlit for every single request.
+        # HTTP/1.1 required to use the upstream keepalive pool.
         proxy_http_version 1.1;
 
-        # WebSocket upgrade headers — needed for the initial HTTP handshake
-        # that precedes a WebSocket connection.
         proxy_set_header Upgrade    $http_upgrade;
 
-        # CHANGE 4: For plain HTTP requests (non-WebSocket), set Connection
-        # to empty string. This tells nginx to use the upstream keepalive pool
-        # instead of forwarding the client's "Connection: close" or
-        # "Connection: keep-alive" header directly.
-        # NOTE: The map variable $connection_upgrade handles WebSocket upgrade
-        # correctly — this empty override is only for HTTP requests where
-        # $http_upgrade is empty (and $connection_upgrade resolves to "close").
+        # Empty Connection header for HTTP requests so nginx uses the
+        # upstream keepalive pool instead of closing after each request.
         proxy_set_header Connection "";
 
-        # Standard identification headers.
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-
-        # CHANGE 3 (applied here too): Tell Streamlit not to buffer responses.
         proxy_set_header X-Accel-Buffering no;
 
-        # CHANGE 6: tcp_nodelay for HTTP requests too — avoids batching
-        # delays when Streamlit sends incremental response chunks.
         tcp_nodelay on;
 
-        # Long timeouts for operations that take time (file uploads, large
-        # data processing). Match to the WebSocket block values.
-        proxy_connect_timeout 1200s;
-        proxy_send_timeout    1200s;
-        proxy_read_timeout    1200s;
-        send_timeout          1200s;
+        proxy_connect_timeout 7200s;
+        proxy_send_timeout    7200s;
+        proxy_read_timeout    7200s;
+        send_timeout          7200s;
+        keepalive_timeout     7200s;
 
-        # Keep the client-to-nginx connection alive for 1200s.
-        # This prevents the browser from having to re-establish TCP
-        # connections between Streamlit page interactions.
-        keepalive_timeout 1200s;
-
-        # Disable buffering for uploads and streaming responses.
         proxy_request_buffering off;
         proxy_buffering         off;
 
-        # For HTTP requests, allow nginx to try another backend on error.
-        # This is safe for stateless HTTP — unlike WebSocket where session
-        # state would be lost on failover.
         proxy_next_upstream error timeout invalid_header http_500 http_502 http_503;
     }
 
     # =========================================================================
     # BLOCK 3: HEALTH CHECK ENDPOINT
-    # =========================================================================
-    # Simple endpoint for load balancers or monitoring tools to verify
-    # nginx is alive. Does not proxy to Streamlit.
     # =========================================================================
     location /_health {
         access_log off;
