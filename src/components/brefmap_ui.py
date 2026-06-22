@@ -813,3 +813,1089 @@ def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: 
             use_container_width=True,
             key=f"{key_prefix}_excel_download_{statement_type}_{mapping_key}"
         )
+
+# summary related code starts from here
+# Add these 3 functions anywhere in the file:
+
+def _check_and_show_consolidated_download(key_prefix: str):
+    """
+    Check if all 3 statements are mapped and show consolidated download button.
+    This is called at the end of each statement's BREF mapping section.
+    """
+    _income_key = f"{key_prefix}_mapping_income_statement"
+    _balance_key = f"{key_prefix}_mapping_balance_sheet"
+    _cashflow_key = f"{key_prefix}_mapping_cash_flow"
+    
+    _has_income = _income_key in st.session_state.bref_mapping_results
+    _has_balance = _balance_key in st.session_state.bref_mapping_results
+    _has_cashflow = _cashflow_key in st.session_state.bref_mapping_results
+    
+    if _has_income and _has_balance and _has_cashflow:
+        # All 3 statements are mapped!
+        st.markdown("---")
+        st.success("✅ All 3 statements are mapped!")
+        
+        # Get mapping results
+        income_results = st.session_state.bref_mapping_results[_income_key]
+        balance_results = st.session_state.bref_mapping_results[_balance_key]
+        cashflow_results = st.session_state.bref_mapping_results[_cashflow_key]
+        
+        # Get company info
+        company_name = income_results.get('company_name', 'Company')
+        target_year = income_results.get('target_year', datetime.now().year)
+        
+        # Create consolidated Excel (4 sheets for Summary Generator)
+        # Use the new format with just Field Code | 2023 | 2024 columns
+        consolidated_bref_excel = create_consolidated_bref_excel_for_summary(
+            income_fields=income_results['fields'],
+            balance_fields=balance_results['fields'],
+            cashflow_fields=cashflow_results['fields'],
+            target_year=target_year,
+            company_name=company_name
+        )
+        
+        col_download, col_generate = st.columns(2)
+        
+        # DOWNLOAD BREF BUTTON
+        with col_download:
+            st.download_button(
+                "📥 Download All BREF Mappings (Excel)",
+                data=consolidated_bref_excel,
+                file_name=f"BREF_All_Statements_{company_name}_{target_year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="secondary",
+                key=f"{key_prefix}_download_all_bref_consolidated_v2"
+            )
+            st.caption("📊 4 Sheets: Input - Income Statement | Input - Assets | Input - Liabilities | Input - Cash flow")
+        
+        # RUN SUMMARY GENERATOR BUTTON
+        with col_generate:
+            if st.button("🎯 Run Summary Generator", use_container_width=True, type="primary", key=f"{key_prefix}_run_summary_generator"):
+                from src.integration.summary_integration import generate_summary_from_fields
+
+                region = income_results.get('region', 'APAC')
+                currency = "HK$m" if region == "APAC" else "USD"
+    
+                with st.spinner("Generating summaries for all 3 statements..."):
+                    result = generate_summary_from_fields(
+                        income_fields=income_results['fields'],
+                        balance_fields=balance_results['fields'],
+                        cashflow_fields=cashflow_results['fields'],
+                        target_year=target_year,
+                        company_name=company_name,
+                        region=region,
+                        currency=currency
+                    )
+                    
+                    if result.get('error'):
+                        st.error(f"❌ Error: {result['error']}")
+                    else:
+                        st.success("✅ All summaries generated successfully!")
+                        st.session_state[f"{key_prefix}_summary_output"] = result['complete_file']
+                        st.rerun()
+            
+            st.caption("🎯 Generate 3 summary sheets and create 7-sheet file")
+        
+        # SHOW SUMMARY RESULTS IF AVAILABLE
+        summary_output_key = f"{key_prefix}_summary_output"
+        if summary_output_key in st.session_state:
+            st.markdown("---")
+            st.success("✅ Summary generation complete!")
+            
+            # Display summary tables in tabs
+            _display_summary_tables(st.session_state[summary_output_key], key_prefix)
+            
+            st.markdown("---")
+            
+            col_download, col_clear = st.columns([3, 1])
+            
+                        # DOWNLOAD COMPLETE FILE BUTTON
+            with col_download:
+                st.download_button(
+                    "📥 Download Complete File (7 Sheets)",
+                    data=st.session_state[summary_output_key],
+                    file_name=f"Complete_Summary_{company_name}_{target_year}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    type="primary",
+                    key=f"{key_prefix}_download_summary_output"
+                )
+            
+            # BREF FORMATTER BUTTON
+            st.markdown("---")
+            st.subheader("🎨 BREF Formatter")
+            st.info("Format the 4 input sheets with merged headers (12/31/YYYY + 12 mois + Values/Var columns)")
+            
+            col_format, col_download_formatted = st.columns(2)
+            
+            with col_format:
+                if st.button("🎨 Format BREF Excel", use_container_width=True, type="secondary", key=f"{key_prefix}_format_bref"):
+                    with st.spinner("Formatting BREF Excel..."):
+                        formatted_excel = format_bref_excel(st.session_state[summary_output_key])
+                        st.session_state[f"{key_prefix}_formatted_output"] = formatted_excel
+                        st.success("✅ BREF Excel formatted successfully!")
+                        st.rerun()
+            
+            # Show download button for formatted file if available
+            formatted_output_key = f"{key_prefix}_formatted_output"
+            if formatted_output_key in st.session_state:
+                with col_download_formatted:
+                    st.download_button(
+                        "📥 Download Formatted BREF (7 Sheets)",
+                        data=st.session_state[formatted_output_key],
+                        file_name=f"Formatted_BREF_{company_name}_{target_year}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="primary",
+                        key=f"{key_prefix}_download_formatted"
+                    )
+                
+                                # Display formatted preview with exact styling
+                st.markdown("---")
+                st.success("✅ Formatted BREF Excel ready!")
+                st.info("""📊 **Formatted Features:**
+                - ✅ Merged year headers (12/31/YYYY)
+                - ✅ Period labels (12 mois)
+                - ✅ Values and Var columns
+                - ✅ Automatic variance calculation
+                - ✅ Professional styling with borders""")
+                
+                # Display formatted tables in tabs
+                _display_formatted_bref_tables(st.session_state[formatted_output_key], key_prefix)
+            
+            # CLEAR SUMMARY BUTTON
+            with col_clear:
+                if st.button("🗑️ Clear Summary", key=f"{key_prefix}_clear_summary", use_container_width=True):
+                    del st.session_state[summary_output_key]
+                    st.rerun()
+            
+            st.info("""📊 **7 Sheets:**
+            - Input - Income Statement
+            - Input - Assets
+            - Input - Liabilities
+            - Input - Cash flow
+            - Summary - Income Statement
+            - Summary - Balance Sheet
+            - Summary - Cash Flow""")
+
+def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
+    """
+    Display summary tables in tabs for Income Statement, Balance Sheet, and Cash Flow.
+    
+    Args:
+        excel_bytes: Complete Excel file with summary sheets
+        key_prefix: Prefix for unique keys
+    """
+    import openpyxl
+    import io
+    
+    try:
+        # Load Excel file
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+        
+        # Get summary sheet names
+        summary_sheets = {
+            'income': 'Summary - Income Statement',
+            'balance': 'Summary - Balance Sheet',
+            'cashflow': 'Summary - Cash Flow'
+        }
+        
+        # Check which sheets exist
+        available_sheets = {}
+        for key, sheet_name in summary_sheets.items():
+            if sheet_name in wb.sheetnames:
+                available_sheets[key] = sheet_name
+        
+        if not available_sheets:
+            st.warning("⚠️ No summary sheets found in the file")
+            return
+        
+        # Create tabs
+        tab_names = []
+        tab_keys = []
+        if 'income' in available_sheets:
+            tab_names.append("📊 Income Statement")
+            tab_keys.append('income')
+        if 'balance' in available_sheets:
+            tab_names.append("📋 Balance Sheet")
+            tab_keys.append('balance')
+        if 'cashflow' in available_sheets:
+            tab_names.append("💧 Cash Flow")
+            tab_keys.append('cashflow')
+        
+        tabs = st.tabs(tab_names)
+        
+        # Display each summary table
+        for i, (tab, tab_key) in enumerate(zip(tabs, tab_keys)):
+            with tab:
+                sheet_name = available_sheets[tab_key]
+                ws = wb[sheet_name]
+                
+                # Read data from worksheet
+                data = []
+                for row in ws.iter_rows(values_only=True):
+                    data.append(row)
+                
+                if not data:
+                    st.info("No data in this sheet")
+                    continue
+                
+                # Convert to DataFrame
+                df = pd.DataFrame(data[1:], columns=data[0])  # First row is header
+                
+                # Convert numeric columns to proper numeric type
+                numeric_cols = []
+                for col in df.columns:
+                    if col not in ['Metric', 'Derivation']:
+                        try:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                            numeric_cols.append(col)
+                        except:
+                            pass
+                
+                # Apply styling to the dataframe
+                styled_df = _style_summary_dataframe(df, tab_key, numeric_cols)
+                
+                # Display styled table with custom number formatting
+                st.dataframe(
+                    styled_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(600, len(df) * 35 + 50),
+                    column_config={
+                        col: st.column_config.NumberColumn(
+                            col,
+                            format="%.10g"  # This removes trailing zeros automatically
+                        ) for col in numeric_cols
+                    }
+                )
+                
+                # Show summary stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Metrics", len(df))
+                with col2:
+                    # Count non-empty values in last year column
+                    if len(df.columns) >= 3:
+                        non_empty = df.iloc[:, 2].notna().sum()
+                        st.metric("Values Populated", non_empty)
+                with col3:
+                    # Count calculated metrics
+                    if 'Derivation' in df.columns:
+                        calc_count = df['Derivation'].str.contains('/', na=False).sum()
+                        st.metric("Calculated Metrics", calc_count)
+        
+        wb.close()
+        
+    except Exception as e:
+        st.error(f"❌ Error displaying summary tables: {e}")
+        import traceback
+        with st.expander("🐛 Error Details"):
+            st.code(traceback.format_exc(), language="python")
+			
+def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols: list = None):
+    """
+    Apply styling to summary dataframe based on metric type.
+    
+    Args:
+        df: Summary dataframe
+        statement_type: 'income', 'balance', or 'cashflow'
+        numeric_cols: List of numeric column names
+    
+    Returns:
+        Styled dataframe
+    """
+    # Define key metrics that should have purple background and bold font
+    key_metrics = {
+        'income': [
+            'Revenue',
+            'Gross Profit',
+            'Recurring EBITDA',
+            'Recurring EBIT',
+            'EBIT including exceptional items',
+            'Net Profit After Tax',
+            'Net Profit after MI'
+        ],
+        'balance': [
+            'Total assets',
+            'Equity',
+            'Equity after MI',
+            'Gross Debt',
+            'Net Debt (Gross Debt - Total Cash)'
+        ],
+        'cashflow': [
+            'FFO',
+            'Operational CF (OCF)',
+            'Free cash-flow (FCF)',
+            'Net debt variation',
+            'Increase in Cash & Cash Equivalents'
+        ]
+    }
+    
+    # Define calculated metrics (should be italic)
+    calculated_patterns = [
+        'growth', 'margin', 'Margin', 'ratio', 'Ratio',
+        'coverage', 'Coverage', 'Gearing', 'Leverage',
+        'conversion', 'Conversion'
+    ]
+    
+    def highlight_row(row):
+        metric_name = row['Metric'] if 'Metric' in row.index else ''
+        
+        # Check if it's a key metric
+        is_key_metric = False
+        for metrics_list in key_metrics.values():
+            if any(key_metric in str(metric_name) for key_metric in metrics_list):
+                is_key_metric = True
+                break
+        
+        # Check if it's a calculated metric
+        is_calculated = any(pattern in str(metric_name) for pattern in calculated_patterns)
+        
+        if is_key_metric:
+            # Purple background (#D9D9E3) and bold for key metrics
+            return ['background-color: #D9D9E3; font-weight: bold; color: #000000'] * len(row)
+        elif is_calculated:
+            # Italic for calculated metrics
+            return ['font-style: italic; color: #333333'] * len(row)
+        else:
+            # Normal styling
+            return ['color: #000000'] * len(row)
+    
+    # Apply row-wise styling
+    styled = df.style.apply(highlight_row, axis=1)
+    
+    # Apply column-specific styling
+    styled = styled.set_properties(**{
+        'text-align': 'left',
+        'font-size': '11px',
+        'padding': '8px'
+    }, subset=['Metric'])
+    
+    # Right-align numeric columns
+    numeric_cols = [col for col in df.columns if col not in ['Metric', 'Derivation']]
+    if numeric_cols:
+        styled = styled.set_properties(**{
+            'text-align': 'right',
+            'font-size': '11px',
+            'padding': '8px'
+        }, subset=numeric_cols)
+    
+    # Style Derivation column (smaller, gray text)
+    if 'Derivation' in df.columns:
+        styled = styled.set_properties(**{
+            'text-align': 'left',
+            'font-size': '9px',
+            'color': '#666666',
+            'padding': '8px'
+        }, subset=['Derivation'])
+    
+    # Style header
+    styled = styled.set_table_styles([
+        {'selector': 'th',
+         'props': [
+             ('background-color', '#4A4A4A'),
+             ('color', 'white'),
+             ('font-weight', 'bold'),
+             ('text-align', 'center'),
+             ('padding', '10px'),
+             ('font-size', '12px')
+         ]}
+    ])
+    
+    return styled
+
+
+def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fields: list, cashflow_fields: list, target_year: int, company_name: str = "Company") -> bytes:
+    """
+    Create a 4-sheet Excel file formatted for Summary Generator input.
+    Format: Simple 3-column layout (Field Code | Ref Year | Target Year)
+    """
+    import openpyxl
+    
+    ref_year = target_year - 1
+    
+    # Define Assets and Liabilities field codes
+    assets_codes = {
+        'U16', 'U10', 'U11', 'U12', 'U13', 'U14', 'U2', 'U4', 'U3', 'U5', 'U115', 'U116', 'U201',
+        'U6', 'U7', 'U8', 'U9', 'U18', 'U17', 'U19', 'U20', 'U88', 'U21', 'U1',
+        'U24', 'U25', 'U26', 'U27', 'U28', 'U114', 'U200', 'U31', 'U32', 'U34', 'U29',
+        'U98', 'U101', 'U36', 'U103', 'U104', 'U37', 'U106', 'U107', 'U108',
+        'U35', 'U38', 'U39', 'U149', 'U40', 'U22', 'U23', 'U41init', 'U41'
+    }
+    
+    liabilities_codes = {
+        'U44', 'U45', 'U46', 'U181', 'U173', 'U174', 'U172', 'U47', 'U48', 'U49', 'U43', 'U51', 'U161',
+        'U53', 'U53init', 'U54', 'U55', 'U56', 'U57', 'U182', 'U58', 'U59', 'U175', 'U60', 'U179',
+        'U52init', 'U52', 'U63', 'U63init', 'U64', 'U65', 'U66', 'U67', 'U68', 'U166', 'U162',
+        'U183', 'U176', 'U75', 'U72', 'U74', 'U73', 'U71', 'U180', 'U70', 'U177',
+        'U62init', 'U62ifrs16', 'U69', 'U78init', 'U78', 'DMLTB1'
+    }
+    
+    # Create workbook
+    wb = openpyxl.Workbook()
+    # Remove default sheet
+    if 'Sheet' in wb.sheetnames:
+        del wb['Sheet']
+    
+    # Sheet 1: Input - Income Statement
+    if income_fields:
+        ws = wb.create_sheet("Input - Income Statement", 0)
+        ws['A1'] = None
+        ws['B1'] = str(ref_year)
+        ws['C1'] = str(target_year)
+        
+        row_idx = 2
+        for field in income_fields:
+            field_label = field.get("label", "")
+            target_value = field.get("target_value")
+            reference_value = field.get("reference_value") or field.get("extracted_reference_value")
+            
+            ws.cell(row=row_idx, column=1, value=field_label)
+            ws.cell(row=row_idx, column=2, value=reference_value)
+            ws.cell(row=row_idx, column=3, value=target_value)
+            row_idx += 1
+        
+        ws.sheet_state = 'visible'
+    
+    # Sheet 2: Input - Assets
+    if balance_fields:
+        ws = wb.create_sheet("Input - Assets")
+        ws['A1'] = None
+        ws['B1'] = str(ref_year)
+        ws['C1'] = str(target_year)
+        
+        row_idx = 2
+        for field in balance_fields:
+            label = field.get("label", "")
+            field_code = label.split(" |")[0].strip() if " |" in label else label.split("|")[0].strip() if "|" in label else ""
+            
+            if field_code in assets_codes:
+                target_value = field.get("target_value")
+                reference_value = field.get("reference_value") or field.get("extracted_reference_value")
+                
+                ws.cell(row=row_idx, column=1, value=label)
+                ws.cell(row=row_idx, column=2, value=reference_value)
+                ws.cell(row=row_idx, column=3, value=target_value)
+                row_idx += 1
+        
+        ws.sheet_state = 'visible'
+    
+    # Sheet 3: Input - Liabilities
+    if balance_fields:
+        ws = wb.create_sheet("Input - Liabilities")
+        ws['A1'] = None
+        ws['B1'] = str(ref_year)
+        ws['C1'] = str(target_year)
+        
+        row_idx = 2
+        for field in balance_fields:
+            label = field.get("label", "")
+            field_code = label.split(" |")[0].strip() if " |" in label else label.split("|")[0].strip() if "|" in label else ""
+            
+            if field_code in liabilities_codes:
+                target_value = field.get("target_value")
+                reference_value = field.get("reference_value") or field.get("extracted_reference_value")
+                
+                ws.cell(row=row_idx, column=1, value=label)
+                ws.cell(row=row_idx, column=2, value=reference_value)
+                ws.cell(row=row_idx, column=3, value=target_value)
+                row_idx += 1
+        
+        ws.sheet_state = 'visible'
+    
+    # Sheet 4: Input - Cash flow
+    if cashflow_fields:
+        ws = wb.create_sheet("Input - Cash flow")
+        ws['A1'] = None
+        ws['B1'] = str(ref_year)
+        ws['C1'] = str(target_year)
+        
+        row_idx = 2
+        for field in cashflow_fields:
+            field_label = field.get("label", "")
+            target_value = field.get("target_value")
+            reference_value = field.get("reference_value") or field.get("extracted_reference_value")
+            
+            ws.cell(row=row_idx, column=1, value=field_label)
+            ws.cell(row=row_idx, column=2, value=reference_value)
+            ws.cell(row=row_idx, column=3, value=target_value)
+            row_idx += 1
+        
+        ws.sheet_state = 'visible'
+    
+    # Ensure all sheets are visible
+    for ws in wb.worksheets:
+        ws.sheet_state = 'visible'
+    wb.active = 0
+    
+    # Save to bytes
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    wb.close()
+    
+    return output.getvalue()
+
+
+def format_bref_excel(excel_bytes: bytes) -> bytes:
+    """
+    Format BREF Excel file (7 sheets) to match the required format:
+    - Merge cells for year headers (12/31/YYYY + 12 mois)
+    - Add 'Values' and 'Var' sub-headers
+    - Apply styling
+    
+    Strategy: Create a NEW workbook and copy data to avoid MergedCell issues
+    
+    Args:
+        excel_bytes: Input Excel file (7 sheets)
+    
+    Returns:
+        bytes: Formatted Excel file
+    """
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+    from copy import copy
+    
+    # Load source workbook
+    source_wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+    
+    # Create NEW destination workbook
+    dest_wb = openpyxl.Workbook()
+    dest_wb.remove(dest_wb.active)  # Remove default sheet
+    
+    # Define which sheets to format (only the 4 input sheets)
+    input_sheets = [
+        "Input - Income Statement",
+        "Input - Assets",
+        "Input - Liabilities",
+        "Input - Cash flow"
+    ]
+    
+    # Summary sheets to copy as-is
+    summary_sheets = [
+        "Summary - Income Statement",
+        "Summary - Balance Sheet",
+        "Summary - Cash Flow"
+    ]
+    
+    for sheet_name in input_sheets:
+        if sheet_name not in source_wb.sheetnames:
+            continue
+        
+        source_ws = source_wb[sheet_name]
+        
+        # Create new sheet in destination workbook
+        dest_ws = dest_wb.create_sheet(sheet_name)
+        
+                                # Read current header to detect years from SOURCE sheet
+        # Use values_only=True to avoid MergedCell issues
+        header_row = []
+        for cell in source_ws[1]:
+            try:
+                header_row.append(cell.value)
+            except:
+                header_row.append(None)
+        
+        print(f"\n🔍 DEBUG: Sheet '{sheet_name}'")
+        print(f"  Source header row: {header_row}")
+        
+        # Find year columns dynamically (skip first column which is Field Code)
+        year_columns = []
+        import re
+        for col_idx in range(2, len(header_row) + 1):  # Start from column B (index 2)
+            cell_value = header_row[col_idx - 1] if col_idx - 1 < len(header_row) else None
+            if cell_value:
+                # Try to extract year from cell value
+                year_match = re.search(r'(\d{4})', str(cell_value))
+                if year_match:
+                    year = int(year_match.group(1))
+                    # Sanity check: year should be between 2000-2030
+                    if 2000 <= year <= 2030:
+                        # Store destination column index (col_idx) and year
+                        year_columns.append((col_idx, year))
+                        print(f"  Found year {year} at source column {col_idx}")
+        
+        if not year_columns:
+            print(f"  ⚠️ WARNING: No year columns found in '{sheet_name}' - skipping formatting")
+            continue  # Skip if no year columns found
+        
+        print(f"  ✅ Will format {len(year_columns)} year columns")
+        
+                                        # In the NEW sheet, we'll create 3 header rows from scratch
+        # Row 1: Date headers (12/31/YYYY)
+        # Row 2: Period labels (12 mois)
+        # Row 3: Column types (Values, Var)
+        # Row 4+: Data from source
+        
+                                # Row 1: Currency and merged year headers
+        dest_ws['A1'] = 'HKD'
+        dest_ws['A1'].font = Font(bold=True, size=10)
+        dest_ws['A1'].alignment = Alignment(horizontal='center', vertical='center')  # CENTER ALIGNED
+        dest_ws['A1'].fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        
+                # Create year columns in destination (starting from column B)
+        dest_col_idx = 2  # Start from column B
+        year_col_mapping = {}  # Map source col to dest col
+        
+        for source_col_idx, year in year_columns:
+            # Set value and styling in NEW sheet at dest_col_idx
+            date_str = f"12/31/{year}"
+            print(f"  Writing '{date_str}' to dest row=1, col={dest_col_idx}")
+            
+            cell = dest_ws.cell(row=1, column=dest_col_idx)
+            cell.value = date_str
+            cell.font = Font(bold=True, size=11)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+            
+            # Merge with next column (for Var)
+            dest_ws.merge_cells(start_row=1, start_column=dest_col_idx, end_row=1, end_column=dest_col_idx + 1)
+            
+            # Store mapping
+            year_col_mapping[source_col_idx] = dest_col_idx
+            
+            # Move to next pair of columns (Values + Var)
+            dest_col_idx += 2
+        
+                                                # Add "Notes" header at the end (no extra Var column)
+        last_col = dest_col_idx  # This is now after all year columns
+        dest_ws.cell(row=1, column=last_col, value="Notes")
+        dest_ws.cell(row=1, column=last_col).font = Font(bold=True, size=11)
+        dest_ws.cell(row=1, column=last_col).alignment = Alignment(horizontal='center', vertical='center')
+        dest_ws.cell(row=1, column=last_col).fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+        
+                                        # Row 2: Period labels (12 mois)
+        dest_ws['A2'] = '1000'
+        dest_ws['A2'].font = Font(bold=True, size=10)
+        dest_ws['A2'].alignment = Alignment(horizontal='center', vertical='center')  # CENTER ALIGNED
+        dest_ws['A2'].fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        
+        # Notes column in row 2
+        dest_ws.cell(row=2, column=last_col, value="")
+        dest_ws.cell(row=2, column=last_col).fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        
+        for source_col_idx, dest_col_idx in year_col_mapping.items():
+            # Set value and styling in NEW sheet
+            cell = dest_ws.cell(row=2, column=dest_col_idx)
+            cell.value = "12 mois"
+            cell.font = Font(bold=True, size=10)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+            
+            # Merge with next column
+            dest_ws.merge_cells(start_row=2, start_column=dest_col_idx, end_row=2, end_column=dest_col_idx + 1)
+        
+                                # Row 3: Column type headers (Values, Var)
+        dest_ws.cell(row=3, column=1, value=sheet_name.upper())
+        dest_ws.cell(row=3, column=1).font = Font(bold=True, size=10)
+        dest_ws.cell(row=3, column=1).alignment = Alignment(horizontal='center', vertical='center')  # CENTER ALIGNED
+        dest_ws.cell(row=3, column=1).fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        
+        # Notes column in row 3
+        dest_ws.cell(row=3, column=last_col, value="")
+        dest_ws.cell(row=3, column=last_col).fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        
+        for source_col_idx, dest_col_idx in year_col_mapping.items():
+            # Values column
+            dest_ws.cell(row=3, column=dest_col_idx, value="Values")
+            dest_ws.cell(row=3, column=dest_col_idx).font = Font(bold=True, size=10)
+            dest_ws.cell(row=3, column=dest_col_idx).alignment = Alignment(horizontal='center', vertical='center')
+            dest_ws.cell(row=3, column=dest_col_idx).fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+            
+            # Var column
+            dest_ws.cell(row=3, column=dest_col_idx + 1, value="Var")
+            dest_ws.cell(row=3, column=dest_col_idx + 1).font = Font(bold=True, size=10)
+            dest_ws.cell(row=3, column=dest_col_idx + 1).alignment = Alignment(horizontal='center', vertical='center')
+            dest_ws.cell(row=3, column=dest_col_idx + 1).fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        
+                        # Copy data from source sheet (starting from row 2 in source = row 4 in dest)
+        # Source row 1 = header (Field Code, 2023, 2024)
+        # Source row 2+ = data
+        print(f"  📋 Copying {source_ws.max_row - 1} data rows from source...")
+        
+        for source_row_idx in range(2, source_ws.max_row + 1):
+            dest_row_idx = source_row_idx + 2  # Offset by 2 (for our 3 header rows)
+            
+            # Copy Field Code (column A) - use .value to avoid MergedCell
+            try:
+                field_code = source_ws.cell(row=source_row_idx, column=1).value
+                dest_ws.cell(row=dest_row_idx, column=1, value=field_code)
+            except:
+                dest_ws.cell(row=dest_row_idx, column=1, value=None)
+            
+            # Copy year values using mapping
+            for source_col_idx, dest_col_idx in year_col_mapping.items():
+                try:
+                    value = source_ws.cell(row=source_row_idx, column=source_col_idx).value
+                    dest_ws.cell(row=dest_row_idx, column=dest_col_idx, value=value)
+                except:
+                    dest_ws.cell(row=dest_row_idx, column=dest_col_idx, value=None)
+        
+        # Calculate variance (Var) for each row - DYNAMIC for any number of years
+        print(f"  📊 Calculating variance for {dest_ws.max_row - 3} data rows...")
+        
+        for row_idx in range(4, dest_ws.max_row + 1):
+            prev_value = None
+            for i, (source_col_idx, dest_col_idx) in enumerate(year_col_mapping.items()):
+                # Get current value from Values column
+                current_value = dest_ws.cell(row=row_idx, column=dest_col_idx).value
+                
+                # Calculate variance from previous year (% change)
+                if i > 0 and prev_value is not None and current_value is not None:
+                    try:
+                        prev_val_float = float(prev_value)
+                        curr_val_float = float(current_value)
+                        if prev_val_float != 0:
+                            # Variance = (Current - Previous) / Previous
+                            var_pct = ((curr_val_float - prev_val_float) / prev_val_float)
+                            dest_ws.cell(row=row_idx, column=dest_col_idx + 1, value=var_pct)
+                            dest_ws.cell(row=row_idx, column=dest_col_idx + 1).number_format = '0.0%'
+                        else:
+                            # Previous value is 0 - can't calculate percentage
+                            dest_ws.cell(row=row_idx, column=dest_col_idx + 1, value=None)
+                    except (ValueError, TypeError, ZeroDivisionError):
+                        # Invalid values - leave Var column empty
+                        dest_ws.cell(row=row_idx, column=dest_col_idx + 1, value=None)
+                else:
+                    # First year or missing data - no variance to calculate
+                    dest_ws.cell(row=row_idx, column=dest_col_idx + 1, value=None)
+                
+                prev_value = current_value
+        
+        print(f"  ✅ Variance calculation complete")
+        
+                                # Set column widths dynamically based on number of year columns
+        dest_ws.column_dimensions['A'].width = 50  # Field Code column
+        
+        for source_col_idx, dest_col_idx in year_col_mapping.items():
+            # Values column
+            dest_ws.column_dimensions[get_column_letter(dest_col_idx)].width = 15
+            # Var column
+            dest_ws.column_dimensions[get_column_letter(dest_col_idx + 1)].width = 12
+        
+                # Notes column width
+        dest_ws.column_dimensions[get_column_letter(last_col)].width = 20
+        
+        print(f"  📏 Column widths set for {len(year_columns)} year columns")
+        
+                        # Add borders to all cells
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        for row in dest_ws.iter_rows(min_row=1, max_row=dest_ws.max_row, min_col=1, max_col=last_col):
+            for cell in row:
+                cell.border = thin_border
+        
+        dest_ws.sheet_state = 'visible'
+    
+            # Copy summary sheets as-is (no formatting)
+    for sheet_name in summary_sheets:
+        if sheet_name in source_wb.sheetnames:
+            source_ws = source_wb[sheet_name]
+            dest_ws = dest_wb.create_sheet(sheet_name)
+            
+            # Copy all data and formatting
+            for row in source_ws.iter_rows():
+                for cell in row:
+                    new_cell = dest_ws[cell.coordinate]
+                    new_cell.value = cell.value
+                    if cell.has_style:
+                        new_cell.font = copy(cell.font)
+                        new_cell.border = copy(cell.border)
+                        new_cell.fill = copy(cell.fill)
+                        new_cell.number_format = cell.number_format
+                        new_cell.alignment = copy(cell.alignment)
+            
+            # Copy column widths
+            for col_letter, col_dim in source_ws.column_dimensions.items():
+                dest_ws.column_dimensions[col_letter].width = col_dim.width
+            
+            dest_ws.sheet_state = 'visible'
+            print(f"  ✅ Copied summary sheet: {sheet_name}")
+    
+    # Close source workbook
+    source_wb.close()
+    
+    # Save formatted workbook
+    print(f"\n✅ Formatting complete! Saving workbook...")
+    output = io.BytesIO()
+    dest_wb.save(output)
+    output.seek(0)
+    dest_wb.close()
+    
+    print(f"✅ Formatted Excel file ready ({len(dest_wb.worksheets)} sheets)")
+    return output.getvalue()
+
+
+def _display_formatted_bref_tables(excel_bytes: bytes, key_prefix: str):
+    """
+    Display formatted BREF tables with exact Excel styling in tabs.
+    """
+    import openpyxl
+    
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+        
+        input_sheets = [
+            "Input - Income Statement",
+            "Input - Assets",
+            "Input - Liabilities",
+            "Input - Cash flow"
+        ]
+        
+        available_sheets = [s for s in input_sheets if s in wb.sheetnames]
+        
+        if available_sheets:
+            st.markdown("### 📋 Formatted BREF Tables")
+            tabs = st.tabs([s.replace("Input - ", "") for s in available_sheets])
+            
+            for tab, sheet_name in zip(tabs, available_sheets):
+                with tab:
+                    ws = wb[sheet_name]
+                    data = list(ws.iter_rows(values_only=True))
+                    
+                    if len(data) < 4:
+                        continue
+                    
+                    # Extract years from row 1
+                    years = []
+                    for cell in data[0][1:]:
+                        if cell and '/' in str(cell):
+                            year = str(cell).split('/')[-1]
+                            years.append(year)
+                    
+                                                            # Display header with merged cells styling - EXACT Excel format
+                    year1 = years[0] if years else '2024'
+                    year2 = years[1] if len(years) > 1 else '2025'
+                    
+                    st.markdown(f"""
+                    <style>
+                        .bref-header-table {{
+                            width: 100%;
+                            border-collapse: collapse;
+                            font-family: 'Segoe UI', Arial, sans-serif;
+                            margin-bottom: 15px;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        }}
+                        .bref-header-table td {{
+                            border: 1px solid #999;
+                            padding: 10px;
+                            text-align: center;
+                        }}
+                        .bref-row1 {{
+                            background-color: #D9D9D9;
+                            font-weight: bold;
+                            font-size: 11px;
+                        }}
+                        .bref-row2 {{
+                            background-color: #E7E6E6;
+                            font-weight: bold;
+                            font-size: 10px;
+                        }}
+                        .bref-row3 {{
+                            background-color: #F2F2F2;
+                            font-weight: bold;
+                            font-size: 10px;
+                        }}
+                        .bref-field-col {{
+                            width: 40%;
+                            text-align: center !important;
+                        }}
+                    </style>
+                    <div style="background-color: #F2F2F2; padding: 0; border: 1px solid #999;">
+                        <table class="bref-header-table">
+                                                        <tr class="bref-row1">
+                                <td class="bref-field-col">HKD</td>
+                                <td colspan="2">12/31/{year1}</td>
+                                <td colspan="2">12/31/{year2}</td>
+                                <td>Notes</td>
+                            </tr>
+                            <tr class="bref-row2">
+                                <td class="bref-field-col">1000</td>
+                                <td colspan="2">12 mois</td>
+                                <td colspan="2">12 mois</td>
+                                <td></td>
+                            </tr>
+                            <tr class="bref-row3">
+                                <td class="bref-field-col">{sheet_name.upper()}</td>
+                                <td>Values</td>
+                                <td>Var</td>
+                                <td>Values</td>
+                                <td>Var</td>
+                                <td></td>
+                            </tr>
+                        </table>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                                                            # Create DataFrame from data rows with UNIQUE column names
+                    header_row = list(data[2])
+                    
+                    # Debug: Check data structure
+                    print(f"\n🔍 DEBUG: Sheet '{sheet_name}'")
+                    print(f"  Header row (row 3): {header_row}")
+                    print(f"  Number of columns in header: {len(header_row)}")
+                    print(f"  Number of columns in data row 4: {len(data[3]) if len(data) > 3 else 0}")
+                    
+                    # Make column names unique by adding year/position suffix
+                    unique_headers = []
+                    col_counts = {}
+                    year_idx = 0
+                    
+                    for i, col_name in enumerate(header_row):
+                        if col_name is None or str(col_name).strip() == '':
+                            # Empty column name - use position
+                            unique_headers.append(f"Column_{i}")
+                        elif col_name in col_counts:
+                            col_counts[col_name] += 1
+                            # Add suffix to make unique
+                            if 'Values' in str(col_name):
+                                if year_idx < len(years):
+                                    unique_headers.append(f"Values_{years[year_idx]}")
+                                    year_idx += 1
+                                else:
+                                    unique_headers.append(f"{col_name}_{col_counts[col_name]}")
+                            elif 'Var' in str(col_name):
+                                unique_headers.append(f"Var_{col_counts[col_name]}")
+                            else:
+                                unique_headers.append(f"{col_name}_{col_counts[col_name]}")
+                        else:
+                            col_counts[col_name] = 1
+                            if 'Values' in str(col_name) and year_idx < len(years):
+                                unique_headers.append(f"Values_{years[year_idx]}")
+                                year_idx += 1
+                            else:
+                                unique_headers.append(str(col_name))
+                    
+                    print(f"  Unique headers: {unique_headers}")
+                    
+                    # Create DataFrame
+                    try:
+                        df = pd.DataFrame(data[3:], columns=unique_headers)
+                    except Exception as e:
+                        print(f"  ❌ Error creating DataFrame: {e}")
+                        st.error(f"Error creating table: {e}")
+                        continue
+                    
+                                        # Replace NaN with None to avoid JSON serialization errors
+                    df = df.replace({pd.NA: None, float('nan'): None})
+                    df = df.fillna('')
+                    
+                                        # Convert numeric columns properly
+                    for col in df.columns:
+                        if col != df.columns[0]:  # Skip first column (Field Code)
+                            try:
+                                df[col] = pd.to_numeric(df[col], errors='coerce')
+                                # Multiply Var columns by 100 to show as percentage
+                                if 'Var' in str(col):
+                                    df[col] = df[col] * 100
+                            except:
+                                pass
+                    
+                                        # Format columns with better configuration
+                    column_config = {}
+                    
+                    # First column (Field Code) - wider
+                    column_config[df.columns[0]] = st.column_config.TextColumn(
+                        df.columns[0],
+                        width="large",
+                        help="BREF Field Code"
+                    )
+                    
+                    # Values and Var columns
+                    for col in df.columns[1:]:
+                        if 'Values' in str(col):
+                            column_config[col] = st.column_config.NumberColumn(
+                                col,
+                                format="%.0f",
+                                help="Financial values"
+                            )
+                        elif 'Var' in str(col):
+                            # Variance should be displayed as percentage
+                            column_config[col] = st.column_config.NumberColumn(
+                                col,
+                                format="%.1f%%",
+                                help="Variance (% change)"
+                            )
+                    
+                                                                                                                                            # Convert DataFrame to HTML table for full control over styling
+                    # Build table with proper column widths matching Excel
+                    html_rows = []
+                    
+                    for idx, row in df.iterrows():
+                        row_html = '<tr style="background-color: white;">' if idx % 2 == 0 else '<tr style="background-color: #f9f9f9;">'
+                        
+                        for col_idx, value in enumerate(row):
+                            col_name = df.columns[col_idx]
+                            
+                            # Determine column width and style
+                            if col_idx == 0:
+                                # Field Code column - 40% width, left aligned
+                                cell_style = 'width: 40%; text-align: left; padding: 8px; border: 1px solid #ddd; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'
+                                display_value = str(value) if pd.notna(value) and value != '' else ''
+                            elif 'Values' in str(col_name):
+                                # Values column - right aligned, format as number
+                                cell_style = 'width: 12%; text-align: right; padding: 8px; border: 1px solid #ddd; font-family: Consolas, monospace; font-size: 11px;'
+                                if pd.notna(value) and value != '':
+                                    try:
+                                        display_value = f"{float(value):,.0f}"
+                                    except:
+                                        display_value = ''
+                                else:
+                                    display_value = ''
+                            elif 'Var' in str(col_name):
+                                # Var column - right aligned, format as percentage
+                                cell_style = 'width: 8%; text-align: right; padding: 8px; border: 1px solid #ddd; font-family: Consolas, monospace; font-size: 11px;'
+                                if pd.notna(value) and value != '' and value != 0:
+                                    try:
+                                        display_value = f"{float(value):.1f}%"
+                                    except:
+                                        display_value = ''
+                                else:
+                                    display_value = ''
+                            else:
+                                # Other columns
+                                cell_style = 'width: 10%; text-align: center; padding: 8px; border: 1px solid #ddd; font-size: 11px;'
+                                display_value = str(value) if pd.notna(value) and value != '' else ''
+                            
+                            row_html += f'<td style="{cell_style}">{display_value}</td>'
+                        row_html += '</tr>'
+                        html_rows.append(row_html)
+                    
+                    # Render HTML table with scrolling
+                    st.markdown(f"""
+                    <div style="max-height: 500px; overflow-y: auto; overflow-x: auto; border: 1px solid #999; margin-top: 0; background-color: white;">
+                        <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif;">
+                            <tbody>
+                                {''.join(html_rows)}
+                            </tbody>
+                        </table>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                                        # Show stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Rows", len(df))
+                    with col2:
+                        # Count non-empty values in first Values column
+                        values_cols = [col for col in df.columns if 'Values' in col]
+                        if values_cols:
+                            non_empty = df[values_cols[0]].notna().sum()
+                            st.metric("Values Populated", non_empty)
+                    with col3:
+                        # Count variance calculations
+                        var_cols = [col for col in df.columns if 'Var' in col]
+                        if var_cols:
+                            var_count = df[var_cols[0]].notna().sum()
+                            st.metric("Variance Calculated", var_count)
+        
+        wb.close()
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
