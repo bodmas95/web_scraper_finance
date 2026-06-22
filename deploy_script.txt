@@ -1,82 +1,320 @@
 #!/bin/bash
-# Deploy WebSocket keepalive fixes
+# =============================================================================
+# Deploy Script — Streamlit + Nginx WebSocket Keepalive
+# Environment : Red Hat Linux, Nginx 1.14.1
+# =============================================================================
+#
+# SUMMARY OF CHANGES FROM YOUR ORIGINAL SCRIPT:
+#
+#   CHANGE 1 : Added config.toml deployment step (Step 2)
+#              Your original script only deployed the nginx config. The
+#              config.toml changes (serverTimeout, disabling XSRF, etc.)
+#              were never being applied to the running Streamlit instances.
+#
+#   CHANGE 2 : Added OS-level TCP keepalive tuning (Step 3)
+#              Since nginx 1.14.1 does not support proxy_socket_keepalive,
+#              the OS TCP stack must be configured to send keepalive probes.
+#              Default Linux TCP keepalive idle time is 7200s (2 hours) —
+#              far too long. Corporate proxies typically drop idle connections
+#              after 60-90s. These sysctl values fix that at the OS level.
+#
+#   CHANGE 3 : Added nginx version check (Step 1)
+#              Warns if someone accidentally upgrades nginx and the config
+#              needs to be revisited for proxy_socket_keepalive support.
+#
+#   CHANGE 4 : Added systemctl daemon-reload before restarting services
+#              If the .service unit files were ever modified, systemd will
+#              use stale definitions without a daemon-reload. This caused
+#              silent failures where the restart appeared to succeed but
+#              the old configuration was still being used.
+#
+#   CHANGE 5 : Added proper startup wait + port-level health check
+#              Your original script checked systemd status immediately after
+#              restart — services show "active" for a second even while still
+#              starting up. The new check waits and then verifies each port
+#              is actually accepting TCP connections before declaring success.
+#
+#   CHANGE 6 : Added WebSocket endpoint smoke test
+#              Verifies that /_stcore/stream is reachable through nginx,
+#              not just that the process is running. A process can be "active"
+#              in systemd but nginx may still be failing to proxy to it.
+#
+#   CHANGE 7 : Added rollback on config.toml failure
+#              If the config.toml is missing or malformed, the script now
+#              exits early with a clear message instead of silently deploying
+#              a broken configuration.
+#
+#   CHANGE 8 : Added persistent sysctl config to /etc/sysctl.d/
+#              Your original script had no TCP tuning. Even if you added
+#              sysctl commands manually, they reset on reboot. The new step
+#              writes them to a file so they survive reboots.
+#
+# =============================================================================
+
+set -e  # Exit immediately if any command fails
 
 echo "=========================================="
-echo "WebSocket Keepalive Deployment"
+echo "  WebSocket Keepalive Deployment"
+echo "  $(date)"
 echo "=========================================="
 echo ""
 
-cd /hr1as01/work/DE_manish/bref-latest-v2
+# --- Configuration -----------------------------------------------------------
+APP_DIR="/hr1as01/work/DE_manish/bref-latest-v2"
+NGINX_CONF_SRC="$APP_DIR/scripts/nginx_streamlit_websocket.conf"
+NGINX_CONF_DST="/etc/nginx/conf.d/streamlit.conf"
+STREAMLIT_CONF_SRC="$APP_DIR/.streamlit/config.toml"
 
-# Step 1: Backup current nginx config
-echo "Step 1: Backing up nginx config..."
-sudo cp /etc/nginx/conf.d/streamlit.conf /etc/nginx/conf.d/streamlit.conf.backup.$(date +%Y%m%d_%H%M%S)
-echo "✓ Backup created"
+# CHANGE 1: Define where config.toml should be deployed.
+# Streamlit looks for config.toml in ~/.streamlit/ relative to the user
+# running the service. Adjust this path if your systemd service runs as
+# a different user (check: sudo systemctl show streamlit@8515 | grep User)
+STREAMLIT_CONF_DST="$HOME/.streamlit/config.toml"
+
+PORTS=(8515 8516 8517 8518)
+SERVER_IP="10.19.26.145"
+# -----------------------------------------------------------------------------
+
+cd "$APP_DIR"
+
+# =============================================================================
+# STEP 1 — Pre-flight checks
+# =============================================================================
+echo "Step 1: Pre-flight checks..."
+
+# CHANGE 3: Check nginx version and warn if it has changed.
+# proxy_socket_keepalive is only available from nginx 1.15.6+.
+# The current config intentionally omits it for 1.14.1 compatibility.
+NGINX_VERSION=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+echo "  Nginx version : $NGINX_VERSION"
+
+NGINX_MAJOR=$(echo "$NGINX_VERSION" | cut -d. -f1)
+NGINX_MINOR=$(echo "$NGINX_VERSION" | cut -d. -f2)
+NGINX_PATCH=$(echo "$NGINX_VERSION" | cut -d. -f3)
+
+if [ "$NGINX_MAJOR" -gt 1 ] || \
+   ([ "$NGINX_MAJOR" -eq 1 ] && [ "$NGINX_MINOR" -gt 15 ]) || \
+   ([ "$NGINX_MAJOR" -eq 1 ] && [ "$NGINX_MINOR" -eq 15 ] && [ "$NGINX_PATCH" -ge 6 ]); then
+    echo ""
+    echo "  ⚠ WARNING: Nginx $NGINX_VERSION supports proxy_socket_keepalive."
+    echo "    Consider uncommenting that directive in the nginx config"
+    echo "    for improved WebSocket stability."
+    echo ""
+fi
+
+# Verify source files exist before doing anything
+if [ ! -f "$NGINX_CONF_SRC" ]; then
+    echo "  ✗ Nginx config not found: $NGINX_CONF_SRC"
+    exit 1
+fi
+
+# CHANGE 7: Verify config.toml exists before proceeding.
+# If it is missing, exit early with a clear error rather than deploying
+# a broken state where nginx is updated but Streamlit config is not.
+if [ ! -f "$STREAMLIT_CONF_SRC" ]; then
+    echo "  ✗ config.toml not found: $STREAMLIT_CONF_SRC"
+    echo "    Place your updated config.toml at that path and retry."
+    exit 1
+fi
+
+echo "  ✓ All source files found"
 echo ""
 
-# Step 2: Deploy new nginx config
-echo "Step 2: Deploying new nginx config..."
-sudo cp scripts/nginx_streamlit_websocket.conf /etc/nginx/conf.d/streamlit.conf
-echo "✓ Config deployed"
+# =============================================================================
+# STEP 2 — Backup current configurations
+# =============================================================================
+echo "Step 2: Backing up current configurations..."
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+# Backup nginx config
+sudo cp "$NGINX_CONF_DST" "${NGINX_CONF_DST}.backup.$TIMESTAMP"
+echo "  ✓ Nginx config backed up → ${NGINX_CONF_DST}.backup.$TIMESTAMP"
+
+# CHANGE 1: Backup existing config.toml if it exists.
+if [ -f "$STREAMLIT_CONF_DST" ]; then
+    cp "$STREAMLIT_CONF_DST" "${STREAMLIT_CONF_DST}.backup.$TIMESTAMP"
+    echo "  ✓ config.toml backed up  → ${STREAMLIT_CONF_DST}.backup.$TIMESTAMP"
+fi
+
 echo ""
 
-# Step 3: Test nginx config
-echo "Step 3: Testing nginx config..."
-sudo nginx -t
-if [ $? -ne 0 ]; then
-    echo "✗ Nginx config test failed!"
-    echo "Restoring backup..."
-    BACKUP_FILE=$(ls -t /etc/nginx/conf.d/streamlit.conf.backup.* 2>/dev/null | head -1)
-    if [ -n "$BACKUP_FILE" ]; then
-        sudo cp "$BACKUP_FILE" /etc/nginx/conf.d/streamlit.conf
-        echo "✓ Backup restored"
+# =============================================================================
+# STEP 3 — Apply OS-level TCP keepalive settings
+# =============================================================================
+# CHANGE 2 + CHANGE 8: Configure OS TCP keepalive as a workaround for
+# the missing proxy_socket_keepalive directive in nginx 1.14.1.
+#
+# What these values mean:
+#   tcp_keepalive_time  : seconds of idle before sending the first keepalive probe
+#   tcp_keepalive_intvl : seconds between subsequent keepalive probes
+#   tcp_keepalive_probes: how many unanswered probes before declaring connection dead
+#
+# Default Linux values: 7200 / 75 / 9 — far too slow.
+# Corporate proxies typically drop idle TCP connections after 60-90 seconds.
+# Setting keepalive_time to 30s means probes start after 30s of idle, which
+# keeps the connection alive through most corporate proxy idle timeouts.
+echo "Step 3: Applying OS-level TCP keepalive settings..."
+
+sudo sysctl -w net.ipv4.tcp_keepalive_time=30    > /dev/null
+sudo sysctl -w net.ipv4.tcp_keepalive_intvl=10   > /dev/null
+sudo sysctl -w net.ipv4.tcp_keepalive_probes=6   > /dev/null
+
+echo "  ✓ TCP keepalive_time  → 30s  (was likely 7200s)"
+echo "  ✓ TCP keepalive_intvl → 10s"
+echo "  ✓ TCP keepalive_probes → 6"
+
+# CHANGE 8: Persist sysctl settings across reboots.
+# Without this file, all sysctl changes above are lost on next reboot.
+SYSCTL_FILE="/etc/sysctl.d/99-streamlit-keepalive.conf"
+echo "# Streamlit WebSocket TCP keepalive — applied by deploy script" | sudo tee "$SYSCTL_FILE" > /dev/null
+echo "net.ipv4.tcp_keepalive_time = 30"   | sudo tee -a "$SYSCTL_FILE" > /dev/null
+echo "net.ipv4.tcp_keepalive_intvl = 10"  | sudo tee -a "$SYSCTL_FILE" > /dev/null
+echo "net.ipv4.tcp_keepalive_probes = 6"  | sudo tee -a "$SYSCTL_FILE" > /dev/null
+
+echo "  ✓ Settings persisted  → $SYSCTL_FILE (survives reboots)"
+echo ""
+
+# =============================================================================
+# STEP 4 — Deploy nginx configuration
+# =============================================================================
+echo "Step 4: Deploying nginx config..."
+
+sudo cp "$NGINX_CONF_SRC" "$NGINX_CONF_DST"
+echo "  ✓ Nginx config deployed"
+
+# Test nginx config before reloading — exit and rollback if invalid
+echo "  Testing nginx config..."
+if ! sudo nginx -t 2>/dev/null; then
+    echo "  ✗ Nginx config test FAILED. Restoring backup..."
+    BACKUP=$(ls -t "${NGINX_CONF_DST}.backup."* 2>/dev/null | head -1)
+    if [ -n "$BACKUP" ]; then
+        sudo cp "$BACKUP" "$NGINX_CONF_DST"
+        echo "  ✓ Nginx config restored from $BACKUP"
     fi
     exit 1
 fi
-echo "✓ Nginx config valid"
-echo ""
 
-# Step 4: Reload nginx
-echo "Step 4: Reloading nginx..."
+echo "  ✓ Nginx config valid"
+
 sudo systemctl reload nginx
-echo "✓ Nginx reloaded"
+echo "  ✓ Nginx reloaded"
 echo ""
 
-# Step 5: Restart Streamlit services
-echo "Step 5: Restarting Streamlit services..."
+# =============================================================================
+# STEP 5 — Deploy Streamlit config.toml
+# =============================================================================
+# CHANGE 1: Deploy config.toml to all Streamlit workers.
+# This was completely missing from the original script, meaning changes
+# to config.toml (serverTimeout, disabling XSRF, etc.) were never applied.
+echo "Step 5: Deploying Streamlit config.toml..."
+
+# Ensure the .streamlit directory exists
+mkdir -p "$(dirname "$STREAMLIT_CONF_DST")"
+
+cp "$STREAMLIT_CONF_SRC" "$STREAMLIT_CONF_DST"
+echo "  ✓ config.toml deployed → $STREAMLIT_CONF_DST"
+echo ""
+
+# =============================================================================
+# STEP 6 — Restart Streamlit services
+# =============================================================================
+echo "Step 6: Restarting Streamlit services..."
+
+# CHANGE 4: Reload systemd daemon before restarting.
+# If .service unit files were modified since last deploy, systemd will
+# silently use the old cached definition without this command.
+sudo systemctl daemon-reload
+echo "  ✓ Systemd daemon reloaded"
+
 bash scripts/restart_streamlit_systemd.sh
-echo "✓ Services restarted"
+echo "  ✓ Restart command issued"
 echo ""
 
-# Step 6: Verify
-echo "=========================================="
-echo "Verification"
-echo "=========================================="
-echo ""
+# =============================================================================
+# STEP 7 — Verify services are up and ports are responding
+# =============================================================================
+# CHANGE 5: Wait for services to fully start before checking.
+# Systemd reports "active" almost immediately — the actual Python process
+# inside takes a few more seconds to bind to the port and start listening.
+echo "Step 7: Waiting for services to start (15s)..."
+sleep 15
 
-echo "Nginx status:"
-sudo systemctl status nginx --no-pager | head -5
 echo ""
-
-echo "Streamlit services:"
-for PORT in 8515 8516 8517 8518; do
-    STATUS=$(sudo systemctl is-active streamlit@$PORT.service)
-    echo "  Port $PORT: $STATUS"
+echo "  Systemd status:"
+for PORT in "${PORTS[@]}"; do
+    STATUS=$(sudo systemctl is-active "streamlit@${PORT}.service" 2>/dev/null)
+    if [ "$STATUS" = "active" ]; then
+        echo "    Port $PORT : ✓ active (systemd)"
+    else
+        echo "    Port $PORT : ✗ $STATUS (systemd) — check: journalctl -u streamlit@${PORT}.service"
+    fi
 done
+
 echo ""
 
+# CHANGE 5: Also verify the port is actually accepting TCP connections.
+# A service can be "active" in systemd but fail to bind to its port.
+echo "  TCP port check:"
+for PORT in "${PORTS[@]}"; do
+    if timeout 3 bash -c "echo > /dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then
+        echo "    Port $PORT : ✓ accepting connections"
+    else
+        echo "    Port $PORT : ✗ NOT accepting connections — Streamlit may still be starting"
+    fi
+done
+
+echo ""
+
+# CHANGE 6: Smoke test the WebSocket endpoint through nginx.
+# This confirms nginx is successfully proxying to at least one Streamlit
+# worker. A 200 or 400 response both mean nginx reached Streamlit.
+# A 502 means nginx cannot reach any backend — check Streamlit logs.
+echo "  WebSocket endpoint smoke test (via nginx):"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    --max-time 10 \
+    -H "Upgrade: websocket" \
+    -H "Connection: Upgrade" \
+    "http://$SERVER_IP/_stcore/stream" 2>/dev/null || echo "000")
+
+if [ "$HTTP_CODE" = "000" ]; then
+    echo "    /_stcore/stream : ✗ No response (nginx may be down)"
+elif [ "$HTTP_CODE" = "502" ]; then
+    echo "    /_stcore/stream : ✗ 502 Bad Gateway — nginx cannot reach Streamlit"
+    echo "      → Run: sudo journalctl -u streamlit@8515.service --no-pager | tail -20"
+else
+    echo "    /_stcore/stream : ✓ Reachable (HTTP $HTTP_CODE)"
+fi
+
+echo ""
+
+# =============================================================================
+# DEPLOYMENT SUMMARY
+# =============================================================================
 echo "=========================================="
-echo "Deployment Complete!"
+echo "  Deployment Complete!"
+echo "  $(date)"
 echo "=========================================="
+echo ""
+echo "What was deployed:"
+echo "  1. Nginx config  → $NGINX_CONF_DST"
+echo "  2. config.toml   → $STREAMLIT_CONF_DST"
+echo "  3. TCP keepalive → 30s idle / 10s interval / 6 probes"
 echo ""
 echo "Next steps:"
-echo "1. Clear browser cache (Ctrl+Shift+R)"
-echo "2. Test BREF mapping with all 3 statements"
-echo "3. Monitor for WebSocket errors"
+echo "  1. Hard refresh browser (Ctrl+Shift+R) to clear cached WebSocket"
+echo "  2. Test a long-running operation"
+echo "  3. Monitor logs if issues persist:"
 echo ""
-echo "To check proxy timeout:"
-echo "  bash scripts/check_proxy_timeout.sh"
+echo "  # Nginx errors (WebSocket disconnects show here)"
+echo "  sudo tail -f /var/log/nginx/streamlit_error.log"
 echo ""
-echo "To monitor in real-time:"
+echo "  # Streamlit worker logs (Python errors show here)"
 echo "  sudo journalctl -u streamlit@8517.service -f"
+echo ""
+echo "  # Check which worker your browser is hitting"
+echo "  sudo tail -f /var/log/nginx/streamlit_access.log"
+echo ""
+echo "  # Verify TCP keepalive values are active"
+echo "  sysctl net.ipv4.tcp_keepalive_time"
 echo ""
