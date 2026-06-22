@@ -21,7 +21,7 @@ INCOME_STATEMENT_FIELDS = {
     ],
         "calculation": None,
         "is_calculated": False,
-        "indent_level": 0
+        "indent_level":0
     },
 
     "I31 | Other operating revenue": 
@@ -76,6 +76,10 @@ INCOME_STATEMENT_FIELDS = {
         "Manufacturing Costs",
         "Fuel",
         "Power",
+        "Costs and expenses",
+        "Total costs and expenses",
+        "Operating expenses",
+        "COGS",
     ],
         "calculation": None,
         "is_calculated": False,
@@ -1409,7 +1413,12 @@ BALANCE_SHEET_FIELDS = {
 # ==============================================================================
 
 CASH_FLOW_FIELDS = {
-    "ACF19 | Net income": [],
+    "ACF19 | Net income": {
+        "aliases": [],
+        "calculation": None,
+        "is_calculated": False,
+        "indent_level": 0
+    },
 
     "ACF20 | +/-Income linked to associated companies": {
         "aliases": [],
