@@ -342,14 +342,55 @@ class EdgarCrawler(BaseCrawler):
         
         Args:
             ticker: Stock ticker symbol
-            year: Fiscal year (optional)
+            year: Fiscal year (optional) - if provided, filters to specific year
             
         Returns:
             Dictionary with company info and processed financial statements
         """
         try:
             company = Company(ticker)
-            financials = company.get_financials()
+            
+            # If year is specified, get filings for that specific year
+            if year:
+                print(f"Fetching financials for {ticker} - Fiscal Year {year}")
+                # Get 10-K filings and filter by year
+                filings = company.get_filings(form="10-K")
+                
+                # Filter filings to find the one for the specified year
+                target_filing = None
+                for filing in filings:
+                    # Check if filing is for the target year
+                    # edgartools filing objects have fiscal_year or filing_date
+                    filing_year = None
+                    if hasattr(filing, 'fiscal_year'):
+                        filing_year = filing.fiscal_year
+                    elif hasattr(filing, 'filing_date'):
+                        # Extract year from filing date
+                        filing_year = filing.filing_date.year
+                    
+                    if filing_year == year:
+                        target_filing = filing
+                        print(f"  Found 10-K filing for FY{year}")
+                        break
+                
+                if not target_filing:
+                    print(f"No 10-K filing found for {ticker} FY{year}")
+                    # Fallback: try to get any financials and warn user
+                    print(f"  Falling back to most recent financials...")
+                    financials = company.get_financials()
+                else:
+                    # Get financials from the specific filing
+                    try:
+                        financials = target_filing.obj()
+                        if hasattr(financials, 'financials'):
+                            financials = financials.financials
+                    except:
+                        # If that doesn't work, try getting financials directly
+                        financials = company.get_financials()
+            else:
+                # No year specified - get most recent financials
+                print(f"Fetching most recent financials for {ticker}")
+                financials = company.get_financials()
             
             if not financials:
                 print(f"No financials available for {ticker}")
@@ -377,11 +418,32 @@ class EdgarCrawler(BaseCrawler):
             
             print(f"\nProcessing financials for {ticker} ({company.name})...")
             
+                        # Determine actual fiscal year from the data
+            actual_year = year
+            if not actual_year:
+                # Try to extract year from balance sheet columns
+                if balance_sheet_obj is not None:
+                    try:
+                        df = balance_sheet_obj.to_dataframe() if hasattr(balance_sheet_obj, "to_dataframe") else balance_sheet_obj
+                        if df is not None and not df.empty:
+                            # Look for year columns (YYYY-MM-DD format)
+                            import re
+                            for col in df.columns:
+                                year_match = re.search(r'(\d{4})', str(col))
+                                if year_match:
+                                    actual_year = int(year_match.group(1))
+                                    break
+                    except:
+                        pass
+            
+            print(f"  Fiscal Year: {actual_year if actual_year else 'Unknown'}")
+            
             # Process statements with row-level scale matching
             result = {
                 'ticker': ticker,
                 'cik': company.cik,
                 'company_name': company.name,
+                'fiscal_year': actual_year,  # Add fiscal year to result
                 'financials': {
                     company.name: {
                         'balance_sheet': self._process_statement(balance_sheet_obj, 'balance_sheet', company.name),
