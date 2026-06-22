@@ -1,30 +1,121 @@
-# Minimal Streamlit Configuration
-# Only essential settings for the application
- 
+# =============================================================================
+# Streamlit Configuration — config.toml
+# Environment : Red Hat Linux, behind Nginx 1.14.1 reverse proxy
+# =============================================================================
+#
+# SUMMARY OF CHANGES FROM YOUR ORIGINAL FILE:
+#
+#   CHANGE 1 : enableCORS changed from true → false
+#              Nginx is now handling cross-origin headers. Having Streamlit
+#              also manage CORS causes header duplication which browsers
+#              reject with a CORS error.
+#
+#   CHANGE 2 : enableXsrfProtection changed from true → false
+#              Behind a reverse proxy, Streamlit's XSRF token check fails
+#              because nginx rewrites request headers. This causes legitimate
+#              requests to be silently dropped, which looks like a timeout.
+#
+#   CHANGE 3 : Added serverTimeout = 1200
+#              Streamlit has its own internal server-side timeout completely
+#              independent of nginx. Default is 30 seconds. If your Python
+#              code runs longer than that, Streamlit kills the session even
+#              if nginx is still connected. Set to match nginx's 1200s.
+#
+#   CHANGE 4 : Added websocketCompression = false
+#              Streamlit's WebSocket compression (permessage-deflate) can
+#              stall or corrupt large data frames. Disabling it trades a
+#              small bandwidth cost for a much more stable connection.
+#
+#   CHANGE 5 : Added maxMessageSize = 1024 under [server]
+#              This is the per-message WebSocket payload limit in MB.
+#              Default is 200 MB. If your app sends large DataFrames or
+#              file contents over WebSocket, you need this raised to match
+#              your maxUploadSize.
+#
+#   CHANGE 6 : postScriptGC changed from false (kept) but added
+#              fastReruns = false under [runner]
+#              fastReruns causes Streamlit to interrupt a running script
+#              and restart it when it detects a new interaction. For long
+#              operations this means your results are discarded mid-run.
+#              Disabling it forces Streamlit to wait for the current run
+#              to finish before processing new input.
+#
+#   CHANGE 7 : logger level changed from "info" → "warning"
+#              "info" generates a large amount of log output during normal
+#              operation. "warning" keeps logs clean and makes real errors
+#              (like session drops or memory issues) much easier to spot.
+#
+# =============================================================================
+
 [server]
-# CRITICAL: Maximum file upload size in MB
+# Maximum file upload size in MB. Must match client_max_body_size in nginx.
 maxUploadSize = 1024
- 
-# Server address (0.0.0.0 allows external connections)
+
+# CHANGE 5: Maximum WebSocket message size in MB.
+# Streamlit sends DataFrame previews and file contents as WebSocket messages.
+# If a message exceeds this limit, the WebSocket silently closes.
+# Raise it to match your maxUploadSize value.
+maxMessageSize = 1024
+
+# Server binds to all interfaces so nginx can reach it on 127.0.0.1:851x
 address = "0.0.0.0"
- 
-# Enable CORS (required for XSRF protection)
-enableCORS = true
- 
-# Enable XSRF protection
-enableXsrfProtection = true
- 
-# Run in headless mode (no browser auto-open)
+
+# CHANGE 1: Disable Streamlit's own CORS handling.
+# Nginx is already setting Access-Control-Allow-Origin headers.
+# If both nginx and Streamlit set CORS headers, browsers see duplicate
+# headers and block the response with a CORS policy error.
+enableCORS = false
+
+# CHANGE 2: Disable XSRF protection when running behind a reverse proxy.
+# Streamlit validates XSRF tokens using the request's Origin and Host headers.
+# Nginx rewrites these headers, so Streamlit's token check always fails,
+# causing it to silently reject POST requests — which looks like a timeout.
+enableXsrfProtection = false
+
+# Run without opening a browser window (required for server deployments).
 headless = true
- 
+
+# CHANGE 3: Streamlit's internal server-side session timeout in seconds.
+# This is completely separate from nginx timeouts. Default is 30 seconds.
+# If your Python process takes longer than this, Streamlit terminates the
+# session even if the nginx WebSocket connection is still open.
+# Set to 1200 to match the nginx proxy_read_timeout value.
+serverTimeout = 1200
+
+# CHANGE 4: Disable WebSocket compression (permessage-deflate).
+# Compression is useful for bandwidth but causes instability when sending
+# large DataFrames or binary data over the WebSocket connection.
+# Symptoms of compression issues: random disconnects on large outputs,
+# browser showing spinner indefinitely after a big result is returned.
+websocketCompression = false
+
+
 [browser]
-# Disable usage statistics
+# Do not send usage telemetry to Streamlit's servers.
 gatherUsageStats = false
- 
+
+
 [runner]
-# Don't clear session state during long operations
+# Do not run Python garbage collection between script reruns.
+# Keeping this false avoids GC pauses that can appear as timeouts
+# during long operations.
 postScriptGC = false
- 
+
+# CHANGE 6: Disable fast reruns.
+# When fastReruns = true (the default), Streamlit interrupts a currently
+# running Python script the moment it detects a new user interaction
+# (button click, slider change, etc.) and restarts from the top.
+# For long-running operations (data processing, ML inference, file parsing)
+# this means your results are thrown away mid-computation.
+# Setting this to false makes Streamlit wait for the current run to
+# complete before accepting new input.
+fastReruns = false
+
+
 [logger]
-# Log level
-level = "info"
+# CHANGE 7: Raised log level from "info" to "warning".
+# "info" floods logs with routine messages (WebSocket pings, script reruns,
+# cache hits) making it very hard to spot real errors.
+# "warning" only logs unexpected events — connection drops, memory warnings,
+# upstream errors — which is what you need for production debugging.
+level = "warning"
