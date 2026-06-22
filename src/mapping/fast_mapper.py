@@ -92,38 +92,60 @@ def find_fuzzy_match(bref_aliases: List[str], extraction_labels: List[str], thre
     return None
 
 
-def extract_values_from_rows(rows: List[Dict], label: str, available_years: List[int]) -> Dict[str, Any]:
+def extract_values_from_rows(rows: List[Dict], label: str, available_years: List[int], target_year: int = None) -> Dict[str, Any]:
     """
     Extract values for all years from extraction rows for a given label.
+    
+    Args:
+        rows: Extraction rows
+        label: Label to search for
+        available_years: List of years available (sorted ascending)
+        target_year: The primary year (if None, uses max of available_years)
     
     Returns dict with year -> value mapping, including reference_value.
     """
     values = {}
     
+    # Determine target year if not provided
+    if target_year is None and available_years:
+        target_year = max(available_years)
+    
     # Find the row with matching label
     for row in rows:
-        if normalize_label(row.get('label', '')) == normalize_label(label):
-            # Extract all year values from available_years
+        row_label = row.get('label', '')
+        if normalize_label(row_label) == normalize_label(label):
+            print(f"    ✅ Label match: '{label}' matched to row '{row_label}'")
+            print(f"    🔍 Row keys: {list(row.keys())}")
+            print(f"    🔍 Row data sample: {dict(list(row.items())[:10])}")
+            # Extract all year values by finding columns that contain the year
             for year in available_years:
                 year_str = str(year)
-                if year_str in row:
-                    values[year_str] = row[year_str]
+                # Look for column that contains this year (e.g., "2024-12-31 (FY)")
+                for col_name, col_value in row.items():
+                    if year_str in str(col_name) and col_name not in ['label', 'parent', 'parent_abstract_concept', 'Currency', 'Unit']:
+                        values[year_str] = col_value
+                        print(f"    📊 Extracted {label}: {year_str} = {col_value} (from column '{col_name}')")
+                        break
             
             # Also extract reference year (target_year - 1) if available
-            # This ensures we get the year before the target year
-            if available_years:
-                target_year = available_years[0]  # First year is target year (sorted descending)
+            if target_year:
                 reference_year = target_year - 1
                 ref_year_str = str(reference_year)
                 
-                # Check if reference year exists in the row
-                if ref_year_str in row:
-                    values['reference_value'] = row[ref_year_str]
-                    # Also add it to year_values if not already there
-                    if ref_year_str not in values:
-                        values[ref_year_str] = row[ref_year_str]
+                # Look for column that contains reference year
+                for col_name, col_value in row.items():
+                    if ref_year_str in str(col_name) and col_name not in ['label', 'parent', 'parent_abstract_concept', 'Currency', 'Unit']:
+                        values['reference_value'] = col_value
+                        print(f"    📊 Extracted {label}: reference_value ({ref_year_str}) = {col_value} (from column '{col_name}')")
+                        # Also add it to year_values if not already there
+                        if ref_year_str not in values:
+                            values[ref_year_str] = col_value
+                        break
             
             break
+    
+    if not values:
+        print(f"    ⚠️ No values extracted for label '{label}'")
     
     return values
 
@@ -163,9 +185,9 @@ def calculate_field(
     Calculate a derived field value using a formula.
     
     Args:
-        formula: Calculation formula (e.g., "B1+B2-B3")
-        field_values: Dict mapping field_code -> {year -> value}
-        year: Year to calculate for
+        formula: Calculation formula (e.g., "I1-I2")
+        field_values: Dict mapping field_label -> {year -> value}
+        year: Year to calculate for (e.g., "2024")
     
     Returns:
         Calculated value or None if any dependency is missing
@@ -175,12 +197,19 @@ def calculate_field(
     result = 0.0
     
     for operator, field_code in parsed:
-        # Get value for this field and year
-        if field_code not in field_values:
+        # Find the full field label that starts with this code
+        # e.g., "I1" should match "I1 | Total Net sales (turnover)"
+        matched_field = None
+        for field_label in field_values.keys():
+            if field_label.startswith(field_code + " |") or field_label == field_code:
+                matched_field = field_label
+                break
+        
+        if not matched_field:
             print(f"  ⚠️  Missing dependency: {field_code}")
             return None
         
-        field_year_values = field_values[field_code]
+        field_year_values = field_values[matched_field]
         if year not in field_year_values:
             print(f"  ⚠️  Missing year {year} for field {field_code}")
             return None
@@ -218,16 +247,29 @@ def fast_map_fields(
     fields: List[Dict],
     extraction_rows: List[Dict],
     available_years: List[int],
-    field_mappings: Dict[str, Any]
+    field_mappings: Dict[str, Any],
+    target_year: int = None
 ) -> Tuple[List[Dict], List[Dict]]:
     """
     Fast mapping using alias matching and calculations.
+    
+    Args:
+        fields: List of BREF fields to map
+        extraction_rows: Extracted data rows from annual report
+        available_years: List of years available in extraction (sorted ascending)
+        field_mappings: Field definitions with aliases and formulas
+        target_year: The primary year to map (if None, uses max of available_years)
     
     Returns:
         (matched_fields, unmatched_fields)
         - matched_fields: Fields successfully matched via aliases or calculations
         - unmatched_fields: Fields that need LLM mapping
     """
+    # Determine target year if not provided
+    if target_year is None and available_years:
+        target_year = max(available_years)  # Use the most recent year
+    elif target_year is None:
+        target_year = 2024  # Fallback default
     print(f"\n🚀 Fast Mapping: {len(fields)} fields, {len(extraction_rows)} rows, {len(available_years)} years")
     
     # Extract all labels from extraction rows
@@ -246,9 +288,11 @@ def fast_map_fields(
         label = field.get('label', '')
         field_data = field_mappings.get(label, {})
         
-        # Skip calculated fields for now
+        # CRITICAL: Skip calculated fields - they should ONLY be calculated, NEVER matched via aliases
+        # This ensures data integrity by preventing manual extraction from overriding formulas
         if isinstance(field_data, dict) and field_data.get('is_calculated'):
             calculated_fields.append(field)
+            print(f"  ⏭️ Skipping calculated field (will calculate later): {label}")
             continue
         
         # Get aliases
@@ -276,14 +320,14 @@ def fast_map_fields(
         
         if matched_label:
             # Extract values for all years (including reference year)
-            year_values = extract_values_from_rows(extraction_rows, matched_label, available_years)
+            year_values = extract_values_from_rows(extraction_rows, matched_label, available_years, target_year)
             
             if year_values:
                 # Store for calculations (all year values including reference year)
                 field_values[label] = {k: v for k, v in year_values.items() if k != 'reference_value'}
                 
                 # Get target year and reference year values
-                target_year_value = year_values.get(str(available_years[0])) if available_years else None
+                target_year_value = year_values.get(str(target_year))
                 reference_year_value = year_values.get('reference_value')
                 
                 # Create matched field with all year values
@@ -300,12 +344,8 @@ def fast_map_fields(
                 matched_fields.append(matched_field)
                 
                 # Enhanced logging to show both years
-                if available_years and len(available_years) > 0:
-                    target_year = available_years[0]
-                    ref_year = target_year - 1
-                    print(f"  ✅ {label} -> {matched_label} | {target_year}: {target_year_value}, {ref_year}: {reference_year_value}")
-                else:
-                    print(f"  ✅ {label} -> {matched_label}")
+                ref_year = target_year - 1
+                print(f"  ✅ {label} -> {matched_label} | {target_year}: {target_year_value}, {ref_year}: {reference_year_value}")
             else:
                 unmatched_fields.append(field)
         else:
@@ -329,18 +369,18 @@ def fast_map_fields(
         label = field.get('label', '')
         field_data = field_mappings.get(label, {})
         
+        # CRITICAL: Calculated fields should NEVER go to LLM, even if calculation fails
         if not isinstance(field_data, dict):
-            unmatched_fields.append(field)
-            continue
+            print(f"  ⚠️  {label}: Invalid field data (not a dict) - SKIPPING (calculated fields cannot use LLM)")
+            continue  # Don't add to unmatched_fields - just skip it
         
         formula = field_data.get('calculation', '')
         if not formula:
-            unmatched_fields.append(field)
-            continue
+            print(f"  ⚠️  {label}: No calculation formula defined - SKIPPING (calculated fields cannot use LLM)")
+            continue  # Don't add to unmatched_fields - just skip it
         
-        # Calculate for all years
+        # Calculate for all years (skip years with missing data)
         year_values = {}
-        all_years_calculated = True
         
         for year in available_years:
             year_str = str(year)
@@ -348,29 +388,55 @@ def fast_map_fields(
             
             if calculated_value is not None:
                 year_values[year_str] = calculated_value
-            else:
-                all_years_calculated = False
-                break
+            # If calculation fails for this year, just skip it (don't fail the entire field)
         
-        if all_years_calculated and year_values:
+        # If we calculated at least the target year, consider it successful
+        if year_values and str(target_year) in year_values:
             # Store for other calculations
             field_values[label] = year_values
+            
+            # Get reference year value
+            reference_year = target_year - 1
+            reference_value = year_values.get(str(reference_year))
             
             # Create calculated field
             calculated_field = {
                 **field,
                 'matched_label': f'Calculated: {formula}',
                 'year_values': year_values,
-                'target_value': year_values.get(str(available_years[0])) if available_years else None,
+                'target_value': year_values.get(str(target_year)),
+                'reference_value': reference_value,
                 'mapping_confidence': 'high',
                 'mapping_method': 'calculation',
-                'reason': f'Calculated using formula: {formula}'
+                'reason': f'Calculated using formula: {formula}',
+                'is_calculated': True  # Mark as calculated field
             }
             matched_fields.append(calculated_field)
-            print(f"  ✅ {label} = {formula} = {year_values.get(str(available_years[0]))}")
+            print(f"  ✅ {label} = {formula} | {target_year}: {year_values.get(str(target_year))}, {reference_year}: {reference_value}")
         else:
-            print(f"  ❌ {label}: Cannot calculate (missing dependencies)")
-            unmatched_fields.append(field)
+            # CRITICAL: Calculated fields should NEVER go to LLM, even if calculation fails
+            # If we couldn't calculate, just skip it (leave it blank)
+            if not year_values or str(target_year) not in year_values:
+                print(f"  ❌ {label}: Cannot calculate (missing dependencies for target year {target_year}) - SKIPPING (calculated fields cannot use LLM)")
+                # Don't add to unmatched_fields - calculated fields should never use LLM
+            else:
+                # We have target year but not all years - still add as matched
+                print(f"  ⚠️ {label}: Calculated for target year only (some years missing data)")
+                field_values[label] = year_values
+                reference_year = target_year - 1
+                reference_value = year_values.get(str(reference_year))
+                calculated_field = {
+                    **field,
+                    'matched_label': f'Calculated: {formula}',
+                    'year_values': year_values,
+                    'target_value': year_values.get(str(target_year)),
+                    'reference_value': reference_value,
+                    'mapping_confidence': 'high',
+                    'mapping_method': 'calculation',
+                    'reason': f'Calculated using formula: {formula}',
+                    'is_calculated': True
+                }
+                matched_fields.append(calculated_field)
     
     print(f"\n✅ Calculated {len([f for f in matched_fields if f.get('mapping_method') == 'calculation'])} fields")
     print(f"❓ {len(unmatched_fields)} fields still need LLM")
