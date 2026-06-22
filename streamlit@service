@@ -1,0 +1,49 @@
+[Unit]
+Description=Streamlit Application on Port %i
+After=network.target
+
+[Service]
+Type=simple
+User=apnxpdpp
+WorkingDirectory=/hr1as01/work/DE_manish/bref-latest-v2
+Environment="PATH=/hr1as01/work/DE_manish/venv/bin"
+ExecStart=/hr1as01/work/DE_manish/venv/bin/streamlit run streamlit_app.py \
+    --server.port %i \
+    --server.address 0.0.0.0 \
+    --server.headless true \
+    --server.maxUploadSize 1024
+Restart=always
+RestartSec=10
+StandardOutput=append:/hr1as01/work/DE_manish/bref-latest-v2/logs/streamlit_%i.log
+StandardError=append:/hr1as01/work/DE_manish/bref-latest-v2/logs/streamlit_%i.log
+
+# Resource limits
+LimitNOFILE=65536
+
+# CRITICAL: Timeouts for long-running operations (20 minutes = 1200 seconds)
+# This allows mapping 3 statements without timeout
+TimeoutStartSec=1200
+TimeoutStopSec=120
+
+# Memory limits (prevent OOM kills)
+# Set to 4GB per instance (adjust based on your server RAM)
+MemoryMax=4G
+MemoryHigh=3G
+
+# CPU limits (prevent one instance from hogging CPU)
+# Allow up to 200% CPU (2 cores)
+CPUQuota=200%
+
+# Prevent killing during long operations
+# This is CRITICAL for preventing blank screens during mapping
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Restart policy
+# Don't restart too quickly if it keeps crashing
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=600
+
+[Install]
+WantedBy=multi-user.target
