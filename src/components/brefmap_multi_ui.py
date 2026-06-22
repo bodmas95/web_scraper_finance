@@ -34,7 +34,6 @@ except ImportError:
 
 from src.components.brefmap_ui import (
     BREFLiveLogger,
-    _extract_company_name_from_pdf,
     find_year_column,
 )
 
@@ -105,118 +104,6 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
     
     st.markdown("---")
     
-    # Skip old Step 1 configuration entirely
-    if False:  # This block is now disabled
-        st.subheader("Step 1: Configuration")
-        
-        col_name, col_year, col_region = st.columns([3, 1, 1])
-        
-        with col_name:
-            # Auto-extract company name from first available statement
-            auto_company_name = ""
-            extraction_cache_key = f"{key_prefix}_multi_extracted_company_name"
-            
-            if extraction_cache_key in st.session_state:
-                auto_company_name = st.session_state[extraction_cache_key]
-            else:
-                # Get first available statement for company name extraction
-                first_statement = next(iter(extraction_results.values()), {})
-                rows = first_statement.get("rows", [])
-                
-                if rows:
-                    with st.spinner("🔍 Extracting company name from PDF..."):
-                        pdf_bytes = st.session_state.get('uploaded_pdf_bytes')
-                        report_title = st.session_state.get(f'{key_prefix}_extraction_report_title', '')
-                        auto_company_name = _extract_company_name_from_pdf(rows, report_title, pdf_bytes)
-                        st.session_state[extraction_cache_key] = auto_company_name
-            
-            # Company name input
-            manual_override_key = f"{key_prefix}_multi_manual_company_override"
-            if manual_override_key not in st.session_state:
-                st.session_state[manual_override_key] = False
-            
-            if auto_company_name:
-                col_input, col_checkbox, col_reextract = st.columns([3, 0.5, 0.7])
-                with col_input:
-                    if st.session_state[manual_override_key]:
-                        bref_company_name = st.text_input(
-                            "Company Name *",
-                            value=auto_company_name,
-                            key=f"{key_prefix}_multi_bref_company",
-                            help="Company name extracted from PDF using AI"
-                        )
-                    else:
-                        st.text_input(
-                            "Company Name *",
-                            value=auto_company_name,
-                            key=f"{key_prefix}_multi_bref_company_display",
-                            disabled=True,
-                            help="🤖 Auto-extracted from PDF using AI"
-                        )
-                        bref_company_name = auto_company_name
-                
-                with col_checkbox:
-                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-                    st.checkbox(
-                        "Edit",
-                        value=st.session_state[manual_override_key],
-                        key=f"{key_prefix}_multi_override_checkbox",
-                        help="Enable manual editing of company name",
-                        on_change=lambda: setattr(st.session_state, manual_override_key, not st.session_state[manual_override_key])
-                    )
-                
-                with col_reextract:
-                    st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-                    if st.button("🔄", key=f"{key_prefix}_multi_reextract_company", help="Re-extract company name", use_container_width=True):
-                        if extraction_cache_key in st.session_state:
-                            del st.session_state[extraction_cache_key]
-                            st.rerun()
-            else:
-                bref_company_name = st.text_input(
-                    "Company Name *",
-                    value="",
-                    placeholder="Enter Company Name (required)",
-                    key=f"{key_prefix}_multi_bref_company",
-                    help="Company name for BREF mapping (required)"
-                )
-        
-        with col_year:
-            # Get target year from first available result
-            first_result = next(iter(extraction_results.values()), {})
-            default_year = first_result.get("target_year", datetime.now().year)
-            
-            bref_target_year = st.number_input(
-                "Target Year",
-                min_value=2000,
-                max_value=2030,
-                value=default_year,
-                step=1,
-                key=f"{key_prefix}_multi_bref_year"
-            )
-        
-        with col_region:
-            _app_region = st.session_state.get("selected_region", "")
-            _default_idx = 1 if _app_region == "APAC" else 0
-            bref_region = st.selectbox(
-                "Region",
-                options=["US", "APAC"],
-                index=_default_idx,
-                key=f"{key_prefix}_multi_bref_region",
-                help="US uses I-prefix codes, APAC uses Q-prefix codes"
-            )
-        
-            # Model selection
-            from src.extraction.model_config import render_model_selector
-            st.markdown("**Select AI Model for Mapping:**")
-            bref_provider, bref_model_id = render_model_selector(key_prefix=f"{key_prefix}_multi_bref")
-            
-            # Validate company name
-            is_company_name_valid = bref_company_name and bref_company_name.strip() != ""
-            if not is_company_name_valid:
-                st.error("⚠️ Company name is required for BREF mapping")
-            
-            st.markdown("---")
-    
     # ==================================================================
     # STEP 1: Select Statements to Map
     # ==================================================================
@@ -282,7 +169,7 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
     
     if client_type == "New Client":
         # Raw Mapping for New Client
-        st.markdown("### 🚀 New Client Mapping)")
+        st.markdown("### 🚀 New Client Mapping")
         st.markdown("""
         - Uses `field_mappings.py`
         - No Excel template needed
@@ -291,14 +178,7 @@ def render_multi_statement_mapping(extraction_results: dict, key_prefix: str = "
         - LLM only for unmatched fields
         """)
         
-        # Temporarily commented out - always use fast mapping
-        # use_fast_mapping = st.checkbox(
-        #     "Use fast mapping (alias + calculations)",
-        #     value=True,
-        #     key=f"{key_prefix}_multi_use_fast_mapping",
-        #     help="Enable fast alias matching and automatic calculations. Disable to use LLM for all fields."
-        # )
-        use_fast_mapping = True  # Always enabled for now
+        use_fast_mapping = True  # Always enabled
         
         if st.button(
             f"🚀 Start Raw Mapping ({len(selected_statements)} statements)",
@@ -541,24 +421,57 @@ def _map_single_statement_raw(
         all_columns = list(first_row.keys())
         st.write(f"  🔍 DEBUG: All columns in extraction: {all_columns}")
         
-        available_years = [k for k in first_row.keys() if k not in ['label', 'parent'] and k.isdigit()]
-        available_years = sorted([int(y) for y in available_years])  # Sort ascending (2023, 2024, 2025...)
+        # Extract years from column names (handles formats like "2024-12-31 (FY)" or "2024")
+        import re
+        for col_name in first_row.keys():
+            st.write(f"  🔍 DEBUG: Checking column '{col_name}'")
+            if col_name not in ['label', 'parent', 'parent_abstract_concept', 'Currency', 'Unit']:
+                # Try to extract 4-digit year from column name
+                year_match = re.search(r'(\d{4})', str(col_name))
+                if year_match:
+                    year = int(year_match.group(1))
+                    st.write(f"  🔍 DEBUG: Found year {year} in column '{col_name}'")
+                    if year not in available_years and 2000 <= year <= 2030:  # Sanity check
+                        available_years.append(year)
+                        st.write(f"  ✅ DEBUG: Added year {year} to available_years")
         
-        st.write(f"  🔍 DEBUG: Years found (isdigit check): {available_years}")
+        available_years = sorted(available_years)  # Sort ascending (2023, 2024, 2025...)
+        st.write(f"  🔍 DEBUG: Years found (regex extraction): {available_years}")
+        st.write(f"  🔍 DEBUG: Total years extracted: {len(available_years)}")
     
-    # Ensure reference year (target_year - 1) is included in available_years
+    # Check if reference year (target_year - 1) exists in the data
+    # ONLY for SEC EDGAR workflow
     reference_year = target_year - 1
-    if reference_year not in available_years:
-        # Check if reference year exists in the data
-        if rows and str(reference_year) in rows[0]:
-            available_years.append(reference_year)
-            available_years = sorted(available_years)  # Sort ascending
-            st.write(f"  ✅ Added reference year {reference_year} to available_years")
-        else:
+    if key_prefix == "sec" and reference_year not in available_years:
+        # Check if reference year exists in the data by looking for column with that year
+        ref_year_found = False
+        if rows:
+            for col_name in rows[0].keys():
+                if str(reference_year) in str(col_name) and re.search(r'\d{4}', str(col_name)):
+                    # Found a column with reference year
+                    available_years.append(reference_year)
+                    available_years = sorted(available_years)
+                    ref_year_found = True
+                    st.write(f"  ✅ Found reference year {reference_year} in column '{col_name}'")
+                    break
+        
+        if not ref_year_found:
             st.write(f"  ⚠️ Reference year {reference_year} not found in extraction data")
     
-    st.write(f"  📅 Available years: {', '.join(map(str, available_years))}")
-    st.write(f"  📅 Target year: {target_year}, Reference year: {reference_year}")
+    st.write(f"  📅 Available years in data: {', '.join(map(str, available_years))}")
+    st.write(f"  📅 Target year for mapping: {target_year}")
+    st.write(f"  📅 Reference year: {reference_year} {'(found)' if reference_year in available_years else '(not found)'}")
+    
+    # Store column name mapping for year access
+    year_to_column = {}
+    if rows:
+        for col_name in rows[0].keys():
+            year_match = re.search(r'(\d{4})', str(col_name))
+            if year_match:
+                year = int(year_match.group(1))
+                if year in available_years:
+                    year_to_column[year] = col_name
+    st.write(f"  🗂️ Year to column mapping: {year_to_column}")
     
     # Initialize mapped_fields
     mapped_fields = []
@@ -580,10 +493,15 @@ def _map_single_statement_raw(
                 fields=fields,
                 extraction_rows=rows,
                 available_years=available_years,
-                field_mappings=bref_field_dict
+                field_mappings=bref_field_dict,
+                target_year=target_year
             )
             
+            # Add matched fields to mapped_fields
+            mapped_fields.extend(matched_fields)
+            
             # Phase 2: LLM mapping for unmatched fields only
+            llm_mapped_fields = []
             if unmatched_fields:
                 print("\n" + "="*60)
                 print(f"LLM MAPPING ({len(unmatched_fields)} unmatched fields)")
@@ -618,6 +536,39 @@ def _map_single_statement_raw(
                 # Combine results
                 mapped_fields.extend(llm_mapped_fields)
             
+            # CRITICAL FIX: Extract year_values for LLM-mapped fields from extraction rows
+            # This runs for ALL LLM-mapped fields, not just unmatched ones
+            if llm_mapped_fields:
+                print("\n" + "="*60)
+                print("EXTRACTING MULTI-YEAR VALUES FOR LLM-MAPPED FIELDS")
+                print("="*60)
+                
+                for field in llm_mapped_fields:
+                    matched_label = field.get("matched_label")
+                    if matched_label and matched_label != "—":
+                        # Find the matching row in extraction_rows
+                        matching_row = None
+                        for row in rows:
+                            if row.get("label", "").lower().strip() == matched_label.lower().strip():
+                                matching_row = row
+                                break
+                        
+                        if matching_row:
+                            # Extract values for all available years
+                            year_values = {}
+                            for year in available_years:
+                                year_col = year_to_column.get(year)
+                                if year_col and year_col in matching_row:
+                                    year_value = matching_row[year_col]
+                                    if year_value is not None:
+                                        year_values[str(year)] = year_value
+                            
+                            if year_values:
+                                field["year_values"] = year_values
+                                print(f"  ✅ Extracted {len(year_values)} year values for '{field.get('label')}': {year_values}")
+                            else:
+                                print(f"  ⚠️  No year values found for '{field.get('label')}'")
+            
             print("\n" + "="*60)
             print("MAPPING COMPLETE")
             print("="*60)
@@ -633,21 +584,72 @@ def _map_single_statement_raw(
         get_calculated_fields
     )
     
-    print("\n" + "="*60)
-    print("CALCULATING DERIVED FIELDS")
-    print("="*60)
+    # Create a new expander for calculation logs
+    with st.expander("🧮 Calculation Logs (Multi-Year)", expanded=True):
+        calc_log_placeholder = st.empty()
+        calc_logger = BREFLiveLogger(calc_log_placeholder)
+        
+        with contextlib.redirect_stdout(calc_logger):
+            print("\n" + "="*60)
+            print("CALCULATING DERIVED FIELDS FOR ALL YEARS")
+            print("="*60)
+            
+            # Calculate for ALL available years, not just target year
+            all_years_calculated = {}
+            
+            for year in available_years:
+                year_str = str(year)
+                print(f"\n  Calculating for year {year}...")
+                
+                # Convert mapped_fields list to dict for this year
+                mapped_dict_year = {}
+                for field in mapped_fields:
+                    label = field.get("label")
+                    # Try to get value for this specific year
+                    year_value = None
+                    if "year_values" in field and field["year_values"]:
+                        year_value = field["year_values"].get(year_str)
+                    elif year == target_year:
+                        year_value = field.get("target_value")
+                    
+                    if label and year_value is not None:
+                        mapped_dict_year[label] = year_value
+                
+                # Calculate all derived fields for this year
+                mapped_with_calculated_year = calculate_all_fields(
+                    mapped_values=mapped_dict_year,
+                    statement_type=statement_type,
+                    region=region
+                )
+                
+                # CRITICAL FIX: Update mapped_dict_year with calculated values
+                # This allows dependent calculations to use newly calculated fields
+                mapped_dict_year.update(mapped_with_calculated_year)
+                
+                # Store calculated values for this year
+                # IMPORTANT: Strip * prefix from calculated field keys for consistent lookup
+                for field_key, value in mapped_with_calculated_year.items():
+                    # Remove * prefix if present (calculated fields are marked with *)
+                    clean_key = field_key.lstrip("*")
+                    if clean_key not in all_years_calculated:
+                        all_years_calculated[clean_key] = {}
+                    all_years_calculated[clean_key][year_str] = value
+            
+            # DEBUG: Show what's in all_years_calculated
+            print(f"\n  DEBUG: all_years_calculated keys: {list(all_years_calculated.keys())[:10]}...")  # Show first 10
+            for key in list(all_years_calculated.keys())[:3]:  # Show details for first 3
+                print(f"  DEBUG: all_years_calculated['{key}'] = {all_years_calculated[key]}")
     
-    # Convert mapped_fields list to dict for calculation
-    mapped_dict = {}
+    # Use target year calculations for the final ordered output
+    mapped_dict_target = {}
     for field in mapped_fields:
         label = field.get("label")
         target_value = field.get("target_value")
         if label and target_value is not None:
-            mapped_dict[label] = target_value
+            mapped_dict_target[label] = target_value
     
-    # Calculate all derived fields
     mapped_with_calculated = calculate_all_fields(
-        mapped_values=mapped_dict,
+        mapped_values=mapped_dict_target,
         statement_type=statement_type,
         region=region
     )
@@ -662,6 +664,45 @@ def _map_single_statement_raw(
     # Convert back to list format for storage
     # Merge calculated fields back into mapped_fields
     calculated_fields_dict = get_calculated_fields(statement_type, region)
+    
+    # CRITICAL FIX: Ensure ALL calculated fields appear in output, even if they couldn't be calculated
+    # First, add all calculated fields that are NOT in mapped_fields yet
+    existing_labels = {f.get("label") for f in mapped_fields}
+    for calc_field_label in calculated_fields_dict.keys():
+        if calc_field_label not in existing_labels:
+            # Check if we have calculated values for this field in all_years_calculated
+            calc_year_values = all_years_calculated.get(calc_field_label, {})
+            
+            if calc_year_values:
+                # We have calculated values! Add them
+                reference_year = target_year - 1
+                reference_value = calc_year_values.get(str(reference_year))
+                target_value = calc_year_values.get(str(target_year))
+                
+                mapped_fields.append({
+                    "label": calc_field_label,
+                    "target_value": target_value,
+                    "year_values": calc_year_values,
+                    "reference_value": reference_value,
+                    "mapping_method": "calculation",
+                    "mapping_confidence": "high",
+                    "matched_label": "(Calculated)",
+                    "reason": f"Calculated using formula: {calculated_fields_dict[calc_field_label].get('calculation', 'N/A')}",
+                    "is_calculated": True
+                })
+            else:
+                # No calculated values - add as blank
+                mapped_fields.append({
+                    "label": calc_field_label,
+                    "target_value": None,
+                    "year_values": {},
+                    "reference_value": None,
+                    "mapping_method": "unmapped",
+                    "mapping_confidence": "low",
+                    "matched_label": "—",
+                    "reason": f"Could not calculate (missing dependencies). Formula: {calculated_fields_dict[calc_field_label].get('calculation', 'N/A')}",
+                    "is_calculated": True
+                })
     
     for field_key, value in final_ordered.items():
         # Check if this is a calculated field (starts with *)
@@ -680,9 +721,31 @@ def _map_single_statement_raw(
             # This is a calculated field with a value
             if existing_field:
                 # Field was both extracted AND calculated
-                # Update with validation info
+                # Update with validation info AND year_values
                 existing_field["target_value"] = value
                 existing_field["is_calculated"] = True
+                
+                # CRITICAL FIX: Update year_values with calculated values for ALL years
+                calc_year_values = all_years_calculated.get(clean_key, {})
+                print(f"  DEBUG: Field '{clean_key}' - calc_year_values from all_years_calculated: {calc_year_values}")
+                
+                if calc_year_values:
+                    # Merge calculated year_values with existing year_values
+                    if "year_values" not in existing_field:
+                        existing_field["year_values"] = {}
+                    
+                    print(f"  DEBUG: Before update - existing year_values: {existing_field.get('year_values', {})}")
+                    existing_field["year_values"].update(calc_year_values)
+                    print(f"  DEBUG: After update - existing year_values: {existing_field['year_values']}")
+                    
+                    # Also update reference_value
+                    reference_year = target_year - 1
+                    reference_value = calc_year_values.get(str(reference_year))
+                    if reference_value is not None:
+                        existing_field["reference_value"] = reference_value
+                        print(f"  DEBUG: Updated reference_value to: {reference_value}")
+                else:
+                    print(f"  WARNING: No calculated year values found for '{clean_key}' in all_years_calculated")
                 
                 if validation_status == "VALIDATED":
                     # Extracted and calculated values match
@@ -703,9 +766,19 @@ def _map_single_statement_raw(
             else:
                 # Add new calculated field (not extracted)
                 confidence = "high" if validation_status == "CALCULATED_ONLY" else "medium"
+                
+                # Get year_values for this calculated field from all_years_calculated
+                calc_year_values = all_years_calculated.get(clean_key, {})
+                
+                # Also get reference year value
+                reference_year = target_year - 1
+                reference_value = calc_year_values.get(str(reference_year))
+                
                 mapped_fields.append({
                     "label": clean_key,
                     "target_value": value,
+                    "year_values": calc_year_values,  # Add year_values for all years
+                    "reference_value": reference_value,  # Add reference year value
                     "mapping_method": "calculation",
                     "mapping_confidence": confidence,
                     "matched_label": "(Calculated)",
@@ -724,8 +797,8 @@ def _map_single_statement_raw(
                 "is_calculated": False
             })
     
-    print(f"\n✅ Final output: {len(final_ordered)} fields (including calculated and unmapped)")
-    print("="*60)
+            print(f"\n✅ Final output: {len(final_ordered)} fields (including calculated and unmapped)")
+            print("="*60)
     
     # ==================================================================
     # REORDER FIELDS - Sort according to template order
@@ -988,10 +1061,17 @@ def _render_combined_download(mapping_keys: list, statement_types: list, key_pre
     
     # Show summary
     st.info(f"✅ Ready to download {len(statement_types)} statement(s): {', '.join([STATEMENT_LABELS.get(s, s) for s in statement_types])}")
+    
+    # ==================================================================
+    # SUMMARY GENERATOR SECTION - Use the consolidated function from brefmap_ui
+    # ==================================================================
+    from src.components.brefmap_ui import _check_and_show_consolidated_download
+    _check_and_show_consolidated_download(key_prefix)
 
 
 def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_prefix: str):
-    """Display mapping results for a single statement in a tab."""
+
+    """Display mapping results for a single statement in a tab"""
     
     if mapping_key not in st.session_state.bref_mapping_results:
         st.info("No mapping results available")
