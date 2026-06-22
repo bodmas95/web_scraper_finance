@@ -60,7 +60,8 @@ def parse_calculation_formula(formula: str) -> List[tuple]:
 def calculate_field_value(
     formula: str,
     mapped_values: Dict[str, Any],
-    field_mappings: Dict[str, Dict]
+    field_mappings: Dict[str, Dict],
+    treat_missing_as_zero: bool = True
 ) -> Optional[float]:
     """
     Calculate the value of a field based on its formula and mapped values.
@@ -69,46 +70,63 @@ def calculate_field_value(
         formula: Calculation formula (e.g., "I1-I2")
         mapped_values: Dictionary of {field_code: value} from mapping
         field_mappings: Field definitions with metadata
+        treat_missing_as_zero: If True, treat missing fields as 0 (default: True)
+                               If False, return None if any field is missing
     
     Returns:
         Calculated value as float, or None if calculation fails
     
     Example:
-        formula = "I1-I2"
-        mapped_values = {"I1": 1000, "I2": 300}
-        Returns: 700.0
+        formula = "I30+I31+I79+I47"
+        mapped_values = {"I30 | Sales": 1000}  # Only I30 found
+        treat_missing_as_zero = True
+        Returns: 1000.0  # I31, I79, I47 treated as 0
     """
     try:
         operations = parse_calculation_formula(formula)
         result = 0.0
+        found_any_value = False  # Track if we found at least one value
         
         for field_code, operator in operations:
             # Extract just the code part (e.g., "I1" from "I1 | Sales")
             field_code_clean = field_code.strip()
             
             # Find the full field key in mapped_values
-            # mapped_values keys are like "I30 | Sales (turnover)"
+            # mapped_values keys are like "I30 | Sales (turnover)" or "*I30 | Sales (turnover)" (calculated)
             value = None
             for key in mapped_values.keys():
-                if key.startswith(field_code_clean + " |") or key == field_code_clean:
+                # Remove * prefix if present for comparison
+                key_clean = key.lstrip("*")
+                if key_clean.startswith(field_code_clean + " |") or key_clean == field_code_clean:
                     value = mapped_values[key]
                     break
             
-            # If field not found in mapped values, try to find it in field_mappings
-            if value is None:
-                for full_key in field_mappings.keys():
-                    if full_key.startswith(field_code_clean + " |"):
-                        # Field exists but not mapped - cannot calculate
-                        return None
-            
             # Convert value to float
-            if value is None:
-                return None
+            numeric_value = 0.0  # Default to 0 if missing
             
-            try:
-                numeric_value = float(value)
-            except (ValueError, TypeError):
-                return None
+            if value is not None:
+                try:
+                    numeric_value = float(value)
+                    found_any_value = True  # Found at least one value
+                except (ValueError, TypeError):
+                    # Value exists but can't convert to float
+                    if not treat_missing_as_zero:
+                        return None
+                    numeric_value = 0.0
+            else:
+                # Value not found
+                if not treat_missing_as_zero:
+                    # Check if field exists in template
+                    field_exists = False
+                    for full_key in field_mappings.keys():
+                        if full_key.startswith(field_code_clean + " |") or full_key == field_code_clean:
+                            field_exists = True
+                            break
+                    
+                    if field_exists:
+                        # Field exists in template but not mapped/calculated yet
+                        return None
+                # else: treat as 0 (default behavior)
             
             # Apply operation
             if operator == '+':
@@ -121,6 +139,11 @@ def calculate_field_value(
                 if numeric_value == 0:
                     return None  # Division by zero
                 result /= numeric_value
+        
+        # Only return result if we found at least one value
+        # This prevents calculating 0+0+0 = 0 when all fields are missing
+        if not found_any_value:
+            return None
         
         return result
     
@@ -191,62 +214,96 @@ def calculate_all_fields(
     calculated_fields = get_calculated_fields(statement_type, region)
     result = mapped_values.copy()
     
-    # Calculate each field
-    for field_key, field_def in calculated_fields.items():
-        formula = field_def.get("calculation")
-        if not formula:
-            continue
+    # ITERATIVE CALCULATION: Keep looping until no more fields can be calculated
+    # This handles dependencies between calculated fields (e.g., Q47 depends on Q93)
+    max_iterations = 10  # Prevent infinite loops
+    iteration = 0
+    fields_calculated_this_iteration = 1  # Start with 1 to enter loop
+    
+    while fields_calculated_this_iteration > 0 and iteration < max_iterations:
+        fields_calculated_this_iteration = 0
+        iteration += 1
         
-        # Check if this field was already mapped from the annual report
-        extracted_value = None
-        for key in mapped_values.keys():
-            if key == field_key or key.startswith(field_key + " |"):
-                extracted_value = mapped_values[key]
-                break
+        # Try to calculate each field
+        for field_key, field_def in calculated_fields.items():
+            formula = field_def.get("calculation")
+            if not formula:
+                continue
+            
+            # Skip if already calculated in a previous iteration
+            if ("*" + field_key) in result:
+                continue
         
-        # Calculate value using formula
-        calculated_value = calculate_field_value(formula, result, statement_fields)
-        
-        if calculated_value is not None:
-            if extracted_value is not None:
-                # CASE 1: Field exists in both extracted and calculated
-                try:
-                    extracted_float = float(extracted_value)
-                    
-                    # Compare values
-                    diff_percent = abs((calculated_value - extracted_float) / extracted_float * 100) if extracted_float != 0 else 0
-                    
-                    if diff_percent <= tolerance_percent:
-                        # Values match within tolerance - use extracted value, mark as validated
-                        print(f"✓ {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MATCH")
-                        result["*" + field_key] = extracted_float  # Use extracted value
-                        result[field_key + "_validation"] = "VALIDATED"
-                    else:
-                        # Values don't match - flag for review
-                        print(f"⚠️ {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MISMATCH")
-                        result["*" + field_key] = extracted_float  # Still use extracted value as primary
-                        result[field_key + "_calculated"] = calculated_value  # Store calculated value for reference
-                        result[field_key + "_validation"] = "MISMATCH"
-                        result[field_key + "_diff_percent"] = diff_percent
+            # Check if this field was already mapped from the annual report
+            extracted_value = None
+            for key in mapped_values.keys():
+                if key == field_key or key.startswith(field_key + " |"):
+                    extracted_value = mapped_values[key]
+                    break
+            
+            # Calculate value using formula (treat missing fields as 0)
+            calculated_value = calculate_field_value(formula, result, statement_fields, treat_missing_as_zero=True)
+            
+            if calculated_value is not None:
+                fields_calculated_this_iteration += 1
                 
-                except (ValueError, TypeError):
-                    # Extracted value is not numeric - use calculated value
-                    print(f"✓ {field_key}: Extracted value invalid, using calculated={calculated_value}")
+                if extracted_value is not None:
+                    # CASE 1: Field exists in both extracted and calculated
+                    try:
+                        extracted_float = float(extracted_value)
+                        
+                        # Compare values
+                        diff_percent = abs((calculated_value - extracted_float) / extracted_float * 100) if extracted_float != 0 else 0
+                        
+                        if diff_percent <= tolerance_percent:
+                            # Values match within tolerance - use extracted value, mark as validated
+                            print(f"✓ {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MATCH")
+                            result["*" + field_key] = extracted_float  # Use extracted value
+                            result[field_key + "_validation"] = "VALIDATED"
+                        else:
+                            # Values don't match - flag for review
+                            print(f"⚠️ {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MISMATCH")
+                            result["*" + field_key] = extracted_float  # Still use extracted value as primary
+                            result[field_key + "_calculated"] = calculated_value  # Store calculated value for reference
+                            result[field_key + "_validation"] = "MISMATCH"
+                            result[field_key + "_diff_percent"] = diff_percent
+                    
+                    except (ValueError, TypeError):
+                        # Extracted value is not numeric - use calculated value
+                        print(f"✓ {field_key}: Extracted value invalid, using calculated={calculated_value}")
+                        result["*" + field_key] = calculated_value
+                        result[field_key + "_validation"] = "CALCULATED_ONLY"
+                        # CRITICAL: Also store without * prefix for lookups
+                        result[field_key] = calculated_value
+                else:
+                    # CASE 2: Field not extracted - use calculated value
                     result["*" + field_key] = calculated_value
                     result[field_key + "_validation"] = "CALCULATED_ONLY"
+                    print(f"✓ Calculated {field_key}: {calculated_value} (formula: {formula})")
+                    
+                    # CRITICAL: Also store without * prefix for lookups
+                    result[field_key] = calculated_value
             else:
-                # CASE 2: Field not extracted - use calculated value
-                result["*" + field_key] = calculated_value
-                result[field_key + "_validation"] = "CALCULATED_ONLY"
-                print(f"✓ Calculated {field_key}: {calculated_value} (formula: {formula})")
-        else:
-            # Could not calculate
+                # Could not calculate in this iteration - will try again in next iteration
+                pass
+    
+    # After all iterations, mark fields that couldn't be calculated
+    for field_key, field_def in calculated_fields.items():
+        if ("*" + field_key) not in result:
+            # Check if extracted value exists
+            extracted_value = None
+            for key in mapped_values.keys():
+                if key == field_key or key.startswith(field_key + " |"):
+                    extracted_value = mapped_values[key]
+                    break
+            
             if extracted_value is not None:
                 # Use extracted value even though we couldn't validate it
                 print(f"⚠️ {field_key}: Using extracted value (could not calculate for validation)")
                 result["*" + field_key] = extracted_value
                 result[field_key + "_validation"] = "EXTRACTED_ONLY"
             else:
+                formula = field_def.get("calculation", "")
                 print(f"✗ Could not calculate {field_key} (formula: {formula}) - missing dependencies")
     
     return result
@@ -360,8 +417,8 @@ def recalculate_dependent_fields(
         if not formula:
             continue
         
-        # Recalculate the value
-        new_value = calculate_field_value(formula, updated_values, statement_fields)
+        # Recalculate the value (treat missing fields as 0)
+        new_value = calculate_field_value(formula, updated_values, statement_fields, treat_missing_as_zero=True)
         
         if new_value is not None:
             recalculated[field_key] = new_value
