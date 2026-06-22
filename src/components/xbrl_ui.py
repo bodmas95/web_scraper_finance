@@ -586,6 +586,245 @@ def _save_labeled_json_locally(fy_dir: Path, lei: str, filing_id: str, fy_label:
         return None
 
 
+def _save_xbrl_consolidated_to_mongo(company_name: str, lei: str, region: str,
+                                      consolidated_data: dict, financial_data: dict,
+                                      parsed_labels: list, all_facts: list) -> bool:
+    """
+    Save consolidated XBRL data to MongoDB reports collection for caching.
+    
+    Args:
+        company_name: Company name
+        lei: LEI identifier
+        region: Region (APAC, EMEA, US)
+        consolidated_data: Consolidated DataFrames by statement type
+        financial_data: Financial data by fiscal year
+        parsed_labels: List of parsed FY labels
+        all_facts: List of all XBRL facts
+    
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    try:
+        from src.cache import get_mongo_db, get_mongo_client
+        import pickle
+        import json
+        from gridfs import GridFS
+        
+        db = get_mongo_db()
+        client = get_mongo_client()
+        reports_collection = db['reports']
+        fs = GridFS(db)
+        
+        # Create unique cache key
+        cache_key = f"xbrl_consolidated_{company_name}_{lei}_{region}".replace(" ", "_").lower()
+        
+        # Serialize DataFrames to JSON-compatible format
+        consolidated_serialized = {}
+        for stmt_type, df in consolidated_data.items():
+            if df is not None:
+                consolidated_serialized[stmt_type] = df.to_dict(orient='records')
+        
+        financial_serialized = {}
+        for fy_label, statements in financial_data.items():
+            financial_serialized[fy_label] = {}
+            for stmt_type, df in statements.items():
+                if df is not None:
+                    financial_serialized[fy_label][stmt_type] = df.to_dict(orient='records')
+        
+        # Prepare full data
+        full_data = {
+            "consolidated_data": consolidated_serialized,
+            "financial_data": financial_serialized,
+            "parsed_labels": parsed_labels,
+            "all_facts": all_facts,
+        }
+        
+        # Check document size (MongoDB has 16MB limit)
+        data_json = json.dumps(full_data, default=str)
+        doc_size_mb = len(data_json) / (1024 * 1024)
+        print(f"📊 Document size: {doc_size_mb:.2f} MB")
+        
+        # Delete old GridFS file if exists
+        existing_doc = reports_collection.find_one({"cache_key": cache_key})
+        if existing_doc and existing_doc.get("gridfs_file_id"):
+            try:
+                from bson import ObjectId
+                fs.delete(ObjectId(existing_doc["gridfs_file_id"]))
+                print(f"🗑️ Deleted old GridFS file")
+            except Exception as e:
+                print(f"⚠️ Could not delete old GridFS file: {e}")
+        
+        if doc_size_mb > 15:
+            # Document too large - use GridFS
+            print(f"📦 Document large ({doc_size_mb:.2f} MB), using GridFS")
+            import streamlit as st
+            st.info(f"📦 Saving large cache to GridFS ({doc_size_mb:.2f} MB)...")
+            
+            # Save to GridFS
+            gridfs_file_id = fs.put(
+                data_json.encode('utf-8'),
+                filename=f"{cache_key}_data.json",
+                metadata={
+                    "cache_key": cache_key,
+                    "company_name": company_name,
+                    "lei": lei,
+                    "region": region,
+                    "content_type": "application/json"
+                }
+            )
+            
+            # Save metadata document with GridFS reference
+            doc = {
+                "cache_key": cache_key,
+                "company_name": company_name,
+                "lei": lei,
+                "region": region,
+                "report_type": "xbrl_consolidated",
+                "storage_type": "gridfs",
+                "gridfs_file_id": str(gridfs_file_id),
+                "size_mb": doc_size_mb,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+        else:
+            # Document small enough - save directly
+            print(f"💾 Document small ({doc_size_mb:.2f} MB), saving directly")
+            doc = {
+                "cache_key": cache_key,
+                "company_name": company_name,
+                "lei": lei,
+                "region": region,
+                "report_type": "xbrl_consolidated",
+                "storage_type": "direct",
+                "consolidated_data": consolidated_serialized,
+                "financial_data": financial_serialized,
+                "parsed_labels": parsed_labels,
+                "all_facts": all_facts,
+                "size_mb": doc_size_mb,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+        
+        # Upsert (update if exists, insert if not)
+        reports_collection.update_one(
+            {"cache_key": cache_key},
+            {"$set": doc},
+            upsert=True
+        )
+        
+        print(f"✅ Saved consolidated XBRL to MongoDB: {cache_key}")
+        import streamlit as st
+        st.success(f"💾 Saved consolidated data to MongoDB cache")
+        return True
+        
+    except Exception as e:
+        print(f"⚠️ Failed to save consolidated XBRL to MongoDB: {e}")
+        import traceback
+        traceback.print_exc()
+        import streamlit as st
+        st.error(f"⚠️ Failed to save to MongoDB cache: {e}")
+        return False
+
+
+def _load_xbrl_consolidated_from_mongo(company_name: str, lei: str, region: str) -> dict:
+    """
+    Load consolidated XBRL data from MongoDB reports collection.
+    
+    Args:
+        company_name: Company name
+        lei: LEI identifier
+        region: Region (APAC, EMEA, US)
+    
+    Returns:
+        Dict with 'consolidated_data', 'financial_data', 'parsed_labels', 'all_facts'
+        or None if not found
+    """
+    try:
+        from src.cache import get_mongo_db
+        import json
+        from gridfs import GridFS
+        
+        db = get_mongo_db()
+        reports_collection = db['reports']
+        fs = GridFS(db)
+        
+        # Create cache key
+        cache_key = f"xbrl_consolidated_{company_name}_{lei}_{region}".replace(" ", "_").lower()
+        
+        # Find document
+        doc = reports_collection.find_one({"cache_key": cache_key})
+        
+        if doc:
+            print(f"✅ Loaded consolidated XBRL from MongoDB cache: {cache_key}")
+            storage_type = doc.get("storage_type", "direct")
+            
+            if storage_type == "gridfs":
+                # Load from GridFS
+                print(f"📦 Loading from GridFS (size: {doc.get('size_mb', 0):.2f} MB)")
+                from bson import ObjectId
+                gridfs_file_id = doc.get("gridfs_file_id")
+                
+                if not gridfs_file_id:
+                    print(f"⚠️ GridFS file ID not found in document")
+                    return None
+                
+                # Read from GridFS
+                grid_out = fs.get(ObjectId(gridfs_file_id))
+                data_json = grid_out.read().decode('utf-8')
+                full_data = json.loads(data_json)
+                
+                # Deserialize DataFrames from JSON format
+                consolidated_data = {}
+                for stmt_type, records in full_data.get('consolidated_data', {}).items():
+                    consolidated_data[stmt_type] = pd.DataFrame(records)
+                
+                financial_data = {}
+                for fy_label, statements in full_data.get('financial_data', {}).items():
+                    financial_data[fy_label] = {}
+                    for stmt_type, records in statements.items():
+                        financial_data[fy_label][stmt_type] = pd.DataFrame(records)
+                
+                return {
+                    "consolidated_data": consolidated_data,
+                    "financial_data": financial_data,
+                    "parsed_labels": set(full_data.get('parsed_labels', [])),
+                    "all_facts": full_data.get('all_facts', []),
+                    "cached_at": doc.get('updated_at')
+                }
+            else:
+                # Load directly from document
+                print(f"💾 Loading from document (size: {doc.get('size_mb', 0):.2f} MB)")
+                
+                # Deserialize DataFrames from JSON format
+                consolidated_data = {}
+                for stmt_type, records in doc.get('consolidated_data', {}).items():
+                    consolidated_data[stmt_type] = pd.DataFrame(records)
+                
+                financial_data = {}
+                for fy_label, statements in doc.get('financial_data', {}).items():
+                    financial_data[fy_label] = {}
+                    for stmt_type, records in statements.items():
+                        financial_data[fy_label][stmt_type] = pd.DataFrame(records)
+                
+                return {
+                    "consolidated_data": consolidated_data,
+                    "financial_data": financial_data,
+                    "parsed_labels": set(doc.get('parsed_labels', [])),
+                    "all_facts": doc.get('all_facts', []),
+                    "cached_at": doc.get('updated_at')
+                }
+        else:
+            print(f"⚠️ No cached consolidated XBRL found in MongoDB: {cache_key}")
+            # Don't show UI message here - it's expected on first run
+            return None
+            
+    except Exception as e:
+        print(f"⚠️ Failed to load consolidated XBRL from MongoDB: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def parse_xbrl_filing(filing: dict, lei: str, api_base: str, silent: bool = False, company_name: str = ""):
     """
     Parse a filing using the general XBRL-only approach (no HTML download).
@@ -1113,6 +1352,23 @@ def render_xbrl_section(company, lei):
                 else:
                     # Hide individual filing display when consolidating
                     st.session_state.show_individual_filing = False
+                    
+                    # Try to load from MongoDB cache first
+                    company_name = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else st.session_state.lei
+                    region = st.session_state.get("selected_region", "EMEA")
+                    
+                    cached_data = _load_xbrl_consolidated_from_mongo(company_name, st.session_state.lei, region)
+                    
+                    if cached_data:
+                        # Use cached data
+                        st.info(f"📦 Loaded consolidated data from cache (saved at {cached_data.get('cached_at', 'unknown time')})")
+                        st.session_state.consolidated_data = cached_data['consolidated_data']
+                        st.session_state.financial_data = cached_data['financial_data']
+                        st.session_state.parsed_labels = cached_data['parsed_labels']
+                        st.session_state.all_facts = cached_data['all_facts']
+                        st.success(f"✅ Loaded {len(st.session_state.parsed_labels)} fiscal year(s) from cache")
+                        st.rerun()
+                    # If no cache, continue with normal parsing below
 
                     # Check which filings need parsing
                     unparsed_filings = []
@@ -1209,6 +1465,19 @@ def render_xbrl_section(company, lei):
 
                     consolidated = xbrl_parser.build_consolidated(all_facts_by_fy)
                     st.session_state.consolidated_data = consolidated
+                    
+                    # Save to MongoDB cache
+                    company_name = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else st.session_state.lei
+                    region = st.session_state.get("selected_region", "EMEA")
+                    _save_xbrl_consolidated_to_mongo(
+                        company_name=company_name,
+                        lei=st.session_state.lei,
+                        region=region,
+                        consolidated_data=consolidated,
+                        financial_data=st.session_state.financial_data,
+                        parsed_labels=list(st.session_state.parsed_labels),
+                        all_facts=st.session_state.all_facts
+                    )
 
                     st.success(f"Consolidated {len(st.session_state.parsed_labels)} fiscal year(s)")
                     st.rerun()
