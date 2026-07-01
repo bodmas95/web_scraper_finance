@@ -362,7 +362,8 @@ def render_hkex_section(company, hkex_ticker):
                                         _f.write(pdf_bytes)
 
                                                                         # ── Parallel extraction ──────────────────────
-                                    from src.extraction.parallel import extract_statements_parallel
+                                    # Use cache wrapper for extraction
+                                    from src.cache.hkex_cache_wrapper import extract_hkex_with_cache
                                     
                                     _company_name = bref_company_name if 'bref_company_name' in locals() else company.get('name', 'Unknown')
                                     _target_yr = bref_target_year if 'bref_target_year' in locals() else (fiscal_year if fiscal_year != 'N/A' else datetime.now().year)
@@ -370,16 +371,18 @@ def render_hkex_section(company, hkex_ticker):
                                                                         # Show extraction progress with status
                                     with st.status(f"🔍 Extracting {len(selected_types)} statement(s)...", expanded=True) as status:
                                         st.write(f"⏳ Processing {len(selected_types)} financial statements...")
-                                        st.write("This may take 1-2 minutes. Progress will appear below.")
+                                        st.write("⚡ Checking cache first... If not cached, extraction may take 8-10 minutes.")
                                         
-                                        _par = extract_statements_parallel(
+                                                                                # Extract with caching enabled
+                                        _par = extract_hkex_with_cache(
                                             pdf_path=_pdf_path,
-                                            statement_types=selected_types,
-                                            stitch_fn=stitch_images_vertical,
-                                            provider=provider,
-                                            model_id=model_id,
+                                            pdf_bytes=pdf_bytes,
                                             company_name=_company_name,
                                             target_year=_target_yr,
+                                            selected_types=selected_types,
+                                            stitch_fn=stitch_images_vertical,
+                                            provider=provider,
+                                            model_id=model_id
                                         )
                                         
                                         status.update(label=f"✅ Extraction complete!", state="complete")
@@ -577,11 +580,8 @@ def render_hkex_section(company, hkex_ticker):
         </style>
         """, unsafe_allow_html=True)
         
-                # Keep expander open if file is uploaded
-        expander_expanded = st.session_state.get("hkex_manual_pdf_upload") is not None
-        
         # Wrap manual upload in expander (accordion)
-        with st.expander("📤 Upload Annual Report Manually", expanded=expander_expanded):
+        with st.expander("📤 Upload Annual Report Manually)", expanded=False):
             st.caption("If you have a PDF file saved locally, you can upload it here for extraction.")
 
             manual_pdf = st.file_uploader(
@@ -923,12 +923,13 @@ def render_hkex_section(company, hkex_ticker):
                         print(f"DEBUG: Manual upload _new_results keys = {list(_new_results.keys())}")
                         print(f"DEBUG: Manual upload _new_results count = {len(_new_results)}")
                         
-                        # CRITICAL FIX: Store results in SEPARATE session state variable for manual uploads
+                                                # CRITICAL FIX: Store results in SEPARATE session state variable for manual uploads
                         # This prevents key conflicts with HKEX extraction results
                         st.session_state.manual_extraction_results = _new_results
                         st.session_state.manual_extraction_report_title = manual_pdf.name
                         st.session_state.uploaded_pdf_bytes = manual_pdf.getvalue()
                         st.session_state.manual_pdf_fiscal_year = manual_fiscal_year  # Store fiscal year for BREF mapping
+                        st.session_state.uploaded_pdf_name = manual_pdf.name  # Store PDF filename for MongoDB save
 
                         # Show correct count of extracted statements
                         extracted_statements = ', '.join([STATEMENT_LABELS.get(k, k) for k in _new_results.keys()])
