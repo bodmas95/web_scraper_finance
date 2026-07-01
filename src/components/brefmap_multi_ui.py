@@ -473,6 +473,14 @@ def _map_single_statement_raw(
                     year_to_column[year] = col_name
     st.write(f"  🗂️ Year to column mapping: {year_to_column}")
     
+    # CRITICAL FIX: Adjust target_year if it's not in available_years
+    # This happens with SEC EDGAR when fiscal year 2024 is requested but data only has 2021-2023
+    if target_year not in available_years and available_years:
+        original_target_year = target_year
+        target_year = max(available_years)  # Use the most recent year in the data
+        st.warning(f"⚠️ Target year {original_target_year} not found in data. Using most recent year: {target_year}")
+        st.write(f"  📅 Adjusted target year: {original_target_year} → {target_year}")
+    
     # Initialize mapped_fields
     mapped_fields = []
     
@@ -560,8 +568,17 @@ def _map_single_statement_raw(
                                 year_col = year_to_column.get(year)
                                 if year_col and year_col in matching_row:
                                     year_value = matching_row[year_col]
-                                    if year_value is not None:
-                                        year_values[str(year)] = year_value
+                                    if year_value is not None and str(year_value).strip() != "":
+                                        # CRITICAL FIX: Remove commas from numbers (LLM returns formatted numbers like '17,069')
+                                        # This prevents float conversion errors
+                                        try:
+                                            # Remove commas and convert to float
+                                            clean_value = str(year_value).replace(',', '').strip()
+                                            year_values[str(year)] = float(clean_value)
+                                        except (ValueError, TypeError):
+                                            # Skip values that can't be converted to float
+                                            print(f"  ⚠️  Could not convert '{year_value}' to float for year {year}")
+                                            pass
                             
                             if year_values:
                                 field["year_values"] = year_values
@@ -572,6 +589,20 @@ def _map_single_statement_raw(
             print("\n" + "="*60)
             print("MAPPING COMPLETE")
             print("="*60)
+            
+            # ==================================================================
+            # CRITICAL FIX: Apply sign corrections BEFORE calculations
+            # ==================================================================
+            print("\n" + "="*60)
+            print("APPLYING SIGN CORRECTIONS (BEFORE CALCULATIONS)")
+            print("="*60)
+            
+            from src.mapping.region_adjustments import apply_sign_corrections
+            mapped_fields = apply_sign_corrections(
+                fields=mapped_fields,
+                region=region,
+                statement_type=statement_type
+            )
     
     # mapped_fields is now defined and available outside the context manager
     
@@ -583,6 +614,7 @@ def _map_single_statement_raw(
         create_ordered_output,
         get_calculated_fields
     )
+    from src.mapping.region_adjustments import apply_sign_corrections
     
     # Create a new expander for calculation logs
     with st.expander("🧮 Calculation Logs (Multi-Year)", expanded=True):
@@ -612,8 +644,17 @@ def _map_single_statement_raw(
                     elif year == target_year:
                         year_value = field.get("target_value")
                     
-                    if label and year_value is not None:
-                        mapped_dict_year[label] = year_value
+                    # CRITICAL FIX: Filter out None AND empty strings (SEC EDGAR returns '' for missing values)
+                    # Empty strings cause calculation failures because they can't be converted to float
+                    # ALSO: Remove commas from numbers (LLM returns formatted numbers like '17,069')
+                    if label and year_value is not None and str(year_value).strip() != "":
+                        try:
+                            # Remove commas and convert to float to ensure it's a valid number
+                            clean_value = str(year_value).replace(',', '').strip()
+                            mapped_dict_year[label] = float(clean_value)
+                        except (ValueError, TypeError):
+                            # Skip invalid values (can't convert to number)
+                            pass
                 
                 # Calculate all derived fields for this year
                 mapped_with_calculated_year = calculate_all_fields(
@@ -628,9 +669,15 @@ def _map_single_statement_raw(
                 
                 # Store calculated values for this year
                 # IMPORTANT: Strip * prefix from calculated field keys for consistent lookup
+                # CRITICAL FIX: Filter out empty strings when storing calculated values
                 for field_key, value in mapped_with_calculated_year.items():
                     # Remove * prefix if present (calculated fields are marked with *)
                     clean_key = field_key.lstrip("*")
+                    
+                    # Skip empty strings and None values (SEC EDGAR returns '' for failed calculations)
+                    if value is None or (isinstance(value, str) and value.strip() == ""):
+                        continue
+                    
                     if clean_key not in all_years_calculated:
                         all_years_calculated[clean_key] = {}
                     all_years_calculated[clean_key][year_str] = value
@@ -668,16 +715,25 @@ def _map_single_statement_raw(
     # CRITICAL FIX: Ensure ALL calculated fields appear in output, even if they couldn't be calculated
     # First, add all calculated fields that are NOT in mapped_fields yet
     existing_labels = {f.get("label") for f in mapped_fields}
+    
+    print(f"\n  DEBUG: Checking {len(calculated_fields_dict)} calculated fields...")
+    print(f"  DEBUG: all_years_calculated has {len(all_years_calculated)} entries")
+    
     for calc_field_label in calculated_fields_dict.keys():
         if calc_field_label not in existing_labels:
             # Check if we have calculated values for this field in all_years_calculated
             calc_year_values = all_years_calculated.get(calc_field_label, {})
+            
+            print(f"  DEBUG: Calculated field '{calc_field_label}':")
+            print(f"    year_values from all_years_calculated: {calc_year_values}")
             
             if calc_year_values:
                 # We have calculated values! Add them
                 reference_year = target_year - 1
                 reference_value = calc_year_values.get(str(reference_year))
                 target_value = calc_year_values.get(str(target_year))
+                
+                print(f"    ✅ Adding with values: target={target_value}, ref={reference_value}")
                 
                 mapped_fields.append({
                     "label": calc_field_label,
@@ -692,6 +748,8 @@ def _map_single_statement_raw(
                 })
             else:
                 # No calculated values - add as blank
+                print(f"    ❌ No calculated values found - adding as blank")
+                
                 mapped_fields.append({
                     "label": calc_field_label,
                     "target_value": None,
@@ -813,6 +871,18 @@ def _map_single_statement_raw(
     
     mapped_fields.sort(key=get_field_order)
     print(f"\n✅ Sorted {len(mapped_fields)} fields according to template order")
+    
+    # ==================================================================
+    # APPLY SIGN CORRECTIONS AGAIN (AFTER CALCULATIONS)
+    # This ensures calculated fields also have correct signs
+    # ==================================================================
+    print(f"\n🔧 Applying sign corrections to calculated fields...")
+    from src.mapping.region_adjustments import apply_sign_corrections
+    mapped_fields = apply_sign_corrections(
+        fields=mapped_fields,
+        region=region,
+        statement_type=statement_type
+    )
     
     # Add metadata
     for field in mapped_fields:
@@ -1184,13 +1254,14 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
             if year_value is None and year == target_year:
                 year_value = field.get("target_value")
             
-            # PRIORITY 3: Fallback to extraction rows
-            if year_value is None:
-                matched_label = field.get("matched_label", "")
-                if matched_label and extraction_lookup:
-                    extraction_row = extraction_lookup.get(matched_label.lower().strip())
-                    if extraction_row and year_str in extraction_row:
-                        year_value = extraction_row[year_str]
+            # PRIORITY 3: Fallback to extraction rows (REMOVED - use corrected values only)
+            # DO NOT fallback to extraction_rows as they contain uncorrected (negative) values
+            # if year_value is None:
+            #     matched_label = field.get("matched_label", "")
+            #     if matched_label and extraction_lookup:
+            #         extraction_row = extraction_lookup.get(matched_label.lower().strip())
+            #         if extraction_row and year_str in extraction_row:
+            #             year_value = extraction_row[year_str]
             
             row_data[year_str] = year_value
         
