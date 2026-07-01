@@ -59,6 +59,7 @@ from src.components.common import (
 from src.components.xbrl_ui import render_xbrl_section, initialize_xbrl_state
 from src.components.hkex_ui import render_hkex_section, initialize_hkex_state
 from src.components.edgar_ui import render_sec_edgar_section, initialize_edgar_state
+from src.cache.cache_integration import initialize_extraction_cache, render_cache_management_ui
 
 # Page configuration
 st.set_page_config(
@@ -226,10 +227,18 @@ initialize_xbrl_state()
 initialize_hkex_state()
 initialize_edgar_state()
 
+# Initialize extraction cache
+initialize_extraction_cache()
+
 
 def main():
     # Header
     st.title("Financial Data Ingestion Pipeline")
+    
+    # Add cache management UI to sidebar
+    with st.sidebar:
+        render_cache_management_ui()
+    
     st.markdown("---")
 
     # Load regions if not already loaded
@@ -304,10 +313,7 @@ def main():
                 st.info("Please select a region first")
 
         with col3:
-            # Show placeholder message if country not selected
-            if st.session_state.selected_region and not st.session_state.selected_country:
-                st.info("Please select a country first")
-            elif st.session_state.selected_region and st.session_state.selected_country:
+            if st.session_state.selected_region and st.session_state.selected_country:
                 # Always reload companies for the current region and country to ensure fresh data
                 current_companies = load_companies_by_region_country(
                     st.session_state.selected_region,
@@ -381,15 +387,26 @@ def main():
                             st.rerun()
                 else:
                     st.info("No companies found for this region and country")
+            else:
+                if not st.session_state.selected_region:
+                    st.info("Please select a region first")
+                elif not st.session_state.selected_country:
+                    st.info("Please select a country first")
 
-        # Only show content if all selections are made
-    if not (st.session_state.selected_region and 
-            st.session_state.selected_country and 
-            st.session_state.selected_company and 
-            st.session_state.is_company_validated):
-        return
-    
     st.markdown("---")
+
+        # Validate that all three selections are made and company is validated
+    if not st.session_state.selected_region:
+        st.info("ℹ️ Please select a region to continue")
+        return
+
+    if not st.session_state.selected_country:
+        st.info("ℹ️ Please select a country to continue")
+        return
+
+    if not st.session_state.selected_company or not st.session_state.is_company_validated:
+        st.info("ℹ️ Please select a company to continue")
+        return
 
     # All validations passed - proceed with company information display
     company = st.session_state.selected_company
