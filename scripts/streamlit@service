@@ -6,149 +6,43 @@ After=network.target
 Type=simple
 User=apnxpdpp
 WorkingDirectory=/hr1as01/work/DE_manish/bref-latest-v2
-
 Environment="PATH=/hr1as01/work/DE_manish/venv/bin"
-
-# =============================================================================
-# CHANGE 1: Added --server.serverTimeout and --server.maxMessageSize CLI flags
-# =============================================================================
-# PROBLEM IN YOUR ORIGINAL:
-#   Your config.toml sets serverTimeout=7200 but Streamlit CLI arguments
-#   OVERRIDE config.toml values. Since your ExecStart didn't include
-#   --server.serverTimeout, Streamlit was using its built-in default of
-#   30 seconds — ignoring config.toml entirely. This alone was killing
-#   your 15-minute mapping job silently from inside Streamlit.
-#
-# --server.serverTimeout 7200
-#   Streamlit's own internal session timeout in seconds (2 hours).
-#   This is completely independent of nginx. If your Python code runs
-#   longer than this value, Streamlit terminates the session even if
-#   the nginx WebSocket is still connected.
-#
-# --server.maxMessageSize 1024
-#   Maximum WebSocket message size in MB. Streamlit sends DataFrames and
-#   results as WebSocket messages. If your mapping output exceeds the
-#   default (200 MB), the WebSocket closes silently — looks like a timeout.
-# =============================================================================
 ExecStart=/hr1as01/work/DE_manish/venv/bin/streamlit run streamlit_app.py \
     --server.port %i \
     --server.address 0.0.0.0 \
     --server.headless true \
-    --server.maxUploadSize 1024 \
-    --server.maxMessageSize 1024 \
-    --server.serverTimeout 7200
-
-# Restart policy
+    --server.maxUploadSize 1024
 Restart=always
-
-# =============================================================================
-# CHANGE 2: Increased RestartSec from 10s to 30s
-# =============================================================================
-# PROBLEM IN YOUR ORIGINAL:
-#   RestartSec=10 means if Streamlit crashes mid-operation, systemd
-#   restarts it after only 10 seconds. This is too fast — the port may
-#   still be in TIME_WAIT state and the new process fails to bind,
-#   triggering another crash. 30 seconds gives the OS time to release
-#   the port cleanly before the new instance starts.
-# =============================================================================
-RestartSec=30
-
+RestartSec=10
 StandardOutput=append:/hr1as01/work/DE_manish/bref-latest-v2/logs/streamlit_%i.log
 StandardError=append:/hr1as01/work/DE_manish/bref-latest-v2/logs/streamlit_%i.log
 
-# =============================================================================
 # Resource limits
-# =============================================================================
-
 LimitNOFILE=65536
 
-# =============================================================================
-# CHANGE 3: Added RuntimeMaxSec=infinity
-# =============================================================================
-# PROBLEM IN YOUR ORIGINAL:
-#   RuntimeMaxSec was NOT set. On some RHEL systemd versions the default
-#   is NOT infinity — it can be set at the system level in /etc/systemd/
-#   system.conf via DefaultRuntimeMaxSec. If your sysadmin set that to
-#   any value (e.g. 3600s), your 15-minute mapping job would be killed
-#   at that wall-clock time with no error message — it just disappears.
-#   Setting it explicitly here overrides any system-level default.
-#
-# RuntimeMaxSec=infinity
-#   No upper limit on how long this service instance can run. Your Python
-#   process can run for hours without systemd terminating it.
-# =============================================================================
-RuntimeMaxSec=infinity
-
-# Timeouts
-# =============================================================================
-# CLARIFICATION on TimeoutStartSec:
-#   For Type=simple, systemd considers the service "started" the instant
-#   the ExecStart process launches (not when it's ready to serve traffic).
-#   So TimeoutStartSec here = how long systemd waits for the Streamlit
-#   binary to launch. Streamlit typically starts in 5-10 seconds, so
-#   1200s is far more than needed for startup. This does NOT control
-#   how long your Python mapping code is allowed to run — RuntimeMaxSec
-#   controls that. Keeping it at 300s is more than enough for startup.
-# =============================================================================
-TimeoutStartSec=300
-
-# How long systemd waits for Streamlit to shut down gracefully on stop/restart.
-# 120s gives in-flight requests time to complete before a hard kill.
+# CRITICAL: Timeouts for long-running operations (60 minutes = 3600 seconds)
+# This allows mapping all 3 statements (Income, Balance Sheet, Cash Flow) without timeout
+TimeoutStartSec=3600
 TimeoutStopSec=120
 
-# =============================================================================
-# CHANGE 4: Increased MemoryMax from 4G to 8G, adjusted MemoryHigh
-# =============================================================================
-# PROBLEM IN YOUR ORIGINAL:
-#   MemoryMax=4G is a HARD KILL limit. If your mapping operation for 3
-#   financial statements loads all data into memory simultaneously, you can
-#   easily exceed 4GB — at which point the Linux OOM killer terminates the
-#   process instantly with no warning. The session dies and the user sees
-#   a blank screen. There is no graceful error — it is an immediate kill.
-#
-# MemoryHigh=6G
-#   Soft limit — systemd starts applying memory pressure (throttling) when
-#   RSS exceeds this. The process continues running but is encouraged to
-#   free memory. This is a warning zone, not a kill zone.
-#
-# MemoryMax=8G
-#   Hard kill limit — only hit this if the process has a memory leak.
-#   Set this to what your server can actually spare per Streamlit instance.
-#   You have 4 instances (ports 8515-8518) so total = 4 × 8G = 32G.
-#   Adjust if your server has less RAM. Check available RAM with:
-#     free -h
-#
-# OOMScoreAdjust=-500
-#   Tells the Linux OOM killer to prefer other processes over Streamlit
-#   when the whole server is low on memory. Score range: -1000 to 1000.
-#   Lower = less likely to be killed. -500 gives strong OOM protection
-#   without making it completely unkillable (-1000).
-# =============================================================================
-MemoryHigh=6G
+# Memory limits (prevent OOM kills during Balance Sheet mapping)
+# Increased to 8GB per instance to handle large mapping operations
+# Balance Sheet mapping can consume up to 4-5GB of RAM
 MemoryMax=8G
-OOMScoreAdjust=-500
+MemoryHigh=6G
 
-# CPU limits
-# =============================================================================
-# NOTE on CPUQuota=200%:
-#   200% = 2 CPU cores. This is fine for normal operation but during your
-#   15-minute mapping job, the process may need to burst higher temporarily.
-#   If you have the cores available, raising to 400% (4 cores) will make
-#   the mapping run faster. Check available cores with: nproc --all
-# =============================================================================
-CPUQuota=400%
+# CPU limits (prevent one instance from hogging CPU)
+# Allow up to 200% CPU (2 cores)
+CPUQuota=200%
 
-# Kill behaviour
-# KillMode=mixed: sends SIGTERM to the main Streamlit process, then SIGKILL
-# to any child processes that haven't exited after TimeoutStopSec.
-# This is the correct setting — do not change it.
+# Prevent killing during long operations
+# This is CRITICAL for preventing blank screens during mapping
 KillMode=mixed
 KillSignal=SIGTERM
 
-# Crash restart policy
-# If Streamlit crashes 5 times in 10 minutes, systemd stops restarting it.
-# This prevents an infinite crash loop from hammering the server.
-# After 10 minutes the counter resets and restarts are allowed again.
+# Restart policy
+# Don't restart too quickly if it keeps crashing
+RestartSec=10
 StartLimitBurst=5
 StartLimitIntervalSec=600
 
