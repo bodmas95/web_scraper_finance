@@ -1,10 +1,17 @@
 import json
 import re
+import logging
 
 import pdfplumber
 
 from .extraction_config import HEADING_SEARCH_LINES, LLM_MODEL, MAX_CONTINUATION_PAGES, MIN_TABLE_ROWS, STATEMENT_HEADINGS
 from .llm_client import get_client, track_usage
+from config.config import load_config
+
+# Load config to check for Maia credentials
+_cfg = load_config()
+MAIA_CREDENTIALS = _cfg.get("LLM", "maia_credentials", fallback="")
+MAIA_MODEL = _cfg.get("LLM", "maia_model", fallback="gpt-5.1-2025-11-13")
 
 _STATEMENT_TYPE_LABELS = {
     "income_statement": "Income Statement (e.g. Statements of Income / Operations / Earnings / Profit or Loss)",
@@ -380,22 +387,74 @@ def llm_scan_for_candidates(pdf_path: str, statement_type: str) -> list[dict]:
         print("  No table pages found for LLM scan.")
         return []
 
-    pages_text      = "\n\n".join(f"Page {p + 1}:\n{lines}" for p, lines in table_pages)
+        pages_text      = "\n\n".join(f"Page {p + 1}:\n{lines}" for p, lines in table_pages)
     statement_label = _STATEMENT_TYPE_LABELS.get(statement_type, statement_type)
 
-    client   = get_client()
-    response = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": _LLM_SCAN_PROMPT.format(
-            statement_label=statement_label,
-            pages_text=pages_text,
-        )}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    track_usage(response)
-
-    result      = json.loads(response.choices[0].message.content)
+    # Try primary LLM first, with fallback to MAIA
+    try:
+        client   = get_client()
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": _LLM_SCAN_PROMPT.format(
+                statement_label=statement_label,
+                pages_text=pages_text,
+            )}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        track_usage(response)
+        result = json.loads(response.choices[0].message.content)
+        
+    except Exception as e:
+        logging.warning(f"Primary LLM failed during LLM scan: {e}")
+        
+                # Fallback to MAIA if configured
+        if MAIA_CREDENTIALS:
+            logging.info("Falling back to MAIA API for LLM scan...")
+            print(f"  Primary LLM failed, retrying with MAIA API...")
+            try:
+                import os
+                # CRITICAL: Clear ALL proxy environment variables for MAIA (internal .intranet domain)
+                old_proxy_env = {}
+                for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
+                           'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+                    old_proxy_env[var] = os.environ.pop(var, None)
+                
+                try:
+                    maia_client = get_client(provider="maia", model=MAIA_MODEL)
+                    # MAIA doesn't support response_format parameter
+                    response = maia_client.chat.completions.create(
+                        model=MAIA_MODEL,
+                        messages=[{"role": "user", "content": _LLM_SCAN_PROMPT.format(
+                            statement_label=statement_label,
+                            pages_text=pages_text,
+                        )}],
+                        temperature=0,
+                    )
+                    track_usage(response)
+                    # Parse JSON from response (MAIA returns JSON in content)
+                    content = response.choices[0].message.content
+                    # Extract JSON from markdown code blocks if present
+                    if "```json" in content:
+                        content = content.split("```json")[1].split("```")[0].strip()
+                    elif "```" in content:
+                        content = content.split("```")[1].split("```")[0].strip()
+                    result = json.loads(content)
+                    logging.info("MAIA API fallback successful for LLM scan")
+                finally:
+                    # Restore proxy environment variables
+                    for var, val in old_proxy_env.items():
+                        if val is not None:
+                            os.environ[var] = val
+            except Exception as maia_error:
+                logging.error(f"MAIA API fallback also failed during LLM scan: {maia_error}")
+                print(f"  Both primary LLM and MAIA fallback failed during LLM scan.")
+                return []
+        else:
+            logging.error("No MAIA credentials configured for fallback")
+            print(f"  Primary LLM failed and no MAIA fallback configured.")
+            return []
+    
     found_pages = result.get("page_numbers", [])
 
     if not found_pages:
