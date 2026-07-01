@@ -65,7 +65,7 @@ INCOME_STATEMENT_FIELDS = {
         "indent_level": 1
     },
 
-        "I2 | Costs and expenses (or \"COGS\")": 
+    "I2 | Costs and expenses (or \"COGS\")": 
      {
         "aliases": [
         "Cost of Sales",
@@ -76,9 +76,11 @@ INCOME_STATEMENT_FIELDS = {
         "Manufacturing Costs",
         "Fuel",
         "Power",
+        "Fuel, purchased power and interchange",
+        "Purchased power",
+        "Interchange",
         "Costs and expenses",
         "Total costs and expenses",
-        "Operating expenses",
         "COGS",
     ],
         "calculation": None,
@@ -248,6 +250,7 @@ INCOME_STATEMENT_FIELDS = {
         "Miscellaneous Expenses",
         "General Expenses",
         "Operating Costs - Other",
+        "Other operations and maintenance",
         "Ancillary Expenses",
         "Non-primary Operating Expenses",
     ],
@@ -327,6 +330,7 @@ INCOME_STATEMENT_FIELDS = {
         "Cost of Borrowing",
         "Finance Charges",
         "Interest Paid",
+        "Interest Expense"
     ] ,
         "calculation": None,
         "is_calculated": False,
@@ -989,7 +993,7 @@ BALANCE_SHEET_FIELDS = {
 
     "B10 | Other assets or investments": 
     {
-        "aliases": ['Investments', 'Other non-current assets'],
+        "aliases": ['Investments', 'Other non-current assets','Other noncurrent assets, net of allowance of $9 and $77, respectively'],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1113,7 +1117,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L21 | Trade Accounts payable / Creditors": 
     {
-        "aliases": ['Trade Creditors', 'Accounts Payables'],
+        "aliases": ['Trade Creditors', 'Accounts Payables','Accounts payable'],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1284,7 +1288,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L18 | Other LT liabilities": 
     {
-        "aliases": ['Other non-current liabilities', 'Derivative Liabilities', 'Other Financial Liabilities', 'Loans from shareholders/related parties'],
+        "aliases": ['Other non-current liabilities', 'Derivative Liabilities', 'Other Financial Liabilities', 'Loans from shareholders/related parties','Other noncurrent liabilities'],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1292,7 +1296,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L2 | Common stock": 
     {
-        "aliases": ['Common equity', 'Issued and paid-Up Shares'],
+        "aliases": ['Common equity', 'Issued and paid-Up Shares','Common stock'],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1314,7 +1318,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L4 | Additional paid-in capital": 
     {
-        "aliases": ['Additional Equity'],
+        "aliases": ['Additional Equity','Additional paid-in capital'],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1357,7 +1361,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L35 | Net result / Accumulated other comprehensive income (loss)":
      {
-        "aliases": ['Other comprehensive income loss'],
+        "aliases": ['Other comprehensive income loss','Accumulated other comprehensive loss'],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
