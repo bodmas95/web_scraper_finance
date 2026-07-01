@@ -49,6 +49,12 @@
 #              sysctl commands manually, they reset on reboot. The new step
 #              writes them to a file so they survive reboots.
 #
+#   CHANGE 9 : Added systemd service file deployment (Step 5.5)
+#              Memory limits increased from 4GB to 8GB to prevent OOM kills
+#              during Balance Sheet mapping operations. The old limit was
+#              causing processes to be killed when memory usage exceeded 4GB,
+#              resulting in "no live upstreams" errors and session loss.
+#
 # =============================================================================
 
 set -e  # Exit immediately if any command fails
@@ -217,6 +223,25 @@ echo "  ✓ config.toml deployed → $STREAMLIT_CONF_DST"
 echo ""
 
 # =============================================================================
+# STEP 5.5 — Deploy systemd service files with updated memory limits
+# =============================================================================
+# CHANGE 9: Deploy updated systemd service files with increased memory limits.
+# The Balance Sheet mapping operation can consume 4-5GB of RAM, causing OOM kills
+# with the old 4GB limit. New limit is 8GB to prevent process termination.
+echo "Step 5.5: Deploying systemd service files with updated memory limits..."
+
+SYSTEMD_SRC="$APP_DIR/scripts/streamlit@.service"
+
+# Deploy service file for each port
+for PORT in "${PORTS[@]}"; do
+    sudo cp "$SYSTEMD_SRC" "/etc/systemd/system/streamlit@${PORT}.service"
+    echo "  ✓ Service file deployed for port $PORT"
+done
+
+echo "  ✓ All systemd service files updated"
+echo ""
+
+# =============================================================================
 # STEP 6 — Restart Streamlit services
 # =============================================================================
 echo "Step 6: Restarting Streamlit services..."
@@ -297,9 +322,17 @@ echo "  $(date)"
 echo "=========================================="
 echo ""
 echo "What was deployed:"
-echo "  1. Nginx config  → $NGINX_CONF_DST"
-echo "  2. config.toml   → $STREAMLIT_CONF_DST"
-echo "  3. TCP keepalive → 30s idle / 10s interval / 6 probes"
+echo "  1. Nginx config     → $NGINX_CONF_DST (timeouts: 3600s)"
+echo "  2. config.toml      → $STREAMLIT_CONF_DST (XSRF disabled, compression enabled)"
+echo "  3. systemd services → Memory limit increased to 8GB (was 4GB)"
+echo "  4. TCP keepalive    → 30s idle / 10s interval / 6 probes"
+echo ""
+echo "Critical fixes applied:"
+echo "  ✓ Memory limit increased from 4GB to 8GB (prevents OOM during Balance Sheet mapping)"
+echo "  ✓ XSRF protection disabled (prevents session loss during long operations)"
+echo "  ✓ Systemd timeout increased to 3600s (60 minutes)"
+echo "  ✓ Nginx timeouts set to 3600s (60 minutes)"
+echo "  ✓ WebSocket compression enabled (reduces bandwidth usage)"
 echo ""
 echo "Next steps:"
 echo "  1. Hard refresh browser (Ctrl+Shift+R) to clear cached WebSocket"
