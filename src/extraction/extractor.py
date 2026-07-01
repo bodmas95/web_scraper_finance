@@ -1,8 +1,15 @@
 import base64
 import json
+import logging
 
 from .extraction_config import LLM_MODEL
 from .llm_client import get_client, track_usage
+from config.config import load_config
+
+# Load config to check for Maia credentials
+_cfg = load_config()
+MAIA_CREDENTIALS = _cfg.get("LLM", "maia_credentials", fallback="")
+MAIA_MODEL = _cfg.get("LLM", "maia_model", fallback="gpt-5.1-2025-11-13")
 
 EXTRACTION_PROMPT = """
 You are a financial data extraction specialist.
@@ -149,18 +156,54 @@ def extract_table(
     print("-" * 80)
     print("#"*80)
     
-    client = get_client(provider=provider, model=model)
-
-    response = client.chat.completions.create(
-        model=_model,
-        messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(page_text=page_text)}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    
-    print("LLM response received!")
-
-    track_usage(response)
+    # Try primary LLM first, with fallback to MAIA
+    try:
+        client = get_client(provider=provider, model=model)
+        response = client.chat.completions.create(
+            model=_model,
+            messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(page_text=page_text)}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        print("LLM response received!")
+        track_usage(response)
+        
+    except Exception as e:
+        logging.warning(f"Primary LLM failed during table extraction: {e}")
+        
+        # Fallback to MAIA if configured
+        if MAIA_CREDENTIALS:
+            logging.info("Falling back to MAIA API for table extraction...")
+            print(f"  Primary LLM failed, retrying with MAIA API...")
+            try:
+                import os
+                # CRITICAL: Clear ALL proxy environment variables for MAIA
+                old_proxy_env = {}
+                for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
+                           'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+                    old_proxy_env[var] = os.environ.pop(var, None)
+                
+                try:
+                    maia_client = get_client(provider="maia", model=MAIA_MODEL)
+                    response = maia_client.chat.completions.create(
+                        model=MAIA_MODEL,
+                        messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(page_text=page_text)}],
+                        temperature=0,
+                    )
+                    print("MAIA LLM response received!")
+                    track_usage(response)
+                    logging.info("MAIA API fallback successful for table extraction")
+                finally:
+                    # Restore proxy environment variables
+                    for var, val in old_proxy_env.items():
+                        if val is not None:
+                            os.environ[var] = val
+            except Exception as maia_error:
+                logging.error(f"MAIA API fallback also failed during table extraction: {maia_error}")
+                raise Exception(f"Both primary LLM and MAIA fallback failed. Primary: {e}, MAIA: {maia_error}")
+        else:
+            logging.error("No MAIA credentials configured for fallback")
+            raise Exception(f"Primary LLM failed and no MAIA fallback configured: {e}")
     
     # Parse LLM response
     raw_response = response.choices[0].message.content
@@ -244,26 +287,69 @@ def extract_table_from_image(image_bytes: bytes, provider: str = None, model: st
     print(f"Image size: {len(image_bytes)} bytes")
     print("#"*80)
     
-    client = get_client(provider=provider, model=model)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     print(f"Image encoded to base64, length: {len(b64)} chars")
 
-    response = client.chat.completions.create(
-        model=_model,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text",      "text": IMAGE_EXTRACTION_PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-            ],
-        }],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    
-    print("LLM response received (image)!")
-
-    track_usage(response)
+    # Try primary LLM first, with fallback to MAIA
+    try:
+        client = get_client(provider=provider, model=model)
+        response = client.chat.completions.create(
+            model=_model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text",      "text": IMAGE_EXTRACTION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        print("LLM response received (image)!")
+        track_usage(response)
+        
+    except Exception as e:
+        logging.warning(f"Primary LLM failed during image extraction: {e}")
+        
+        # Fallback to MAIA if configured
+        if MAIA_CREDENTIALS:
+            logging.info("Falling back to MAIA API for image extraction...")
+            print(f"  Primary LLM failed, retrying with MAIA API...")
+            try:
+                import os
+                # CRITICAL: Clear ALL proxy environment variables for MAIA
+                old_proxy_env = {}
+                for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
+                           'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+                    old_proxy_env[var] = os.environ.pop(var, None)
+                
+                try:
+                    maia_client = get_client(provider="maia", model=MAIA_MODEL)
+                    response = maia_client.chat.completions.create(
+                        model=MAIA_MODEL,
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "text",      "text": IMAGE_EXTRACTION_PROMPT},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                            ],
+                        }],
+                        temperature=0,
+                    )
+                    print("MAIA LLM response received (image)!")
+                    track_usage(response)
+                    logging.info("MAIA API fallback successful for image extraction")
+                finally:
+                    # Restore proxy environment variables
+                    for var, val in old_proxy_env.items():
+                        if val is not None:
+                            os.environ[var] = val
+            except Exception as maia_error:
+                logging.error(f"MAIA API fallback also failed during image extraction: {maia_error}")
+                raise Exception(f"Both primary LLM and MAIA fallback failed. Primary: {e}, MAIA: {maia_error}")
+        else:
+            logging.error("No MAIA credentials configured for fallback")
+            raise Exception(f"Primary LLM failed and no MAIA fallback configured: {e}")
     
     # Parse LLM response
     raw_response = response.choices[0].message.content
