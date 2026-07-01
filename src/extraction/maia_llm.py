@@ -88,6 +88,11 @@ class MaiaAPIClient:
         url = f"{MAIA_API_ENDPOINT}{ENDPOINTS[endpoint_key]}"
         response = None
         try:
+            # Log request details for debugging
+            logging.debug(f"Maia API Request: {method} {url}")
+            if json_data:
+                logging.debug(f"Request payload: {json.dumps(json_data, indent=2)[:500]}")
+            
             response = self.client.request(method, url, headers=headers, json=json_data, 
                                           data=data, timeout=timeout)
             response.raise_for_status()
@@ -97,9 +102,11 @@ class MaiaAPIClient:
             try:
                 error_detail = e.response.json()
                 logging.error(f"Maia API request failed: {e.response.status_code}, {error_detail}")
+                logging.error(f"Request payload was: {json.dumps(json_data, indent=2) if json_data else 'None'}")
             except:
-                logging.error(f"Maia API request failed: {e.response.status_code}, Response: {e.response.text[:200]}")
-            raise Exception(f"Maia API error: {e.response.status_code} - Check proxy settings and credentials")
+                logging.error(f"Maia API request failed: {e.response.status_code}, Response: {e.response.text[:500]}")
+                logging.error(f"Request payload was: {json.dumps(json_data, indent=2) if json_data else 'None'}")
+            raise Exception(f"Maia API error: {e.response.status_code} - Check request payload and credentials")
         except httpx.ConnectError as e:
             logging.error(f"Maia API connection error: {str(e)}")
             raise Exception(f"Cannot connect to Maia API. Check proxy settings: {str(e)}")
@@ -149,9 +156,11 @@ class MaiaAPIClient:
         temperature = kwargs.get("temperature", DEFAULT_TEMPERATURE)
         output_max_tokens = kwargs.get("outputMaxTokens", DEFAULT_MAX_TOKEN)
         
-        if output_format.upper() == "JSON":
-            prompt += " return in a JSON format."
+        # IMPORTANT: Don't modify prompt - it already requests JSON format
+        # if output_format.upper() == "JSON":
+        #     prompt += " return in a JSON format."
         
+        # Use the original MAIA starter pack format: list of content dicts with "text" key
         contents = kwargs.get("contents", [{"text": prompt}])
         
         payload = {
@@ -167,6 +176,7 @@ class MaiaAPIClient:
             }
         }
         
+        logging.debug(f"Constructed MAIA payload: {json.dumps(payload, indent=2)[:500]}")
         return payload
     
     def chat(self, **kwargs):
@@ -220,7 +230,7 @@ class MaiaOpenAIAdapter:
                 model (str): Model identifier
                 messages (list): List of message dicts with 'role' and 'content'
                 temperature (float): Sampling temperature
-                response_format (dict): Response format specification
+                response_format (dict): Response format specification (IGNORED - not supported by MAIA)
                 stream (bool): Whether to stream the response (Maia doesn't support streaming, will return full response)
                 **kwargs: Additional arguments
             
@@ -237,8 +247,14 @@ class MaiaOpenAIAdapter:
                 elif msg.get("role") == "user":
                     user_msg = msg.get("content", "")
             
-            # Determine output format
-            output_format = "JSON" if response_format and response_format.get("type") == "json_object" else "TEXT"
+            # IMPORTANT: Don't use outputFormat="JSON" - it causes 400 errors
+            # The prompt itself should request JSON format
+            # output_format = "JSON" if response_format and response_format.get("type") == "json_object" else "TEXT"
+            output_format = "TEXT"  # Always use TEXT format
+            
+            logging.debug(f"MAIA API call - Model: {model}, Temperature: {temperature}, Format: {output_format}")
+            logging.debug(f"System message: {system_msg[:100]}...")
+            logging.debug(f"User message: {user_msg[:200]}...")
             
             # Call Maia API
             response = self.parent.api_client.chat(
