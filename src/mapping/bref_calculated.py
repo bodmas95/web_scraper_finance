@@ -12,6 +12,7 @@ This module:
 import re
 from typing import Dict, List, Any, Optional
 from src.mapping.field_mappings import get_field_mappings
+from src.mapping.region_adjustments import apply_calculated_sign_corrections
 
 
 def parse_calculation_formula(formula: str) -> List[tuple]:
@@ -305,6 +306,13 @@ def calculate_all_fields(
             else:
                 formula = field_def.get("calculation", "")
                 print(f"✗ Could not calculate {field_key} (formula: {formula}) - missing dependencies")
+    
+    # Apply region-specific sign corrections to calculated fields
+    result = apply_calculated_sign_corrections(
+        calculated_values=result,
+        region=region,
+        statement_type=statement_type
+    )
     
     return result
 
