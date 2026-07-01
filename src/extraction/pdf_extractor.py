@@ -38,6 +38,9 @@ class PDFExtractor:
         self.client = get_client()
         self.model = cfg.get("LLM", "model", fallback="gpt-4o")
         self.token_usage = {"input": 0, "output": 0, "total": 0}
+        # Load MAIA fallback configuration
+        self.maia_credentials = cfg.get("LLM", "maia_credentials", fallback="")
+        self.maia_model = cfg.get("LLM", "maia_model", fallback="gpt-5.1-2025-11-13")
     
     def reset_token_usage(self):
         """Reset token usage counters"""
@@ -49,6 +52,63 @@ class PDFExtractor:
             self.token_usage["input"] += response.usage.prompt_tokens
             self.token_usage["output"] += response.usage.completion_tokens
             self.token_usage["total"] += response.usage.total_tokens
+    
+    def _call_llm_with_fallback(self, messages, temperature=0, use_json_format=True):
+        """Call LLM with automatic fallback to MAIA if primary fails"""
+        # Try primary LLM first
+        try:
+            if use_json_format:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                )
+            self.track_usage(response)
+            return response
+        except Exception as e:
+            logging.warning(f"Primary LLM failed: {e}")
+            
+            # Fallback to MAIA if configured
+            if self.maia_credentials:
+                logging.info("Falling back to MAIA API...")
+                print(f"  Primary LLM failed, retrying with MAIA API...")
+                try:
+                    import os
+                    # CRITICAL: Clear ALL proxy environment variables for MAIA (internal .intranet domain)
+                    old_proxy_env = {}
+                    for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
+                               'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+                        old_proxy_env[var] = os.environ.pop(var, None)
+                    
+                    try:
+                        maia_client = get_client(provider="maia", model=self.maia_model)
+                        # MAIA doesn't support response_format parameter
+                        response = maia_client.chat.completions.create(
+                            model=self.maia_model,
+                            messages=messages,
+                            temperature=temperature,
+                        )
+                        self.track_usage(response)
+                        logging.info("MAIA API fallback successful")
+                        return response
+                    finally:
+                        # Restore proxy environment variables
+                        for var, val in old_proxy_env.items():
+                            if val is not None:
+                                os.environ[var] = val
+                except Exception as maia_error:
+                    logging.error(f"MAIA API fallback also failed: {maia_error}")
+                    raise Exception(f"Both primary LLM and MAIA fallback failed. Primary: {e}, MAIA: {maia_error}")
+            else:
+                logging.error("No MAIA credentials configured for fallback")
+                raise Exception(f"Primary LLM failed and no MAIA fallback configured: {e}")
     
     def get_token_usage(self) -> Dict[str, int]:
         """Get current token usage"""
@@ -128,15 +188,19 @@ Respond in this exact JSON format:
 Only respond with valid JSON — no other text.
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model,
+        response = self._call_llm_with_fallback(
             messages=[{"role": "user", "content": validation_prompt}],
             temperature=0,
-            response_format={"type": "json_object"},
+            use_json_format=True
         )
         
-        self.track_usage(response)
-        result = json.loads(response.choices[0].message.content)
+        # Parse JSON from response (handle both direct JSON and markdown-wrapped)
+        content = response.choices[0].message.content
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        result = json.loads(content)
         
         candidate["validation"] = result
         candidate["is_confirmed"] = (
@@ -274,15 +338,19 @@ Respond in this exact JSON format:
 Only respond with valid JSON — no other text.
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model,
+        response = self._call_llm_with_fallback(
             messages=[{"role": "user", "content": extraction_prompt}],
             temperature=0,
-            response_format={"type": "json_object"},
+            use_json_format=True
         )
         
-        self.track_usage(response)
-        result = json.loads(response.choices[0].message.content)
+        # Parse JSON from response (handle both direct JSON and markdown-wrapped)
+        content = response.choices[0].message.content
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        result = json.loads(content)
         
         year_headers = result.get("year_headers", [])
         rows = [r for r in result.get("rows", []) if r.get("label", "").strip()]
@@ -341,8 +409,7 @@ Respond in this exact JSON format:
 Only respond with valid JSON — no other text.
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model,
+        response = self._call_llm_with_fallback(
             messages=[{
                 "role": "user",
                 "content": [
@@ -351,11 +418,16 @@ Only respond with valid JSON — no other text.
                 ],
             }],
             temperature=0,
-            response_format={"type": "json_object"},
+            use_json_format=True
         )
         
-        self.track_usage(response)
-        result = json.loads(response.choices[0].message.content)
+        # Parse JSON from response (handle both direct JSON and markdown-wrapped)
+        content = response.choices[0].message.content
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        result = json.loads(content)
         
         year_headers = result.get("year_headers", [])
         rows = [r for r in result.get("rows", []) if r.get("label", "").strip()]
