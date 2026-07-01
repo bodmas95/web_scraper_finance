@@ -17,18 +17,61 @@ from typing import Dict, List, Any, Tuple, Optional
 
 
 def normalize_label(label: str) -> str:
-    """Normalize a label for fuzzy matching."""
+    """Normalize a label for fuzzy matching.
+    
+    Handles:
+    - Case insensitivity (lowercase)
+    - Punctuation removal
+    - Whitespace normalization
+    - Singular/plural variations (removes trailing 's')
+    - Multilingual labels (removes non-ASCII characters like Chinese)
+    - Common abbreviations
+    """
     if not label:
         return ""
     
     # Convert to lowercase
     normalized = label.lower().strip()
     
+    # Remove non-ASCII characters (Chinese, special characters, etc.)
+    # Keep only English letters, numbers, spaces, and basic punctuation
+    normalized = re.sub(r'[^a-z0-9\s\-&/(),.]', '', normalized)
+    
     # Remove common variations
     normalized = re.sub(r'\s+', ' ', normalized)  # Multiple spaces to single
     normalized = re.sub(r'[,\.\(\)\[\]\{\}]', '', normalized)  # Remove punctuation
     normalized = re.sub(r'\s*-\s*', ' ', normalized)  # Normalize dashes
     normalized = re.sub(r'\s*&\s*', ' and ', normalized)  # & to 'and'
+    normalized = re.sub(r'\s*/\s*', ' ', normalized)  # / to space
+    
+    # Remove extra spaces again after all replacements
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    
+    # Handle singular/plural by removing trailing 's' from words
+    # But preserve words that naturally end in 's' (e.g., 'assets', 'liabilities')
+    # Strategy: Remove 's' only from common plural forms
+    words = normalized.split()
+    normalized_words = []
+    for word in words:
+        # Don't remove 's' from: assets, liabilities, expenses, sales, etc.
+        # These are naturally plural or always end in 's'
+        if word.endswith('s') and word not in ['assets', 'liabilities', 'expenses', 'sales', 'loss', 'gross', 'less', 'business', 'goodwill', 'costs']:
+            # Check if it's a common plural (ends in 'es', 'ies', or just 's')
+            if word.endswith('ies'):
+                # receivables -> receivable, liabilities -> liability
+                normalized_words.append(word[:-3] + 'y')
+            elif word.endswith('es') and len(word) > 3:
+                # taxes -> tax, expenses -> expense
+                normalized_words.append(word[:-2])
+            elif len(word) > 3:  # Don't remove 's' from very short words
+                # payables -> payable, creditors -> creditor
+                normalized_words.append(word[:-1])
+            else:
+                normalized_words.append(word)
+        else:
+            normalized_words.append(word)
+    
+    normalized = ' '.join(normalized_words)
     
     return normalized
 
@@ -323,18 +366,31 @@ def fast_map_fields(
             year_values = extract_values_from_rows(extraction_rows, matched_label, available_years, target_year)
             
             if year_values:
+                # CRITICAL FIX: Clean and convert all values to float (remove commas, handle negatives)
+                cleaned_year_values = {}
+                for year_key, value in year_values.items():
+                    if value is not None and str(value).strip() != '':
+                        try:
+                            # Remove commas and convert to float
+                            clean_value = str(value).replace(',', '').strip()
+                            cleaned_year_values[year_key] = float(clean_value)
+                        except (ValueError, TypeError):
+                            # Skip values that can't be converted
+                            print(f"    ⚠️ Could not convert '{value}' to float for year {year_key}")
+                            pass
+                
                 # Store for calculations (all year values including reference year)
-                field_values[label] = {k: v for k, v in year_values.items() if k != 'reference_value'}
+                field_values[label] = {k: v for k, v in cleaned_year_values.items() if k != 'reference_value'}
                 
-                # Get target year and reference year values
-                target_year_value = year_values.get(str(target_year))
-                reference_year_value = year_values.get('reference_value')
+                # Get target year and reference year values (already cleaned)
+                target_year_value = cleaned_year_values.get(str(target_year))
+                reference_year_value = cleaned_year_values.get('reference_value')
                 
-                # Create matched field with all year values
+                # Create matched field with all year values (cleaned)
                 matched_field = {
                     **field,
                     'matched_label': matched_label,
-                    'year_values': {k: v for k, v in year_values.items() if k != 'reference_value'},
+                    'year_values': {k: v for k, v in cleaned_year_values.items() if k != 'reference_value'},
                     'target_value': target_year_value,
                     'reference_value': reference_year_value,
                     'mapping_confidence': match_confidence,
