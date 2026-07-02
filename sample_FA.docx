@@ -1,0 +1,161 @@
+________________________________________
+________________________________________
+SECTION 1: EXECUTIVE SUMMARY
+________________________________________
+1.1 Overview of the Project — Financial Analysis
+The NIA proposes POC of an AI-powered, multi-agent financial analysis capability designed to fundamentally transform how the Credit Portfolio and Risk Management (CPRM) team conducts corporate financial analysis. This initiative focuses exclusively on the automation and augmentation of the Financial Analysis workflow, leveraging only publicly available and external financial data sources.
+The CPRM team currently comprises approximately 134 analysts distributed globally across four regions — Americas (AMER), Europe Middle East & Africa (EMEA), Asia-Pacific (APAC), and France — responsible for conducting financial analysis on approximately 3,000 corporate clients annually. The financial analysis function is the single largest consumer of analyst bandwidth, accounting for approximately 60% of daily analyst capacity, the overwhelming majority of which is spent on entirely manual, document-intensive tasks.
+The NIA Financial Analysis module is designed to address this challenge by deploying an intelligent, agentic pipeline that:
+•	Ingests and processes multiple categories of unstructured public financial documents — including Annual Reports, Interim Reports, Earnings Presentations, and Earnings Call Transcripts — across multiple geographies .
+•	Identifies and synthesizes key financial performance drivers across Income Statement, Balance Sheet & Cash Flow.
+•	Delivers outputs through a human-in-the-loop validation interface, enabling analysts to review, edit, and approve AI-generated content before finalization
+________________________________________
+1.2 Key Problem Statement and Results — Financial Analysis
+Problem Statement
+The CPRM financial analysis workflow is structurally overburdened by manual effort across three distinct sub-processes, each contributing to a compounding efficiency deficit:
+Financial Analysis Sub-Process	% of Total FA Effort	Nature of Work
+Financial Spreading (BREF & Interim)	~20%	Manual extraction of financial data from public statements into BREF/Excel
+Information Gathering & Driver Analysis	~15%	Manual reading and synthesis of multiple unstructured documents per client
+Financial Analysis Write-up	~65%	Fully manual synthesis and narrative generation across all analytical sections
+
+
+
+Key Expected Results
+Outcome Area	Expected Result
+Reduction in Manual Effort	Significant reduction in analyst time spent on information gathering and write-up, targeting recapture of the majority of the ~60% daily bandwidth currently consumed by FA tasks
+Speed of Analysis	Materially faster turnaround on Financial Analysis reports, enabling more timely credit risk assessments and portfolio monitoring decisions
+
+________________________________________
+2.2.2 AI Model and Output Quality Risks
+#	Risk	Description	Likelihood	Impact	Mitigation Strategy
+1	LLM Hallucination in Financial Narratives	The AI system may generate financial commentary that is factually incorrect, numerically inconsistent, or not supported by the source documents — a critical risk in a credit risk context	High	Critical	Implement hallucination detection metrics as part of the evaluation framework; enforce mandatory source attribution for every generated claim; human-in-the-loop review gates prevent unapproved outputs from being used
+2	Attribution Accuracy Failures	AI-generated insights may be incorrectly attributed to source documents, or attributed to the wrong section, year, or entity within a complex multi-subsidiary report	Medium	High	Implement Attribution Accuracy as a formal evaluation metric; conduct systematic attribution audits during POC evaluation phase
+3	Output Quality Below Business Expectations	AI-generated FA narratives may not meet the qualitative bar expected by CPRM analysts in terms of analytical depth, tone, and structural alignment with Credit Memo standards	Medium	High	Iterative refinement cycle  built into delivery plan; CPRM Business Team involved in qualitative assessment from early output reviews.
+5	Contextual Misinterpretation	The system may misinterpret financial terminology, industry-specific metrics, or management commentary — leading to misleading driver analysis	Medium	High	Domain-specific prompt engineering and model calibration; CPRM subject matter expert review during POC evaluation; iterative refinement based on analyst feedback
+________________________________________
+________________________________________
+2.3.1 Clients in Scope — Financial Analysis POC
+Region	Client	Data Source	Status
+Americas (Listed)	NextEra Energy Capital Holdings, Inc.	Internal System / SEC (EDGAR) / IR Website	WIP
+APAC (Listed)	Chow Tai Fook Jewellery (Stock Code: 01929)	Internal System / HKEX / Company IR Website	WIP
+Paris (Listed France)	OVH (RAF: 0619395)	Internal System / XBRL / Company IR Website	WIP
+
+________________________________________
+________________________________________
+2.3.3 Financial Analysis Output Scope
+The AI-generated Financial Analysis report will cover the following sections, aligned with the Natixis CPRM existing FA Format and Standards
+#	FA Report Section	Content Description
+1	Income Statement Review	Revenue performance analysis; profitability trends; segmental and regional breakdown; margin analysis; key year-on-year drivers
+2	Balance Sheet Analysis	Asset composition and quality; liability structure; debt analysis including leverage ratios, and covenant considerations
+3	Cash Flow Analysis	Operating ,financing cash flow trends; free cash flow generation; working capital changes etc.
+________________________________________
+2.3.4 Success Criteria — Financial Analysis
+Success for the Financial Analysis component of the POC will be assessed across two dimensions:
+Dimension 1 — Qualitative Assessment (Business Team Evaluation)
+The CPRM Business Team will conduct a structured qualitative evaluation of AI-generated FA reports against human-produced baseline reports, assessing:
+•	Analytical Depth: Does the report identify and articulate the key financial performance drivers at an appropriate level of detail?
+•	Accuracy: Are the financial figures and trends referenced in the narrative consistent with source documents?
+•	Structural Alignment: Does the report conform to the CPRM FA format, section structure, and expected level of coverage?
+•	Tone and Style: Is the language and tone consistent with standard credit analyst practice?
+•	Completeness: Are all five required analytical sections adequately covered?
+Dimension 2 — Quantitative AI Metrics Evaluation
+AI-generated outputs will be evaluated using the following formal metrics:
+Metric	Description
+Faithfulness	Degree to which generated content accurately reflects the content of the source documents without distortion
+Additional Metrics	Context Precision , Context Recall (As per finalized architecture) 
+
+
+
+
+High Level – TAD/Process Flow
+________________________________________
+ 
+
+
+
+
+
+
+
+________________________________________
+SECTION 1: ASSESSMENT METHODOLOGY
+1.1 Overview
+The evaluation framework measures the quality, accuracy, and reliability of AI-generated Financial Analysis (FA) reports across three core sections:
+•	Profit & Loss (Income Statement) — P&L
+•	Cash Flow Analysis
+•	Balance Sheet Analysis
+Each section is assessed independently through a Qualitative Assessment conducted by the CPRM Business Team, producing section-level scores combined into an Overall Achievement Score via weighted average. A separate Faithfulness Score is computed using an LLM-as-Judge framework to measure factual grounding against cited source documents.
+________________________________________
+1.2 Qualitative Assessment — Business Team Evaluation
+The CPRM Business Team evaluates AI-generated FA sections against the standard of a human-produced Credit Memo, scoring across five criteria:
+#	Criterion	Description	Weight
+1	Analytical Depth	Quality and depth of financial driver identification and articulation	15%
+2	Accuracy	Consistency of figures, ratios, and trends with source documents	50%
+3	Structural Alignment	Conformity to CPRM Credit Memo format and section structure	10%
+4	Tone and Style	Alignment with standard credit analyst language and conventions	10%
+5	Completeness	Coverage of all required analytical sub-components per section	15%
+	Total		100%
+The Overall Achievement Score is the weighted average of these five criteria, reported as a percentage (0–100%) and tracked across iterations.
+Scoring Scale
+Score Range	Performance Level
+0% – 20%	Poor
+21% – 40%	Below Expectations
+41% – 60%	Developing
+61% – 80%	Good
+81% – 100%	Excellent
+________________________________________
+1.3 Faithfulness Assessment — LLM-as-Judge Framework
+The Faithfulness Score provides an automated, objective measure of factual grounding in AI-generated outputs, answering:
+"Are the facts and claims in the AI-generated report supported by and traceable to the cited source documents?"
+Methodology
+Step	Activity
+Step 1 — Claim Extraction	LLM judge extracts all discrete factual claims from the generated FA report
+Step 2 — Source Retrieval	Cited source documents and passages are retrieved for each claim
+Step 3 — Claim Validation	Each claim is validated as: Supported, Partially Supported, or Unsupported / Hallucinated
+Step 4 — Score Computation	Faithfulness Score = proportion of Supported claims out of total claims extracted
+Score Interpretation
+Faithfulness Score	Interpretation
+≥ 85%	High Faithfulness — outputs well grounded
+70% – 84%	Moderate — acceptable; retrieval refinement recommended
+50% – 69%	Low — significant grounding gaps; prompt improvements required
+< 50%	Critical — high hallucination risk; not suitable for business review
+________________________________________
+________________________________________
+SECTION 2: ITERATION DETAILS & PROGRESS
+2.1 Iteration Summary
+Iteration	Method	LLM	P&L	Cash Flow	Balance Sheet	Status
+Iteration 1	Multi LLM Calls	Gemma3/Qwen3	25%	N/A	N/A	Complete
+Iteration 2	Multi-Agent	Gemini 2.5 Pro	40%	N/A	N/A	Complete
+Iteration 3	Multi-Agent + Evaluation Scores	Gemini 2.5 Pro	35%	35%	35%	Complete
+Iteration 4	Agentic AI — Subagents, Evaluators, Summarizers	GPT 4.1	55%	TBA	~55%	Complete
+Iteration 5	Agentic AI + Waterfall Dependency Reasoning	GPT 5.5	Under Assessment	Under Assessment	Under Assessment	Complete
+Iteration 6	Single Sr. Credit Analyst (Consolidated)	GPT 5.5	Under Assessment	Under Assessment	Under Assessment	Complete
+Iteration 7	Iter. 6 + Context Filter + Compression + Writer Agent	GPT 5.5	In Progress	In Progress	In Progress	WIP
+________________________________________
+
+3.2 Key Observations
+Observation	Detail
+LLM Upgrades Drive Significant Gains	Each LLM upgrade (Gemma3 → Gemini → GPT 4.1 → GPT 5.5) delivered measurable quality improvements, confirming LLM capability as a primary quality driver
+Scope Expansion Causes Temporary Regression	Adding CF & BS in Iteration 3 temporarily reduced P&L scores — a recognized trade-off during rapid scope expansion
+Agentic Architecture is the Key Quality Enabler	The largest single-iteration gain came from transitioning to a fully agentic architecture in Iteration 4
+Over-Decomposition Risks Coherence	Iteration 6's consolidation of multiple agents into one Sr. Credit Analyst addresses the analytical fragmentation risk of highly decomposed agent architectures
+Hallucination Concentration Pattern	Unsupported claims tend to concentrate in inference-heavy sections (e.g., liquidity outlook, forward-looking commentary) rather than retrospective financial data sections
+________________________________________
+3.3 Target Performance Trajectory
+Quality Threshold	Target Score	Status
+Initial Full Coverage	≥ 35%	✅ Achieved — Iteration 3
+Developing Quality	≥ 60%	✅ Achieved — Iteration 4 (P&L & BS)
+Good Quality	≥ 70%	🔄 Target — Iterations 5 / 6
+Excellent Quality	≥ 80%	🎯 Target — Iteration 8 and beyond
+________________________________________
+3.4 Next Steps
+#	Action	Owner	Priority
+1	Complete formal assessment for Iterations 5 & 6	CPRM Business Team + IT Team	High
+2	Complete Iteration 8 development and assessment	IT Team	High
+3	Investigate Iteration 7 performance optimization	IT Team	Medium
+4	Complete Faithfulness assessment across all iterations	IT Team	Medium
+5	Agree formal minimum acceptable score thresholds with Business Team	CPRM + IT Team	High
+6	Begin Risk / Compliance / Model Risk Review documentation	IT Team + Compliance	Medium
+________________________________________
+Document Version 1.0 | July 2, 2026 | Internal — Confidential | Natixis Data & Innovation / IT Team
+
