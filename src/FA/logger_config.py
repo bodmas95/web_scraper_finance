@@ -85,7 +85,8 @@ def setup_logger(session_folder: str, client_name: str) -> logging.Logger:
     
     # Create SESSION-SPECIFIC logger using session_folder as unique identifier
     # This ensures each user session has its own logger instance
-    logger_name = f'financial_analysis_{session_folder.replace("/", "_").replace("\\", "_")}'
+    safe_folder = session_folder.replace("/", "_").replace("\\", "_")
+    logger_name = f'financial_analysis_{safe_folder}'
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
     
@@ -112,8 +113,10 @@ def setup_logger(session_folder: str, client_name: str) -> logging.Logger:
     file_handler.addFilter(SuppressSpecificWarnings())
     logger.addHandler(file_handler)
     
-    # Console handler - simple logs
-    console_handler = logging.StreamHandler(sys.stdout)
+    # Console handler - simple logs (use UTF-8 to avoid emoji encoding errors on Windows)
+    import io
+    _utf8_stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    console_handler = logging.StreamHandler(_utf8_stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(simple_formatter)
     # Add filter to suppress specific warnings
@@ -141,10 +144,10 @@ def get_logger(session_folder: str = None) -> logging.Logger:
         Logger instance
     """
     if session_folder:
-        logger_name = f'financial_analysis_{session_folder.replace("/", "_").replace("\\", "_")}'
+        safe_folder = session_folder.replace("/", "_").replace("\\", "_")
+        logger_name = f'financial_analysis_{safe_folder}'
         return logging.getLogger(logger_name)
     else:
-        # Fallback to default logger for backward compatibility
         return logging.getLogger('financial_analysis')
 
 

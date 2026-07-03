@@ -744,13 +744,48 @@ def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: 
 
     df = pd.DataFrame(df_data)
 
+    # ── Sanitise every cell to a native Python type (prevents React #185) ──
+    numeric_cols = {value_col, f"{reference_year} (Reference)"}
+
+    def _to_clean_float(v):
+        if v is None:
+            return float("nan")
+        if hasattr(v, "as_py"):
+            v = v.as_py()
+        if hasattr(v, "item"):
+            v = v.item()
+        if v is None:
+            return float("nan")
+        if isinstance(v, (int, float)):
+            return float("nan") if pd.isna(v) else float(v)
+        if isinstance(v, str):
+            clean = v.replace(",", "").strip()
+            if clean in ("", "None", "nan", "NaN", "—"):
+                return float("nan")
+            try:
+                return float(clean)
+            except ValueError:
+                return float("nan")
+        return float("nan")
+
+    for col in df.columns:
+        if col in numeric_cols:
+            df[col] = df[col].apply(_to_clean_float).astype("float64")
+        else:
+            df[col] = (
+                df[col]
+                .fillna("")
+                .astype(str)
+                .replace({"None": "", "nan": "", "NaN": "", "<NA>": ""})
+            )
+
     editor_key = f"{key_prefix}_editor_{statement_type}_{mapping_key}"
 
     column_config = {
-        "BREF Field": st.column_config.TextColumn("Field", disabled=True),
-        "Annual Report Label": st.column_config.TextColumn("Matched Label", help="Edit to correct the matched label"),
+        "Field": st.column_config.TextColumn("Field", disabled=True),
+        "Matched Label": st.column_config.TextColumn("Matched Label", help="Edit to correct the matched label"),
         value_col: st.column_config.NumberColumn(value_col, help="Edit to correct the extracted value", format="%.2f"),
-        "Confidence": st.column_config.SelectboxColumn("Confidence", options=["high", "low"], help="Set confidence level"),
+        "Confidence": st.column_config.TextColumn("Confidence", help="Confidence level (high/low)"),
         "Reason": st.column_config.TextColumn("Reason", disabled=True),
     }
     if mode == "validated":
@@ -1043,32 +1078,38 @@ def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
                 
                 # Convert to DataFrame
                 df = pd.DataFrame(data[1:], columns=data[0])  # First row is header
-                
-                # Convert numeric columns to proper numeric type
+
+                # Sanitize column names (openpyxl can return None for empty headers)
+                df.columns = [str(c) if c is not None else f"col_{i}" for i, c in enumerate(df.columns)]
+
+                # Sanitize text columns to native str (prevents React #185)
+                for col in df.columns:
+                    if col in ['Metric', 'Derivation']:
+                        df[col] = (
+                            df[col]
+                            .astype(object)
+                            .where(df[col].notna(), '')
+                            .apply(lambda v: str(v) if v is not None else '')
+                        )
+
+                # Convert numeric columns to proper numeric type and round to 2 decimals
                 numeric_cols = []
                 for col in df.columns:
                     if col not in ['Metric', 'Derivation']:
                         try:
-                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                            df[col] = pd.to_numeric(df[col], errors='coerce').round(2)
                             numeric_cols.append(col)
                         except:
                             pass
-                
-                # Apply styling to the dataframe
+
+                # Apply styling (Styler + column_config conflict causes React #185)
                 styled_df = _style_summary_dataframe(df, tab_key, numeric_cols)
-                
-                # Display styled table with custom number formatting
+
                 st.dataframe(
                     styled_df,
                     use_container_width=True,
                     hide_index=True,
                     height=min(600, len(df) * 35 + 50),
-                    column_config={
-                        col: st.column_config.NumberColumn(
-                            col,
-                            format="%.10g"  # This removes trailing zeros automatically
-                        ) for col in numeric_cols
-                    }
                 )
                 
                 # Show summary stats
@@ -1191,6 +1232,10 @@ def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols
             'padding': '8px'
         }, subset=['Derivation'])
     
+    # Format numeric columns to 2 decimal places
+    if numeric_cols:
+        styled = styled.format({col: '{:.2f}' for col in numeric_cols}, na_rep='')
+
     # Style header
     styled = styled.set_table_styles([
         {'selector': 'th',
@@ -1203,7 +1248,7 @@ def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols
              ('font-size', '12px')
          ]}
     ])
-    
+
     return styled
 
 

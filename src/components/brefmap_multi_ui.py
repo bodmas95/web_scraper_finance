@@ -363,10 +363,11 @@ def _run_multi_statement_mapping(
             except Exception as e:
                 st.error(f"❌ Failed to map {STATEMENT_LABELS.get(statement_type, statement_type)}: {e}")
                 import traceback
-                with st.expander("🐛 Error Details"):
-                    st.code(traceback.format_exc(), language="python")
+                st.code(traceback.format_exc(), language="python")
         
         status.update(label=f"✅ Mapping completed for {total_statements} statement(s)!", state="complete")
+
+    st.rerun()
 
 
 def _map_single_statement_raw(
@@ -412,56 +413,36 @@ def _map_single_statement_raw(
         })
     
     st.write(f"  📋 Comparing {len(fields)} BREF fields")
-    
+
     # Extract all available years from the extraction results
     available_years = []
+    import re
     if rows:
         first_row = rows[0]
-        # Debug: Show all column names
-        all_columns = list(first_row.keys())
-        st.write(f"  🔍 DEBUG: All columns in extraction: {all_columns}")
-        
-        # Extract years from column names (handles formats like "2024-12-31 (FY)" or "2024")
-        import re
         for col_name in first_row.keys():
-            st.write(f"  🔍 DEBUG: Checking column '{col_name}'")
             if col_name not in ['label', 'parent', 'parent_abstract_concept', 'Currency', 'Unit']:
-                # Try to extract 4-digit year from column name
                 year_match = re.search(r'(\d{4})', str(col_name))
                 if year_match:
                     year = int(year_match.group(1))
-                    st.write(f"  🔍 DEBUG: Found year {year} in column '{col_name}'")
-                    if year not in available_years and 2000 <= year <= 2030:  # Sanity check
+                    if year not in available_years and 2000 <= year <= 2030:
                         available_years.append(year)
-                        st.write(f"  ✅ DEBUG: Added year {year} to available_years")
-        
-        available_years = sorted(available_years)  # Sort ascending (2023, 2024, 2025...)
-        st.write(f"  🔍 DEBUG: Years found (regex extraction): {available_years}")
-        st.write(f"  🔍 DEBUG: Total years extracted: {len(available_years)}")
-    
+        available_years = sorted(available_years)
+
     # Check if reference year (target_year - 1) exists in the data
     # ONLY for SEC EDGAR workflow
     reference_year = target_year - 1
     if key_prefix == "sec" and reference_year not in available_years:
-        # Check if reference year exists in the data by looking for column with that year
         ref_year_found = False
         if rows:
             for col_name in rows[0].keys():
                 if str(reference_year) in str(col_name) and re.search(r'\d{4}', str(col_name)):
-                    # Found a column with reference year
                     available_years.append(reference_year)
                     available_years = sorted(available_years)
                     ref_year_found = True
-                    st.write(f"  ✅ Found reference year {reference_year} in column '{col_name}'")
                     break
-        
-        if not ref_year_found:
-            st.write(f"  ⚠️ Reference year {reference_year} not found in extraction data")
-    
-    st.write(f"  📅 Available years in data: {', '.join(map(str, available_years))}")
-    st.write(f"  📅 Target year for mapping: {target_year}")
-    st.write(f"  📅 Reference year: {reference_year} {'(found)' if reference_year in available_years else '(not found)'}")
-    
+
+    st.write(f"  📅 Years: {', '.join(map(str, available_years))} | Target: {target_year} | Ref: {reference_year}")
+
     # Store column name mapping for year access
     year_to_column = {}
     if rows:
@@ -471,138 +452,131 @@ def _map_single_statement_raw(
                 year = int(year_match.group(1))
                 if year in available_years:
                     year_to_column[year] = col_name
-    st.write(f"  🗂️ Year to column mapping: {year_to_column}")
-    
+
     # CRITICAL FIX: Adjust target_year if it's not in available_years
-    # This happens with SEC EDGAR when fiscal year 2024 is requested but data only has 2021-2023
     if target_year not in available_years and available_years:
         original_target_year = target_year
-        target_year = max(available_years)  # Use the most recent year in the data
+        target_year = max(available_years)
         st.warning(f"⚠️ Target year {original_target_year} not found in data. Using most recent year: {target_year}")
-        st.write(f"  📅 Adjusted target year: {original_target_year} → {target_year}")
-    
+
     # Initialize mapped_fields
     mapped_fields = []
-    
-    # Create logger
-    with st.expander("📝 Mapping Logs", expanded=True):
-        mapping_log_placeholder = st.empty()
-        mapping_logger = BREFLiveLogger(mapping_log_placeholder)
-        
-        import contextlib
-        
-        with contextlib.redirect_stdout(mapping_logger):
-            # Phase 1: Fast mapping (alias matching + calculations)
+
+    # Mapping logs (placeholder inside a details element to keep them collapsible)
+    st.caption("📝 Mapping Logs")
+    mapping_log_placeholder = st.empty()
+    mapping_logger = BREFLiveLogger(mapping_log_placeholder)
+
+    import contextlib
+
+    with contextlib.redirect_stdout(mapping_logger):
+        # Phase 1: Fast mapping (alias matching + calculations)
+        print("\n" + "="*60)
+        print("FAST MAPPING (Alias Matching + Calculations)")
+        print("="*60)
+
+        matched_fields, unmatched_fields = fast_map_fields(
+            fields=fields,
+            extraction_rows=rows,
+            available_years=available_years,
+            field_mappings=bref_field_dict,
+            target_year=target_year
+        )
+
+        # Add matched fields to mapped_fields
+        mapped_fields.extend(matched_fields)
+
+        # Phase 2: LLM mapping for unmatched fields only
+        llm_mapped_fields = []
+        if unmatched_fields:
             print("\n" + "="*60)
-            print("FAST MAPPING (Alias Matching + Calculations)")
+            print(f"LLM MAPPING ({len(unmatched_fields)} unmatched fields)")
             print("="*60)
-            
-            matched_fields, unmatched_fields = fast_map_fields(
-                fields=fields,
-                extraction_rows=rows,
-                available_years=available_years,
-                field_mappings=bref_field_dict,
-                target_year=target_year
-            )
-            
-            # Add matched fields to mapped_fields
-            mapped_fields.extend(matched_fields)
-            
-            # Phase 2: LLM mapping for unmatched fields only
-            llm_mapped_fields = []
-            if unmatched_fields:
-                print("\n" + "="*60)
-                print(f"LLM MAPPING ({len(unmatched_fields)} unmatched fields)")
-                print("="*60)
-                
-                # Try with Gemma first, fallback to GPT-5.5 if it fails
-                try:
-                    llm_mapped_fields = map_all_fields(
-                        fields=unmatched_fields,
-                        extracted_rows=rows,
-                        company_name=company_name,
-                        target_year=target_year,
-                        provider=provider,
-                        model=model_id
-                    )
-                except Exception as e:
-                    print(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}")
-                    print("🔄 Falling back to GPT-5.5...\n")
-                    
-                    from src.extraction.model_config import get_fallback_model
-                    fallback_provider, fallback_model = get_fallback_model()
-                    
-                    llm_mapped_fields = map_all_fields(
-                        fields=unmatched_fields,
-                        extracted_rows=rows,
-                        company_name=company_name,
-                        target_year=target_year,
-                        provider=fallback_provider,
-                        model=fallback_model
-                    )
-                
-                # Combine results
-                mapped_fields.extend(llm_mapped_fields)
-            
-            # CRITICAL FIX: Extract year_values for LLM-mapped fields from extraction rows
-            # This runs for ALL LLM-mapped fields, not just unmatched ones
-            if llm_mapped_fields:
-                print("\n" + "="*60)
-                print("EXTRACTING MULTI-YEAR VALUES FOR LLM-MAPPED FIELDS")
-                print("="*60)
-                
-                for field in llm_mapped_fields:
-                    matched_label = field.get("matched_label")
-                    if matched_label and matched_label != "—":
-                        # Find the matching row in extraction_rows
-                        matching_row = None
-                        for row in rows:
-                            if row.get("label", "").lower().strip() == matched_label.lower().strip():
-                                matching_row = row
-                                break
-                        
-                        if matching_row:
-                            # Extract values for all available years
-                            year_values = {}
-                            for year in available_years:
-                                year_col = year_to_column.get(year)
-                                if year_col and year_col in matching_row:
-                                    year_value = matching_row[year_col]
-                                    if year_value is not None and str(year_value).strip() != "":
-                                        # CRITICAL FIX: Remove commas from numbers (LLM returns formatted numbers like '17,069')
-                                        # This prevents float conversion errors
-                                        try:
-                                            # Remove commas and convert to float
-                                            clean_value = str(year_value).replace(',', '').strip()
-                                            year_values[str(year)] = float(clean_value)
-                                        except (ValueError, TypeError):
-                                            # Skip values that can't be converted to float
-                                            print(f"  ⚠️  Could not convert '{year_value}' to float for year {year}")
-                                            pass
-                            
-                            if year_values:
-                                field["year_values"] = year_values
-                                print(f"  ✅ Extracted {len(year_values)} year values for '{field.get('label')}': {year_values}")
-                            else:
-                                print(f"  ⚠️  No year values found for '{field.get('label')}'")
-            
+
+            # Try with Gemma first, fallback to GPT-5.5 if it fails
+            try:
+                llm_mapped_fields = map_all_fields(
+                    fields=unmatched_fields,
+                    extracted_rows=rows,
+                    company_name=company_name,
+                    target_year=target_year,
+                    provider=provider,
+                    model=model_id
+                )
+            except Exception as e:
+                print(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}")
+                print("🔄 Falling back to GPT-5.5...\n")
+
+                from src.extraction.model_config import get_fallback_model
+                fallback_provider, fallback_model = get_fallback_model()
+
+                llm_mapped_fields = map_all_fields(
+                    fields=unmatched_fields,
+                    extracted_rows=rows,
+                    company_name=company_name,
+                    target_year=target_year,
+                    provider=fallback_provider,
+                    model=fallback_model
+                )
+
+            # Combine results
+            mapped_fields.extend(llm_mapped_fields)
+
+        # CRITICAL FIX: Extract year_values for LLM-mapped fields from extraction rows
+        # This runs for ALL LLM-mapped fields, not just unmatched ones
+        if llm_mapped_fields:
             print("\n" + "="*60)
-            print("MAPPING COMPLETE")
+            print("EXTRACTING MULTI-YEAR VALUES FOR LLM-MAPPED FIELDS")
             print("="*60)
-            
-            # ==================================================================
-            # CRITICAL FIX: Apply sign corrections BEFORE calculations
-            # ==================================================================
-            print("\n" + "="*60)
-            print("APPLYING SIGN CORRECTIONS (BEFORE CALCULATIONS)")
-            print("="*60)
-            
-            from src.mapping.region_adjustments import apply_sign_corrections
-            mapped_fields = apply_sign_corrections(
-                fields=mapped_fields,
-                region=region,
-                statement_type=statement_type
-            )
+
+            for field in llm_mapped_fields:
+                matched_label = field.get("matched_label")
+                if matched_label and matched_label != "—":
+                    # Find the matching row in extraction_rows
+                    matching_row = None
+                    for row in rows:
+                        if row.get("label", "").lower().strip() == matched_label.lower().strip():
+                            matching_row = row
+                            break
+
+                    if matching_row:
+                        # Extract values for all available years
+                        year_values = {}
+                        for year in available_years:
+                            year_col = year_to_column.get(year)
+                            if year_col and year_col in matching_row:
+                                year_value = matching_row[year_col]
+                                if year_value is not None and str(year_value).strip() != "":
+                                    try:
+                                        clean_value = str(year_value).replace(',', '').strip()
+                                        year_values[str(year)] = float(clean_value)
+                                    except (ValueError, TypeError):
+                                        print(f"  ⚠️  Could not convert '{year_value}' to float for year {year}")
+                                        pass
+
+                        if year_values:
+                            field["year_values"] = year_values
+                            print(f"  ✅ Extracted {len(year_values)} year values for '{field.get('label')}': {year_values}")
+                        else:
+                            print(f"  ⚠️  No year values found for '{field.get('label')}'")
+
+        print("\n" + "="*60)
+        print("MAPPING COMPLETE")
+        print("="*60)
+
+        # ==================================================================
+        # CRITICAL FIX: Apply sign corrections BEFORE calculations
+        # ==================================================================
+        print("\n" + "="*60)
+        print("APPLYING SIGN CORRECTIONS (BEFORE CALCULATIONS)")
+        print("="*60)
+
+        from src.mapping.region_adjustments import apply_sign_corrections
+        mapped_fields = apply_sign_corrections(
+            fields=mapped_fields,
+            region=region,
+            statement_type=statement_type
+        )
     
     # mapped_fields is now defined and available outside the context manager
     
@@ -616,76 +590,64 @@ def _map_single_statement_raw(
     )
     from src.mapping.region_adjustments import apply_sign_corrections
     
-    # Create a new expander for calculation logs
-    with st.expander("🧮 Calculation Logs (Multi-Year)", expanded=True):
-        calc_log_placeholder = st.empty()
-        calc_logger = BREFLiveLogger(calc_log_placeholder)
-        
-        with contextlib.redirect_stdout(calc_logger):
-            print("\n" + "="*60)
-            print("CALCULATING DERIVED FIELDS FOR ALL YEARS")
-            print("="*60)
-            
-            # Calculate for ALL available years, not just target year
-            all_years_calculated = {}
-            
-            for year in available_years:
-                year_str = str(year)
-                print(f"\n  Calculating for year {year}...")
-                
-                # Convert mapped_fields list to dict for this year
-                mapped_dict_year = {}
-                for field in mapped_fields:
-                    label = field.get("label")
-                    # Try to get value for this specific year
-                    year_value = None
-                    if "year_values" in field and field["year_values"]:
-                        year_value = field["year_values"].get(year_str)
-                    elif year == target_year:
-                        year_value = field.get("target_value")
-                    
-                    # CRITICAL FIX: Filter out None AND empty strings (SEC EDGAR returns '' for missing values)
-                    # Empty strings cause calculation failures because they can't be converted to float
-                    # ALSO: Remove commas from numbers (LLM returns formatted numbers like '17,069')
-                    if label and year_value is not None and str(year_value).strip() != "":
-                        try:
-                            # Remove commas and convert to float to ensure it's a valid number
-                            clean_value = str(year_value).replace(',', '').strip()
-                            mapped_dict_year[label] = float(clean_value)
-                        except (ValueError, TypeError):
-                            # Skip invalid values (can't convert to number)
-                            pass
-                
-                # Calculate all derived fields for this year
-                mapped_with_calculated_year = calculate_all_fields(
-                    mapped_values=mapped_dict_year,
-                    statement_type=statement_type,
-                    region=region
-                )
-                
-                # CRITICAL FIX: Update mapped_dict_year with calculated values
-                # This allows dependent calculations to use newly calculated fields
-                mapped_dict_year.update(mapped_with_calculated_year)
-                
-                # Store calculated values for this year
-                # IMPORTANT: Strip * prefix from calculated field keys for consistent lookup
-                # CRITICAL FIX: Filter out empty strings when storing calculated values
-                for field_key, value in mapped_with_calculated_year.items():
-                    # Remove * prefix if present (calculated fields are marked with *)
-                    clean_key = field_key.lstrip("*")
-                    
-                    # Skip empty strings and None values (SEC EDGAR returns '' for failed calculations)
-                    if value is None or (isinstance(value, str) and value.strip() == ""):
-                        continue
-                    
-                    if clean_key not in all_years_calculated:
-                        all_years_calculated[clean_key] = {}
-                    all_years_calculated[clean_key][year_str] = value
-            
-            # DEBUG: Show what's in all_years_calculated
-            print(f"\n  DEBUG: all_years_calculated keys: {list(all_years_calculated.keys())[:10]}...")  # Show first 10
-            for key in list(all_years_calculated.keys())[:3]:  # Show details for first 3
-                print(f"  DEBUG: all_years_calculated['{key}'] = {all_years_calculated[key]}")
+    # Calculation logs
+    st.caption("🧮 Calculation Logs")
+    calc_log_placeholder = st.empty()
+    calc_logger = BREFLiveLogger(calc_log_placeholder)
+
+    with contextlib.redirect_stdout(calc_logger):
+        print("\n" + "="*60)
+        print("CALCULATING DERIVED FIELDS FOR ALL YEARS")
+        print("="*60)
+
+        # Calculate for ALL available years, not just target year
+        all_years_calculated = {}
+
+        for year in available_years:
+            year_str = str(year)
+            print(f"\n  Calculating for year {year}...")
+
+            # Convert mapped_fields list to dict for this year
+            mapped_dict_year = {}
+            for field in mapped_fields:
+                label = field.get("label")
+                # Try to get value for this specific year
+                year_value = None
+                if "year_values" in field and field["year_values"]:
+                    year_value = field["year_values"].get(year_str)
+                elif year == target_year:
+                    year_value = field.get("target_value")
+
+                if label and year_value is not None and str(year_value).strip() != "":
+                    try:
+                        clean_value = str(year_value).replace(',', '').strip()
+                        mapped_dict_year[label] = float(clean_value)
+                    except (ValueError, TypeError):
+                        pass
+
+            # Calculate all derived fields for this year
+            mapped_with_calculated_year = calculate_all_fields(
+                mapped_values=mapped_dict_year,
+                statement_type=statement_type,
+                region=region
+            )
+
+            mapped_dict_year.update(mapped_with_calculated_year)
+
+            for field_key, value in mapped_with_calculated_year.items():
+                clean_key = field_key.lstrip("*")
+
+                if value is None or (isinstance(value, str) and value.strip() == ""):
+                    continue
+
+                if clean_key not in all_years_calculated:
+                    all_years_calculated[clean_key] = {}
+                all_years_calculated[clean_key][year_str] = value
+
+        # DEBUG: Show what's in all_years_calculated
+        print(f"\n  DEBUG: all_years_calculated keys: {list(all_years_calculated.keys())[:10]}...")
+        for key in list(all_years_calculated.keys())[:3]:
+            print(f"  DEBUG: all_years_calculated['{key}'] = {all_years_calculated[key]}")
     
     # Use target year calculations for the final ordered output
     mapped_dict_target = {}
@@ -979,49 +941,48 @@ def _map_single_statement_validated(
         st.write(f"  🤖 Mapping using AI...")
         
         # Map fields
-        with st.expander("📝 Mapping Logs", expanded=False):
-            mapping_log_placeholder = st.empty()
-            mapping_logger = BREFLiveLogger(mapping_log_placeholder)
-            
-            import contextlib
-            
-            with contextlib.redirect_stdout(mapping_logger):
-                # Try with Gemma first, fallback to GPT-5.5 if it fails
-                try:
-                    mapped_fields = map_all_fields(
-                        fields=fields,
-                        extracted_rows=rows,
-                        company_name=company_name,
-                        target_year=target_year,
-                        provider=provider,
-                        model=model_id
-                    )
-                except Exception as e:
-                    print(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}")
-                    print("🔄 Falling back to GPT-5.5...\n")
-                    
-                    from src.extraction.model_config import get_fallback_model
-                    fallback_provider, fallback_model = get_fallback_model()
-                    
-                    mapped_fields = map_all_fields(
-                        fields=fields,
-                        extracted_rows=rows,
-                        company_name=company_name,
-                        target_year=target_year,
-                        provider=fallback_provider,
-                        model=fallback_model
-                    )
-        
+        st.caption("📝 Mapping Logs")
+        mapping_log_placeholder = st.empty()
+        mapping_logger = BREFLiveLogger(mapping_log_placeholder)
+
+        import contextlib
+
+        with contextlib.redirect_stdout(mapping_logger):
+            try:
+                mapped_fields = map_all_fields(
+                    fields=fields,
+                    extracted_rows=rows,
+                    company_name=company_name,
+                    target_year=target_year,
+                    provider=provider,
+                    model=model_id
+                )
+            except Exception as e:
+                print(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}")
+                print("🔄 Falling back to GPT-5.5...\n")
+
+                from src.extraction.model_config import get_fallback_model
+                fallback_provider, fallback_model = get_fallback_model()
+
+                mapped_fields = map_all_fields(
+                    fields=fields,
+                    extracted_rows=rows,
+                    company_name=company_name,
+                    target_year=target_year,
+                    provider=fallback_provider,
+                    model=fallback_model
+                )
+
         st.write(f"  ✓ Validating mappings...")
-        
+
         # Validate
-        with st.expander("📝 Validation Logs", expanded=False):
-            validation_log_placeholder = st.empty()
-            validation_logger = BREFLiveLogger(validation_log_placeholder)
-            
-            import contextlib
-            with contextlib.redirect_stdout(validation_logger):
-                validated_fields = validate_mappings(mapped_fields)
+        st.caption("📝 Validation Logs")
+        validation_log_placeholder = st.empty()
+        validation_logger = BREFLiveLogger(validation_log_placeholder)
+
+        import contextlib
+        with contextlib.redirect_stdout(validation_logger):
+            validated_fields = validate_mappings(mapped_fields)
         
         high_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'high')
         low_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'low')
@@ -1272,38 +1233,74 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
         df_data.append(row_data)
     
     df = pd.DataFrame(df_data)
-    
+
+    # ── Sanitise every cell to a native Python type (prevents React #185) ──
+    year_cols_set = set([str(y) for y in available_years] + [str(reference_year)])
+
+    def _to_clean_float(v):
+        """Convert any value to a plain Python float, or NaN."""
+        if v is None:
+            return float("nan")
+        if hasattr(v, "as_py"):
+            v = v.as_py()
+        if hasattr(v, "item"):
+            v = v.item()
+        if v is None:
+            return float("nan")
+        if isinstance(v, (int, float)):
+            return float("nan") if pd.isna(v) else float(v)
+        if isinstance(v, str):
+            clean = v.replace(",", "").strip()
+            if clean in ("", "None", "nan", "NaN", "—"):
+                return float("nan")
+            try:
+                return float(clean)
+            except ValueError:
+                return float("nan")
+        return float("nan")
+
+    for col in df.columns:
+        if col in year_cols_set:
+            df[col] = df[col].apply(_to_clean_float).astype("float64")
+        else:
+            df[col] = (
+                df[col]
+                .fillna("")
+                .astype(str)
+                .replace({"None": "", "nan": "", "NaN": "", "<NA>": ""})
+            )
+
     # Data editor
     column_config = {
         "BREF Field": st.column_config.TextColumn("BREF Field", disabled=True, width="large"),
         "Annual Report Label": st.column_config.TextColumn("Annual Report Label", help="Edit to correct the matched label", width="large"),
     }
-    
+
     # Add reference year column (always show it, for both raw and validated modes)
     ref_year_col = str(reference_year)
     if ref_year_col in df.columns:
         column_config[ref_year_col] = st.column_config.NumberColumn(
-            ref_year_col, 
+            ref_year_col,
             help=f"Reference year value ({reference_year})",
             format="%.2f"
         )
-    
+
     # Add all year columns (excluding reference year as it's already added)
     for year in available_years:
         year_col = str(year)
         if year_col in df.columns and year != reference_year:
             column_config[year_col] = st.column_config.NumberColumn(
-                year_col, 
+                year_col,
                 help=f"Value for year {year}",
                 format="%.2f"
             )
-    
+
     # Add confidence and reason columns
-    column_config["Confidence"] = st.column_config.SelectboxColumn(
-        "Confidence", options=["high", "low"], help="Set confidence level"
+    column_config["Confidence"] = st.column_config.TextColumn(
+        "Confidence", help="Confidence level (high/low)"
     )
     column_config["Reason"] = st.column_config.TextColumn("Reason", disabled=True)
-    
+
     edited_df = st.data_editor(
         df,
         use_container_width=True,

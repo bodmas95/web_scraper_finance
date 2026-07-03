@@ -384,6 +384,14 @@ def main():
                             st.session_state.pdf_extraction_results = {}
                             st.session_state.pdf_extraction_done = False
                             st.session_state.show_pdf_extraction = False
+                            st.session_state.hkex_extraction_results = None
+                            st.session_state.hkex_extraction_report_title = None
+                            st.session_state.manual_extraction_results = None
+                            st.session_state.manual_extraction_report_title = None
+                            st.session_state.sec_extraction_results = None
+                            st.session_state.sec_extraction_report_title = None
+                            st.session_state.uploaded_pdf_bytes = None
+                            st.session_state.bref_mapping_results = {}
                             st.rerun()
                 else:
                     st.info("No companies found for this region and country")
@@ -499,6 +507,54 @@ def main():
         render_sec_edgar_section(company)
     else:
         st.warning("Could not detect company data source. Please ensure the company has LEI (OVH), HKEX ticker, or SEC ticker (exchange='SEC').")
+
+    # ==================================================================
+    # FINANCIAL ANALYSIS — Agentic AI
+    # Only visible after summary generation (any region).
+    # Calls FA/app.py main() as-is; patches set_page_config to no-op
+    # so data scientists can update FA files without touching this code.
+    # ==================================================================
+    _summary_ready = any(
+        st.session_state.get(k)
+        for k in (
+            "edgar_summary_output",
+            "sec_summary_output",
+            "hkex_summary_output",
+            "manual_summary_output",
+            "xbrl_summary_output",
+        )
+    )
+    if _summary_ready:
+        st.markdown("---")
+        try:
+            from src.FA.app import main as _fa_main
+
+            # Pass pipeline context to FA via session state
+            st.session_state._fa_company_name = company.get("name", "Unknown")
+
+            _summary_keys = (
+                "edgar_summary_output", "sec_summary_output",
+                "hkex_summary_output", "manual_summary_output",
+                "xbrl_summary_output",
+            )
+            for _sk in _summary_keys:
+                _sb = st.session_state.get(_sk)
+                if _sb:
+                    st.session_state._fa_summary_bytes = _sb
+                    break
+
+            _orig_spc = st.set_page_config
+            st.set_page_config = lambda **kw: None
+            try:
+                _fa_main()
+            finally:
+                st.set_page_config = _orig_spc
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:
+            if 'Rerun' in type(e).__name__ or 'Stop' in type(e).__name__:
+                raise
+            st.error(f"Financial Analysis module error: {e}")
 
     # Footer
     st.markdown("---")
