@@ -1009,93 +1009,95 @@ def main():
                 st.success(f"✅ Processed {len(pages)} pages")
         
         # ─── BREF CONFIGURATION ────────────────────────────────
-        if state['financial_summary_path'] and not state['bref_accepted']:
+        if st.session_state.agent_state and st.session_state.agent_state.get('financial_summary_path') and not st.session_state.agent_state.get('bref_accepted'):
+            state = st.session_state.agent_state  # Get local reference
             st.divider()
             st.caption("Generate and validate BREF financial summary")
             
             # Create tabs for BREF Configuration
             bref_tabs = st.tabs(["📊 P&L BREF", "📈 BS BREF", "💰 CF BREF"])
-        
-        with bref_tabs[0]:  # P&L tab
-            bref_config_pnl = render_configuration_options("bref", "bref_pnl", "pnl")
-            state['bref_config_pnl'] = bref_config_pnl
-            # Save BREF PnL configuration to session folder
-            if state.get('session_folder'):
-                save_configuration_to_folder(bref_config_pnl, "bref_pnl", state['session_folder'])
-        
-        with bref_tabs[1]:  # BS tab
-            bref_config_bs = render_configuration_options("bref", "bref_bs", "bs")
-            state['bref_config_bs'] = bref_config_bs
-            # Save BREF BS configuration to session folder
-            if state.get('session_folder'):
-                save_configuration_to_folder(bref_config_bs, "bref_bs", state['session_folder'])
-        
-        with bref_tabs[2]:  # CF tab
-            bref_config_cf = render_configuration_options("bref", "bref_cf", "cf")
-            state['bref_config_cf'] = bref_config_cf
-            # Save BREF CF configuration to session folder
-            if state.get('session_folder'):
-                save_configuration_to_folder(bref_config_cf, "bref_cf", state['session_folder'])
-        
-                # Generate BREF button
-        if st.button("🤖 Generate & Validate All BREFs (P&L, BS, CF)", key="generate_bref", type="primary"):
-            st.session_state.workflow_running = True
             
-            with st.spinner("🤖 Generating and validating all BREFs (P&L → BS → CF) with retry logic..."):
-                # Use the graph workflow which has built-in retry logic for all 3 BREFs
-                # The graph will:
-                # 1. Generate P&L BREF → Validate → Retry up to 3 times if rejected
-                # 2. Generate BS BREF → Validate → Retry up to 3 times if rejected
-                # 3. Generate CF BREF → Validate → Retry up to 3 times if rejected
+            with bref_tabs[0]:  # P&L tab
+                bref_config_pnl = render_configuration_options("bref", "bref_pnl", "pnl")
+                state['bref_config_pnl'] = bref_config_pnl
+                # Save BREF PnL configuration to session folder
+                if state.get('session_folder'):
+                    save_configuration_to_folder(bref_config_pnl, "bref_pnl", state['session_folder'])
+            
+            with bref_tabs[1]:  # BS tab
+                bref_config_bs = render_configuration_options("bref", "bref_bs", "bs")
+                state['bref_config_bs'] = bref_config_bs
+                # Save BREF BS configuration to session folder
+                if state.get('session_folder'):
+                    save_configuration_to_folder(bref_config_bs, "bref_bs", state['session_folder'])
+            
+            with bref_tabs[2]:  # CF tab
+                bref_config_cf = render_configuration_options("bref", "bref_cf", "cf")
+                state['bref_config_cf'] = bref_config_cf
+                # Save BREF CF configuration to session folder
+                if state.get('session_folder'):
+                    save_configuration_to_folder(bref_config_cf, "bref_cf", state['session_folder'])
+            
+            # Generate BREF button
+            if st.button("🤖 Generate & Validate All BREFs (P&L, BS, CF)", key="generate_bref", type="primary"):
+                st.session_state.workflow_running = True
                 
-                workflow_app = st.session_state.workflow_app
-                
-                try:
-                    # Execute the graph workflow
-                    # The graph entry point is 'bref_analyst_pnl' which starts the sequential BREF generation
-                    state = workflow_app.invoke(state)
+                with st.spinner("🤖 Generating and validating all BREFs (P&L → BS → CF) with retry logic..."):
+                    # Use the graph workflow which has built-in retry logic for all 3 BREFs
+                    # The graph will:
+                    # 1. Generate P&L BREF → Validate → Retry up to 3 times if rejected
+                    # 2. Generate BS BREF → Validate → Retry up to 3 times if rejected
+                    # 3. Generate CF BREF → Validate → Retry up to 3 times if rejected
                     
-                    st.session_state.agent_state = state
-                    st.session_state.logger.info("BREF generation workflow completed")
+                    workflow_app = st.session_state.workflow_app
                     
-                    # Check if all BREFs were accepted
-                    all_accepted = (
-                        state.get('bref_accepted_pnl', False) and
-                        state.get('bref_accepted_bs', False) and
-                        state.get('bref_accepted_cf', False)
-                    )
-                    
-                    if all_accepted:
-                        st.success("✅ All BREFs generated and validated successfully!")
-                    else:
-                        # Show which BREFs failed
-                        failed_brefs = []
-                        if not state.get('bref_accepted_pnl', False):
-                            failed_brefs.append("P&L")
-                        if not state.get('bref_accepted_bs', False):
-                            failed_brefs.append("Balance Sheet")
-                        if not state.get('bref_accepted_cf', False):
-                            failed_brefs.append("Cash Flow")
+                    try:
+                        # Execute the graph workflow
+                        # The graph entry point is 'bref_analyst_pnl' which starts the sequential BREF generation
+                        state = workflow_app.invoke(state)
                         
-                        if failed_brefs:
-                            st.warning(f"⚠️ Some BREFs need attention: {', '.join(failed_brefs)}")
+                        st.session_state.agent_state = state
+                        st.session_state.logger.info("BREF generation workflow completed")
+                        
+                        # Check if all BREFs were accepted
+                        all_accepted = (
+                            state.get('bref_accepted_pnl', False) and
+                            state.get('bref_accepted_bs', False) and
+                            state.get('bref_accepted_cf', False)
+                        )
+                        
+                        if all_accepted:
+                            st.success("✅ All BREFs generated and validated successfully!")
+                        else:
+                            # Show which BREFs failed
+                            failed_brefs = []
+                            if not state.get('bref_accepted_pnl', False):
+                                failed_brefs.append("P&L")
+                            if not state.get('bref_accepted_bs', False):
+                                failed_brefs.append("Balance Sheet")
+                            if not state.get('bref_accepted_cf', False):
+                                failed_brefs.append("Cash Flow")
+                            
+                            if failed_brefs:
+                                st.warning(f"⚠️ Some BREFs need attention: {', '.join(failed_brefs)}")
+                        
+                    except Exception as e:
+                        error_msg = f"BREF generation workflow failed: {str(e)}"
+                        st.session_state.logger.error(error_msg)
+                        st.error(error_msg)
+                        state['errors'].append(error_msg)
+                        st.session_state.agent_state = state
                     
-                except Exception as e:
-                    error_msg = f"BREF generation workflow failed: {str(e)}"
-                    st.session_state.logger.error(error_msg)
-                    st.error(error_msg)
-                    state['errors'].append(error_msg)
-                    st.session_state.agent_state = state
-                
-                st.rerun()
-    
-        # Show BREF validation results for all three types
-    if state.get('bref_validation_result_pnl') or state.get('bref_validation_result_bs') or state.get('bref_validation_result_cf'):
-        st.divider()
-        section_header("✅", "BREF Validation Results", "Validation status for all BREF types")
+                        st.rerun()
         
-        # Add custom CSS for smaller metric fonts
-        st.markdown("""
+                # Show BREF validation results for all three types
+        if st.session_state.agent_state and (st.session_state.agent_state.get('bref_validation_result_pnl') or st.session_state.agent_state.get('bref_validation_result_bs') or st.session_state.agent_state.get('bref_validation_result_cf')):
+            state = st.session_state.agent_state  # Get local reference
+            st.divider()
+            section_header("✅", "BREF Validation Results", "Validation status for all BREF types")
+            
+            # Add custom CSS for smaller metric fonts
+            st.markdown("""
         <style>
         .small-metric {
             font-size: 0.85rem !important;
@@ -1271,7 +1273,8 @@ def main():
                     st.rerun()
     
         # Show BREF summaries for all three types
-    if state.get('bref_summary_pnl') or state.get('bref_summary_bs') or state.get('bref_summary_cf'):
+        if st.session_state.agent_state and (st.session_state.agent_state.get('bref_summary_pnl') or st.session_state.agent_state.get('bref_summary_bs') or st.session_state.agent_state.get('bref_summary_cf')):
+            state = st.session_state.agent_state  # Get local reference
         with st.expander("📄 View BREF Summaries", expanded=False):
             # Create tabs for each BREF type
             summary_tabs = []
