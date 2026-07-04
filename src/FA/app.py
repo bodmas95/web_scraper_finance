@@ -1315,14 +1315,7 @@ def main():
                     value=state['financial_summary_text'],
                     height=400,
                     disabled=True,
-
-
-
-
-
-
-
-                                        key="original_bref_data_display"
+                    key="original_bref_data_display"
                 )
     
         # END OF STANDALONE MODE CONDITIONAL BLOCK
