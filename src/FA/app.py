@@ -11,56 +11,33 @@
 
 import streamlit as st
 import os
-import sys
 import json
 import logging
-import importlib.util as _ilu
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 
-# ---------------------------------------------------------------------------
-# FA module isolation: when imported from the main Streamlit app,
-# bare imports like "from utils import ..." would resolve to src/utils.py
-# instead of src/FA/utils.py.  We use importlib to force-load from the FA
-# directory so the correct files are used regardless of sys.path order.
-# ---------------------------------------------------------------------------
-_FA_DIR = os.path.dirname(os.path.abspath(__file__))
-if _FA_DIR not in sys.path:
-    sys.path.insert(0, _FA_DIR)
-
-def _fa_import(name):
-    """Import a module from the FA directory, bypassing sys.modules cache."""
-    spec = _ilu.spec_from_file_location(name, os.path.join(_FA_DIR, name.replace(".", os.sep) + ".py"))
-    mod = _ilu.module_from_spec(spec)
-    sys.modules[f"_fa_{name}"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-_graph = _fa_import("graph")
-build_financial_analysis_graph = _graph.build_financial_analysis_graph
-
-_agents = _fa_import("agents")
-AgentState = _agents.AgentState
-
-_utils = _fa_import("utils")
-parse_document = _utils.parse_document
-save_parsed_json = _utils.save_parsed_json
-get_session_folder = _utils.get_session_folder
-save_uploaded_file = _utils.save_uploaded_file
-save_file_sequencially = _utils.save_file_sequencially
-get_excel_sheets = _utils.get_excel_sheets
-
-_app_utils = _fa_import("app_utils")
-reorganize_citations_for_display = _app_utils.reorganize_citations_for_display
-render_citations_section = _app_utils.render_citations_section
-escape_dollar_for_markdown = _app_utils.escape_dollar_for_markdown
-
-_bref_ext = _fa_import("bref_data_extractor")
-extract_bref_data_sync = _bref_ext.extract_bref_data_sync
+# Import LangGraph components
+from graph import build_financial_analysis_graph
+from agents import AgentState
+from utils import (
+    parse_document,
+    save_parsed_json,
+    get_session_folder,
+    save_uploaded_file,
+    save_file_sequencially,
+    get_excel_sheets
+)
+# Import citation reorganization utilities
+from app_utils import reorganize_citations_for_display, render_citations_section, escape_dollar_for_markdown
+# Import BREF data extractor
+from bref_data_extractor import extract_bref_data_sync
 
 # API imports
-sys.path.insert(0, os.path.join(_FA_DIR, "bpce_api_setup"))
+import sys
+import os as os_module
+# Add path for API imports - works from sprint4 directory
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "bpce_api_setup"))
 try:
     from call_bpce_llm import call_llm_api
     from prompts.prompts_FA import (
@@ -70,7 +47,8 @@ try:
         BREF_VALIDATION_PROMPT_PNL, BREF_VALIDATION_PROMPT_BS, BREF_VALIDATION_PROMPT_CF
     )
 except ImportError:
-    sys.path.insert(0, os.path.join(_FA_DIR, "..", "bpce_api_setup"))
+    # Fallback to parent directory
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bpce_api_setup"))
     from call_bpce_llm import call_llm_api
     from prompts.prompts_FA import (
         PROMPT_BREF_ANALYSIS_PNL, PROMPT_BREF_ANALYSIS_BS, PROMPT_BREF_ANALYSIS_CF,
@@ -79,50 +57,26 @@ except ImportError:
         BREF_VALIDATION_PROMPT_PNL, BREF_VALIDATION_PROMPT_BS, BREF_VALIDATION_PROMPT_CF
     )
 
-_config_defaults = _fa_import("config_defaults")
-LLM_OPTIONS = _config_defaults.LLM_OPTIONS
-CLIENT_LIST = _config_defaults.CLIENT_LIST
-BASE_UPLOAD_DIR = _config_defaults.BASE_UPLOAD_DIR
-PARSED_DOCS_DIR = _config_defaults.PARSED_DOCS_DIR
-BREF_DEFAULT_TEMPERATURE = _config_defaults.BREF_DEFAULT_TEMPERATURE
-BREF_DEFAULT_MAX_TOKENS = _config_defaults.BREF_DEFAULT_MAX_TOKENS
-BREF_DEFAULT_LLM_MODEL = _config_defaults.BREF_DEFAULT_LLM_MODEL
-FA_DEFAULT_TEMPERATURE = _config_defaults.FA_DEFAULT_TEMPERATURE
-FA_DEFAULT_MAX_TOKENS = _config_defaults.FA_DEFAULT_MAX_TOKENS
-FA_DEFAULT_LLM_MODEL = _config_defaults.FA_DEFAULT_LLM_MODEL
-COMBINED_DEFAULT_TEMPERATURE = _config_defaults.COMBINED_DEFAULT_TEMPERATURE
-COMBINED_DEFAULT_MAX_TOKENS = _config_defaults.COMBINED_DEFAULT_MAX_TOKENS
-COMBINED_DEFAULT_LLM_MODEL = _config_defaults.COMBINED_DEFAULT_LLM_MODEL
-TEMPERATURE_MIN = _config_defaults.TEMPERATURE_MIN
-TEMPERATURE_MAX = _config_defaults.TEMPERATURE_MAX
-TEMPERATURE_STEP = _config_defaults.TEMPERATURE_STEP
-BREF_TOKENS_MIN = _config_defaults.BREF_TOKENS_MIN
-BREF_TOKENS_MAX = _config_defaults.BREF_TOKENS_MAX
-BREF_TOKENS_STEP = _config_defaults.BREF_TOKENS_STEP
-FA_TOKENS_MIN = _config_defaults.FA_TOKENS_MIN
-FA_TOKENS_MAX = _config_defaults.FA_TOKENS_MAX
-FA_TOKENS_STEP = _config_defaults.FA_TOKENS_STEP
-COMBINED_TOKENS_MIN = _config_defaults.COMBINED_TOKENS_MIN
-COMBINED_TOKENS_MAX = _config_defaults.COMBINED_TOKENS_MAX
-COMBINED_TOKENS_STEP = _config_defaults.COMBINED_TOKENS_STEP
+# Import centralized configuration defaults
+from config_defaults import (
+    LLM_OPTIONS, CLIENT_LIST, BASE_UPLOAD_DIR, PARSED_DOCS_DIR,
+    BREF_DEFAULT_TEMPERATURE, BREF_DEFAULT_MAX_TOKENS, BREF_DEFAULT_LLM_MODEL,
+    FA_DEFAULT_TEMPERATURE, FA_DEFAULT_MAX_TOKENS, FA_DEFAULT_LLM_MODEL,
+    COMBINED_DEFAULT_TEMPERATURE, COMBINED_DEFAULT_MAX_TOKENS, COMBINED_DEFAULT_LLM_MODEL,
+    TEMPERATURE_MIN, TEMPERATURE_MAX, TEMPERATURE_STEP,
+    BREF_TOKENS_MIN, BREF_TOKENS_MAX, BREF_TOKENS_STEP,
+    FA_TOKENS_MIN, FA_TOKENS_MAX, FA_TOKENS_STEP,
+    COMBINED_TOKENS_MIN, COMBINED_TOKENS_MAX, COMBINED_TOKENS_STEP
+)
 
-_logger_config = _fa_import("logger_config")
-setup_logger = _logger_config.setup_logger
-log_section_start = _logger_config.log_section_start
-log_section_end = _logger_config.log_section_end
-log_step = _logger_config.log_step
-log_file_saved = _logger_config.log_file_saved
-
-_doc_store = _fa_import("doc_store")
-save_fa_document = _doc_store.save_fa_document
-list_fa_documents = _doc_store.list_fa_documents
-load_fa_document = _doc_store.load_fa_document
-
-_progress_tracker = _fa_import("progress_tracker")
-get_tracker = _progress_tracker.get_tracker
-
-_status_callback = _fa_import("status_callback")
-set_status_callback = _status_callback.set_status_callback
+# Import logger configuration
+from logger_config import setup_logger, log_section_start, log_section_end, log_step, log_file_saved
+# Import progress tracker
+from progress_tracker import get_tracker
+# Import status callback
+from status_callback import set_status_callback
+# Validation prompts are imported from prompts_FA.py above
+# No need to import from prompts_agents.py
 
 
 # ─── CONFIGURATION SAVE HELPER ────────────────────────────
@@ -810,33 +764,14 @@ def initialize_agent_state(client_name: str, session_folder: str) -> AgentState:
         'other_documents': [],
         'chunks': [],
         
-        # BREF Summary (legacy)
+        # BREF Summary
         'bref_summary': None,
         'bref_validation_result': None,
         'bref_retry_count': 0,
         'bref_accepted': False,
-
-        # BREF Summary per statement type
-        'bref_summary_pnl': None,
-        'bref_validation_result_pnl': None,
-        'bref_retry_count_pnl': 0,
-        'bref_accepted_pnl': False,
-
-        'bref_summary_bs': None,
-        'bref_validation_result_bs': None,
-        'bref_retry_count_bs': 0,
-        'bref_accepted_bs': False,
-
-        'bref_summary_cf': None,
-        'bref_validation_result_cf': None,
-        'bref_retry_count_cf': 0,
-        'bref_accepted_cf': False,
-
+        
         # Configuration
         'bref_config': None,
-        'bref_config_pnl': None,
-        'bref_config_bs': None,
-        'bref_config_cf': None,
         'fa_config': None,
         'combined_config': None,
         
@@ -885,193 +820,224 @@ def main():
         layout="wide",
         initial_sidebar_state="collapsed",
     )
-
+    
     render_header()
-
+    
     # Initialize session state
     if 'agent_state' not in st.session_state:
         st.session_state.agent_state = None
-
+    
     if 'workflow_app' not in st.session_state:
         st.session_state.workflow_app = build_financial_analysis_graph()
-
+    
     if 'workflow_running' not in st.session_state:
         st.session_state.workflow_running = False
-
-    # ─── STEP 1: CLIENT & FINANCIAL SUMMARY ──────────────────
-    section_header("🏢", "Step 1: Client & Financial Summary", "Select client and choose summary source")
-
-    # When launched from the main pipeline, the company name is pre-set
-    _pipeline_client = st.session_state.get("_fa_company_name")
-    _pipeline_summary = st.session_state.get("_fa_summary_bytes")
-
-    col1, col2 = st.columns([2, 3])
-    with col1:
-        if _pipeline_client:
-            st.info(f"📌 Client from pipeline: **{_pipeline_client}**")
-            client = _pipeline_client
-        else:
-            client = st.selectbox("Select Client", ["— Select —"] + CLIENT_LIST, key="client_select")
-            if client == "— Select —":
-                client = None
-
-        if client:
-            if st.session_state.agent_state is None or st.session_state.agent_state['client_name'] != client:
-                # Create new session
-                session_folder = get_session_folder(client, BASE_UPLOAD_DIR)
-                logger = setup_logger(session_folder, client)
-
-                st.session_state.agent_state = initialize_agent_state(client, session_folder)
-                st.session_state.logger = logger
-
-                log_section_start(f"NEW SESSION: {client}")
-                log_step("Session folder created", session_folder)
-                st.success(f"✅ Session created: `{session_folder}`")
-            else:
-                st.info(f"📁 Active session: `{st.session_state.agent_state['session_folder']}`")
-
-    if not st.session_state.agent_state:
-        st.info("👆 Please select a client to begin.")
-        return
-
-    state = st.session_state.agent_state
-
-    # Display progress
-    if state['progress'] > 0:
-        render_progress_bar(state)
-
-        st.divider()
-
-    # --- Summary source selection (part of Step 1) ---
-    if _pipeline_summary and not state['financial_summary_path']:
-        summary_source = st.radio(
-            "Choose summary source:",
-            ["Use summary from pipeline", "Upload summary manually"],
-            key="fa_summary_source",
-            horizontal=True,
-        )
-    else:
-        summary_source = "Upload summary manually"
-
-    # --- Option A: use pipeline summary bytes (Excel) ---
-    # No sheet selection needed — all sheets are processed automatically
-    if summary_source == "Use summary from pipeline" and _pipeline_summary and not state['financial_summary_path']:
-        st.info("📊 Summary from the mapping step is ready. Click below to proceed.")
-        file_name = f"{state['client_name']}_pipeline_summary.xlsx"
-        saved_path = os.path.join(state['session_folder'], file_name)
-
-        if st.button("Use Pipeline Summary", key="use_pipeline_summary", type="primary"):
-            with open(saved_path, "wb") as _f:
-                _f.write(_pipeline_summary)
-
-            with st.spinner("⏳ Processing all summary sheets..."):
-                import io as _io
-                sheet_names = []
-                try:
-                    sheet_names = get_excel_sheets(_io.BytesIO(_pipeline_summary))
-                except Exception:
-                    pass
-
-                all_pages = []
-                for sheet in (sheet_names or []):
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CHECK IF CALLED FROM PIPELINE (Option B: Conditional Skip)
+    # ═══════════════════════════════════════════════════════════════════
+    pipeline_mode = (
+        hasattr(st.session_state, '_fa_company_name') and 
+        hasattr(st.session_state, '_fa_summary_bytes') and
+        st.session_state._fa_company_name and
+        st.session_state._fa_summary_bytes
+    )
+    
+    if pipeline_mode:
+        # Pipeline mode: Skip Steps 1-2, use provided data
+        client_name = st.session_state._fa_company_name
+        summary_bytes = st.session_state._fa_summary_bytes
+        
+        # Show client info
+        st.info(f"🏢 **Client:** {client_name}")
+        st.success("✅ Using summary generated from pipeline")
+        
+        # Initialize agent state if not exists
+        if st.session_state.agent_state is None:
+            session_folder = get_session_folder(client_name, BASE_UPLOAD_DIR)
+            logger = setup_logger(session_folder, client_name)
+            st.session_state.agent_state = initialize_agent_state(client_name, session_folder)
+            st.session_state.logger = logger
+            
+            # Process the summary bytes (Excel file)
+            import tempfile
+            import io
+            
+            # Save summary to temp file
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False, dir=session_folder) as tmp:
+                tmp.write(summary_bytes)
+                tmp_path = tmp.name
+            
+            # Parse the Excel file
+            try:
+                # Get sheet names
+                sheet_names = get_excel_sheets(tmp_path)
+                
+                # Use first sheet by default (or you can add logic to select specific sheet)
+                selected_sheet = sheet_names[0] if sheet_names else None
+                
+                if selected_sheet:
+                    pages = parse_document(tmp_path, sheet_name=selected_sheet)
+                    full_text = "\n\n".join(p["text"] for p in pages)
+                    
+                    # Store in state
+                    st.session_state.agent_state['financial_summary_text'] = full_text
+                    st.session_state.agent_state['financial_summary_path'] = tmp_path
+                    st.session_state.agent_state['bref_accepted'] = True  # Skip BREF generation
+                    
+                    # Extract BREF financial data tables
                     try:
-                        pages = parse_document(saved_path, sheet_name=sheet)
-                        save_parsed_json(pages, f"{file_name}_{sheet}", PARSED_DOCS_DIR)
-                        all_pages.extend(pages)
-                    except Exception:
-                        pass
-
-                if not all_pages:
-                    pages = parse_document(saved_path)
-                    save_parsed_json(pages, file_name, PARSED_DOCS_DIR)
-                    all_pages.extend(pages)
-
-                full_text = "\n\n".join(p["text"] for p in all_pages)
-                state['financial_summary_text'] = full_text
-                state['financial_summary_path'] = saved_path
-                st.session_state.logger.info(
-                    f"Pipeline summary loaded: {file_name}, "
-                    f"{len(sheet_names)} sheets, {len(all_pages)} total pages"
-                )
-                st.success(f"✅ Processed {len(sheet_names)} sheets ({len(all_pages)} pages)")
-                st.rerun()
-
-    # --- Option B: manual file upload ---
-    if summary_source == "Upload summary manually" and not state['financial_summary_path']:
+                        extracted_data = extract_bref_data_sync(full_text)
+                        st.session_state['bref_extracted_data'] = extracted_data
+                    except Exception as e:
+                        st.session_state.logger.error(f"Error extracting BREF data: {e}")
+                        st.session_state['bref_extracted_data'] = None
+                    
+                st.session_state.logger.info(f"Pipeline mode: Processed summary with {len(pages)} pages")
+            except Exception as e:
+                st.error(f"Error processing summary: {e}")
+                return
+        
+        # Skip directly to Step 3: Upload Additional Documents
+        # (The rest of the workflow continues from here)
+    
+        # ═══════════════════════════════════════════════════════════════════
+    # STANDALONE MODE: Show Steps 1-2 only if NOT in pipeline mode
+    # ═══════════════════════════════════════════════════════════════════
+    if not pipeline_mode:
+        # ─── STEP 1: CLIENT SELECTION ──────────────────────────
+        section_header("🏢", "Step 1: Client Selection", "Choose the client for this analysis session")
+        
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            client = st.selectbox("Select Client", ["— Select —"] + CLIENT_LIST, key="client_select")
+            
+            if client != "— Select —":
+                if st.session_state.agent_state is None or st.session_state.agent_state['client_name'] != client:
+                    # Create new session
+                    session_folder = get_session_folder(client, BASE_UPLOAD_DIR)
+                    logger = setup_logger(session_folder, client)
+                    
+                    st.session_state.agent_state = initialize_agent_state(client, session_folder)
+                    st.session_state.logger = logger
+                    
+                    log_section_start(f"NEW SESSION: {client}")
+                    log_step("Session folder created", session_folder)
+                    st.success(f"✅ Session created: `{session_folder}`")
+                else:
+                    st.info(f"📁 Active session: `{st.session_state.agent_state['session_folder']}`")
+        
+        if not st.session_state.agent_state:
+            st.info("👆 Please select a client to begin.")
+            return
+        
+        state = st.session_state.agent_state
+        
+        # Display progress
+        if state['progress'] > 0:
+            render_progress_bar(state)
+        
+            st.divider()
+        
+                # ─── STEP 2: FINANCIAL SUMMARY UPLOAD ──────────────────
+        section_header("📄", "Step 2: Upload Financial Summary", "Upload BREF financial summary document")
+        
         f_up = st.file_uploader(
             "Upload Financial Summary (BREF)",
             type=["pdf", "docx", "txt", "html", "xlsx", "xls", "xlsm"],
             key="f_summary_uploader",
             help="Upload your prepared financial summary document",
         )
-
+        
         if f_up and not state['financial_summary_path']:
+            # Check if it's an Excel file
             if f_up.name.lower().endswith(('.xlsx', '.xls', '.xlsm')):
+                # Save the file first
                 saved_path = save_uploaded_file(f_up, state['session_folder'])
+                
+                                # Get sheet names
                 try:
                     sheet_names = get_excel_sheets(saved_path)
+                    
+                                        # Show dropdown for sheet selection
                     st.info(f"📊 Excel file detected with {len(sheet_names)} sheet(s)")
                     selected_sheet = st.selectbox(
                         "Select the sheet to process:",
                         options=sheet_names,
                         key="f_summary_sheet_selector"
                     )
+                    
+                    # Add a button to confirm selection
                     if st.button("Process Selected Sheet", key="process_f_summary_sheet"):
                         with st.spinner(f"⏳ Processing sheet '{selected_sheet}'..."):
                             pages = parse_document(saved_path, sheet_name=selected_sheet)
                             save_parsed_json(pages, f"{f_up.name}_{selected_sheet}", PARSED_DOCS_DIR)
+                            
+                            # Store in state
                             full_text = "\n\n".join(p["text"] for p in pages)
                             state['financial_summary_text'] = full_text
                             state['financial_summary_path'] = saved_path
+                            
                             st.session_state.logger.info(f"Financial summary uploaded: {f_up.name} (Sheet: {selected_sheet}), {len(pages)} pages")
                             st.success(f"✅ Processed sheet '{selected_sheet}' - {len(pages)} pages")
                             st.rerun()
                 except Exception as e:
                     st.error(f"Error processing Excel file: {e}")
             else:
+                # Non-Excel file processing
                 with st.spinner("⏳ Processing Financial Summary..."):
                     saved_path = save_uploaded_file(f_up, state['session_folder'])
                     pages = parse_document(saved_path)
                     save_parsed_json(pages, f_up.name, PARSED_DOCS_DIR)
-                    full_text = "\n\n".join(p["text"] for p in pages)
-                    state['financial_summary_text'] = full_text
-                    state['financial_summary_path'] = saved_path
-                    with st.spinner("⏳ Extracting financial data tables..."):
-                        try:
-                            extracted_data = extract_bref_data_sync(full_text)
-                            st.session_state['bref_extracted_data'] = extracted_data
-                            st.session_state.logger.info("BREF financial data extracted successfully")
-                        except Exception as e:
-                            st.session_state.logger.error(f"Error extracting BREF data: {e}")
-                            st.session_state['bref_extracted_data'] = None
-                    st.session_state.logger.info(f"Financial summary uploaded: {f_up.name}, {len(pages)} pages")
-                    st.success(f"✅ Processed {len(pages)} pages")
-
-    # ─── STEP 2: GENERATE & VALIDATE BREFs ─────────────────
-    if state['financial_summary_path'] and not state['bref_accepted']:
-        section_header("📄", "Step 2: Generate & Validate BREFs", "Configure and run BREF generation for all statement types")
-
-        # Create tabs for BREF Configuration
-        bref_tabs = st.tabs(["📊 P&L BREF", "📈 BS BREF", "💰 CF BREF"])
-
+                
+                                # Store in state
+                full_text = "\n\n".join(p["text"] for p in pages)
+                state['financial_summary_text'] = full_text
+                state['financial_summary_path'] = saved_path
+                
+                # Extract BREF financial data tables
+                with st.spinner("⏳ Extracting financial data tables..."):
+                    try:
+                        extracted_data = extract_bref_data_sync(full_text)
+                        st.session_state['bref_extracted_data'] = extracted_data
+                        st.session_state.logger.info("BREF financial data extracted successfully")
+                    except Exception as e:
+                        st.session_state.logger.error(f"Error extracting BREF data: {e}")
+                        st.session_state['bref_extracted_data'] = None
+                
+                        st.session_state.logger.info(f"Financial summary uploaded: {f_up.name}, {len(pages)} pages")
+                st.success(f"✅ Processed {len(pages)} pages")
+        
+        # ─── BREF CONFIGURATION ────────────────────────────────
+        if state['financial_summary_path'] and not state['bref_accepted']:
+            st.divider()
+            st.caption("Generate and validate BREF financial summary")
+            
+            # Create tabs for BREF Configuration
+            bref_tabs = st.tabs(["📊 P&L BREF", "📈 BS BREF", "💰 CF BREF"])
+        
         with bref_tabs[0]:  # P&L tab
             bref_config_pnl = render_configuration_options("bref", "bref_pnl", "pnl")
             state['bref_config_pnl'] = bref_config_pnl
+            # Save BREF PnL configuration to session folder
             if state.get('session_folder'):
                 save_configuration_to_folder(bref_config_pnl, "bref_pnl", state['session_folder'])
-
+        
         with bref_tabs[1]:  # BS tab
             bref_config_bs = render_configuration_options("bref", "bref_bs", "bs")
             state['bref_config_bs'] = bref_config_bs
+            # Save BREF BS configuration to session folder
             if state.get('session_folder'):
                 save_configuration_to_folder(bref_config_bs, "bref_bs", state['session_folder'])
-
+        
         with bref_tabs[2]:  # CF tab
             bref_config_cf = render_configuration_options("bref", "bref_cf", "cf")
             state['bref_config_cf'] = bref_config_cf
+            # Save BREF CF configuration to session folder
             if state.get('session_folder'):
                 save_configuration_to_folder(bref_config_cf, "bref_cf", state['session_folder'])
-
+        
+                # Generate BREF button
         if st.button("🤖 Generate & Validate All BREFs (P&L, BS, CF)", key="generate_bref", type="primary"):
             st.session_state.workflow_running = True
             
@@ -1346,12 +1312,31 @@ def main():
                     value=state['financial_summary_text'],
                     height=400,
                     disabled=True,
-                    key="original_bref_data_display"
+
+
+
+
+
+
+
+                                        key="original_bref_data_display"
                 )
+    
+        # END OF STANDALONE MODE CONDITIONAL BLOCK
+    # Steps 1-2 are only shown in standalone mode, not in pipeline mode
+    
+    # Get state reference (works for both pipeline and standalone modes)
+    if st.session_state.agent_state:
+        state = st.session_state.agent_state
+    else:
+        # No state available yet
+        st.info("👆 Please select a client or use pipeline mode to begin.")
+        return
     
     st.divider()
     
     # ─── STEP 3: UPLOAD OTHER DOCUMENTS ────────────────────
+    # This section is shown in BOTH standalone and pipeline modes
     if state.get('bref_accepted'):
         section_header("📚", "Step 3: Upload Additional Documents", "Upload supporting documents for analysis")
         
@@ -1401,136 +1386,156 @@ def main():
         
         # Only show upload options if reports DON'T exist
         if not reports_generated:
-            _client_name = state['client_name']
-
-            # Fetch stored documents for this client from MongoDB (once)
-            _stored_docs_cache_key = f"_fa_stored_docs_{_client_name}"
-            if _stored_docs_cache_key not in st.session_state:
-                try:
-                    st.session_state[_stored_docs_cache_key] = list_fa_documents(_client_name)
-                except Exception:
-                    st.session_state[_stored_docs_cache_key] = []
-            _all_stored = st.session_state[_stored_docs_cache_key]
-
-            def _render_doc_column(title, icon, doc_type, uploader_key, accept_multiple=True):
-                """Render a document column with library multiselect + file upload."""
-                st.markdown(f"#### {icon} {title}")
-
-                # --- Library: previously stored docs for this client & type ---
-                stored_for_type = [d for d in _all_stored if d["doc_type"] == doc_type]
-                if stored_for_type:
-                    lib_options = {
-                        f"{d['original_name']} ({d['year']})": d
-                        for d in stored_for_type
-                    }
-                    selected_lib = st.multiselect(
-                        "From library",
-                        options=list(lib_options.keys()),
-                        key=f"lib_{doc_type}",
-                        help="Previously uploaded documents stored in MongoDB",
-                    )
-                    if selected_lib:
-                        if st.button(f"Load {len(selected_lib)} from library", key=f"load_lib_{doc_type}"):
-                            loaded_count = 0
-                            for label in selected_lib:
-                                doc_meta = lib_options[label]
-                                lib_marker = f"lib_{doc_type}_{doc_meta['gridfs_file_id']}"
-                                if lib_marker in st.session_state:
-                                    continue
-                                file_bytes = load_fa_document(doc_meta["gridfs_file_id"])
-                                dest = os.path.join(state['session_folder'], doc_meta["original_name"])
-                                with open(dest, "wb") as _f:
-                                    _f.write(file_bytes)
-                                if dest.lower().endswith(('.xlsx', '.xls', '.xlsm')):
-                                    try:
-                                        sheets = get_excel_sheets(dest)
-                                        for sheet in sheets:
-                                            pages = parse_document(dest, sheet_name=sheet)
-                                            save_parsed_json(pages, f"{doc_meta['original_name']}_{sheet}", PARSED_DOCS_DIR)
-                                            state['other_documents'].extend(pages)
-                                            loaded_count += len(pages)
-                                    except Exception as exc:
-                                        st.error(f"Error processing {doc_meta['original_name']}: {exc}")
-                                        continue
-                                else:
-                                    pages = parse_document(dest)
-                                    save_parsed_json(pages, doc_meta["original_name"], PARSED_DOCS_DIR)
-                                    state['other_documents'].extend(pages)
-                                    loaded_count += len(pages)
-                                st.session_state[lib_marker] = True
-                            if loaded_count:
-                                st.success(f"✅ Loaded {loaded_count} pages from library")
-                                st.rerun()
-
-                # --- Upload new files ---
-                uploaded_files = st.file_uploader(
-                    f"Upload {title}",
-                    type=["pdf", "docx", "txt", "html", "xlsx", "xls", "xlsm"],
-                    accept_multiple_files=accept_multiple,
-                    key=uploader_key,
-                )
-                if not accept_multiple:
-                    uploaded_files = [uploaded_files] if uploaded_files else []
-                for up_file in (uploaded_files or []):
-                    if f"uploaded_{up_file.name}" in st.session_state:
-                        st.info(f"📝 Already uploaded: {up_file.name}")
-                        continue
-                    if up_file.name.lower().endswith(('.xlsx', '.xls', '.xlsm')):
-                        saved = save_uploaded_file(up_file, state['session_folder'])
-                        try:
-                            sheet_names = get_excel_sheets(saved)
-                            selected_sheet = st.selectbox(
-                                f"Select sheet from {up_file.name}:",
-                                options=sheet_names,
-                                key=f"{doc_type}_sheet_{up_file.name}",
-                            )
-                            if st.button(f"Process {up_file.name}", key=f"process_{doc_type}_{up_file.name}"):
-                                pages = parse_document(saved, sheet_name=selected_sheet)
-                                save_parsed_json(pages, f"{up_file.name}_{selected_sheet}", PARSED_DOCS_DIR)
-                                state['other_documents'].extend(pages)
-                                st.session_state[f"uploaded_{up_file.name}"] = True
-                                # Save to MongoDB for future reuse
-                                up_file.seek(0)
-                                try:
-                                    save_fa_document(up_file.read(), up_file.name, _client_name, doc_type)
-                                    if _stored_docs_cache_key in st.session_state:
-                                        del st.session_state[_stored_docs_cache_key]
-                                except Exception:
-                                    pass
-                                st.success(f"✅ {len(pages)} pages")
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-                    else:
-                        saved = save_uploaded_file(up_file, state['session_folder'])
-                        pages = parse_document(saved)
-                        save_parsed_json(pages, up_file.name, PARSED_DOCS_DIR)
-                        state['other_documents'].extend(pages)
-                        st.session_state[f"uploaded_{up_file.name}"] = True
-                        # Save to MongoDB for future reuse
-                        up_file.seek(0)
-                        try:
-                            save_fa_document(up_file.read(), up_file.name, _client_name, doc_type)
-                            if _stored_docs_cache_key in st.session_state:
-                                del st.session_state[_stored_docs_cache_key]
-                        except Exception:
-                            pass
-                        st.success(f"✅ {up_file.name}: {len(pages)} pages")
-
             col1, col2, col3, col4 = st.columns(4)
+            
+            # Transcripts
             with col1:
-                _render_doc_column("Earnings Transcripts", "🎙️", "transcript", "transcript_up", accept_multiple=False)
+                st.markdown("#### 🎙️ Earnings Transcripts")
+                tr_up = st.file_uploader("Upload Transcript", type=["pdf", "docx", "txt", "html", "xlsx", "xls", "xlsm"], key="transcript_up")
+                if tr_up:
+                    # Check if already uploaded by checking session state
+                    if f"uploaded_{tr_up.name}" not in st.session_state:
+                        # Handle Excel files
+                        if tr_up.name.lower().endswith(('.xlsx', '.xls', '.xlsm')):
+                            saved = save_uploaded_file(tr_up, state['session_folder'])
+                            try:
+                                sheet_names = get_excel_sheets(saved)
+                                selected_sheet = st.selectbox(
+                                    f"Select sheet from {tr_up.name}:",
+                                    options=sheet_names,
+                                    key=f"transcript_sheet_{tr_up.name}"
+                                )
+                                if st.button(f"Process {tr_up.name}", key=f"process_transcript_{tr_up.name}"):
+                                    pages = parse_document(saved, sheet_name=selected_sheet)
+                                    save_parsed_json(pages, f"{tr_up.name}_{selected_sheet}", PARSED_DOCS_DIR)
+                                    state['other_documents'].extend(pages)
+                                    st.session_state[f"uploaded_{tr_up.name}"] = True
+                                    st.success(f"✅ {len(pages)} pages")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            saved = save_uploaded_file(tr_up, state['session_folder'])
+                            pages = parse_document(saved)
+                            save_parsed_json(pages, tr_up.name, PARSED_DOCS_DIR)
+                            state['other_documents'].extend(pages)
+                            st.session_state[f"uploaded_{tr_up.name}"] = True
+                            st.success(f"✅ {len(pages)} pages")
+                    else:
+                        st.info(f"📝 Already uploaded: {tr_up.name}")
+            
+            # News Articles
             with col2:
-                _render_doc_column("News Articles", "📰", "news", "news_up")
+                st.markdown("#### 📰 News Articles")
+                news_ups = st.file_uploader("Upload News", type=["pdf", "docx", "txt", "html", "xlsx", "xls", "xlsm"],
+                                           accept_multiple_files=True, key="news_up")
+                for nu in (news_ups or []):
+                    if f"uploaded_{nu.name}" not in st.session_state:
+                        # Handle Excel files
+                        if nu.name.lower().endswith(('.xlsx', '.xls', '.xlsm')):
+                            saved = save_uploaded_file(nu, state['session_folder'])
+                            try:
+                                sheet_names = get_excel_sheets(saved)
+                                selected_sheet = st.selectbox(
+                                    f"Select sheet from {nu.name}:",
+                                    options=sheet_names,
+                                    key=f"news_sheet_{nu.name}"
+                                )
+                                if st.button(f"Process {nu.name}", key=f"process_news_{nu.name}"):
+                                    pages = parse_document(saved, sheet_name=selected_sheet)
+                                    save_parsed_json(pages, f"{nu.name}_{selected_sheet}", PARSED_DOCS_DIR)
+                                    state['other_documents'].extend(pages)
+                                    st.session_state[f"uploaded_{nu.name}"] = True
+                                    st.success(f"✅ {nu.name}: {len(pages)} pages")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            saved = save_uploaded_file(nu, state['session_folder'])
+                            pages = parse_document(saved)
+                            save_parsed_json(pages, nu.name, PARSED_DOCS_DIR)
+                            state['other_documents'].extend(pages)
+                            st.session_state[f"uploaded_{nu.name}"] = True
+                            st.success(f"✅ {nu.name}: {len(pages)} pages")
+                    else:
+                        st.info(f"📝 Already uploaded: {nu.name}")
+            
+            # Presentations
             with col3:
-                _render_doc_column("Presentations", "📊", "presentation", "pres_up")
+                st.markdown("#### 📊 Presentations")
+                pres_ups = st.file_uploader("Upload Presentations", type=["pdf", "docx", "txt", "html", "xlsx", "xls", "xlsm"],
+                                           accept_multiple_files=True, key="pres_up")
+                for pu in (pres_ups or []):
+                    if f"uploaded_{pu.name}" not in st.session_state:
+                        # Handle Excel files
+                        if pu.name.lower().endswith(('.xlsx', '.xls', '.xlsm')):
+                            saved = save_uploaded_file(pu, state['session_folder'])
+                            try:
+                                sheet_names = get_excel_sheets(saved)
+                                selected_sheet = st.selectbox(
+                                    f"Select sheet from {pu.name}:",
+                                    options=sheet_names,
+                                    key=f"pres_sheet_{pu.name}"
+                                )
+                                if st.button(f"Process {pu.name}", key=f"process_pres_{pu.name}"):
+                                    pages = parse_document(saved, sheet_name=selected_sheet)
+                                    save_parsed_json(pages, f"{pu.name}_{selected_sheet}", PARSED_DOCS_DIR)
+                                    state['other_documents'].extend(pages)
+                                    st.session_state[f"uploaded_{pu.name}"] = True
+                                    st.success(f"✅ {pu.name}: {len(pages)} pages")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            saved = save_uploaded_file(pu, state['session_folder'])
+                            pages = parse_document(saved)
+                            save_parsed_json(pages, pu.name, PARSED_DOCS_DIR)
+                            state['other_documents'].extend(pages)
+                            st.session_state[f"uploaded_{pu.name}"] = True
+                            st.success(f"✅ {pu.name}: {len(pages)} pages")
+                    else:
+                        st.info(f"📝 Already uploaded: {pu.name}")
+            
+            # Annual Reports
             with col4:
-                _render_doc_column("Annual Reports", "📑", "annual_report", "annual_up")
-
+                st.markdown("#### 📑 Annual Reports")
+                annual_ups = st.file_uploader("Upload Annual Reports", type=["pdf", "docx", "txt", "html", "xlsx", "xls", "xlsm"],
+                                           accept_multiple_files=True, key="annual_up")
+                for au in (annual_ups or []):
+                    if f"uploaded_{au.name}" not in st.session_state:
+                        # Handle Excel files
+                        if au.name.lower().endswith(('.xlsx', '.xls', '.xlsm')):
+                            saved = save_uploaded_file(au, state['session_folder'])
+                            try:
+                                sheet_names = get_excel_sheets(saved)
+                                selected_sheet = st.selectbox(
+                                    f"Select sheet from {au.name}:",
+                                    options=sheet_names,
+                                    key=f"annual_sheet_{au.name}"
+                                )
+                                if st.button(f"Process {au.name}", key=f"process_annual_{au.name}"):
+                                    pages = parse_document(saved, sheet_name=selected_sheet)
+                                    save_parsed_json(pages, f"{au.name}_{selected_sheet}", PARSED_DOCS_DIR)
+                                    state['other_documents'].extend(pages)
+                                    st.session_state[f"uploaded_{au.name}"] = True
+                                    st.success(f"✅ {au.name}: {len(pages)} pages")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            saved = save_uploaded_file(au, state['session_folder'])
+                            pages = parse_document(saved)
+                            save_parsed_json(pages, au.name, PARSED_DOCS_DIR)
+                            state['other_documents'].extend(pages)
+                            st.session_state[f"uploaded_{au.name}"] = True
+                            st.success(f"✅ {au.name}: {len(pages)} pages")
+                    else:
+                        st.info(f"📝 Already uploaded: {au.name}")
+            
             # Document summary
             if state['other_documents']:
                 st.info(f"📁 **{len(state['other_documents'])} pages** loaded from additional sources")
-
+            
             st.divider()
         
         # ─── STEP 4: SELECT AGENTS TO RUN ──────────────────────
@@ -2017,6 +2022,7 @@ def main():
                         st.session_state.logger.info("Evaluating BS report...")
                         bs_eval = asyncio.run(evaluate_report(str(bs_path), state['session_folder']))
                         comprehensive_results['bs'] = bs_eval
+                    
                     
                     if cf_path:
                         st.session_state.logger.info("Evaluating CF report...")
