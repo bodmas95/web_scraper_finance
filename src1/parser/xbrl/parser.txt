@@ -1,0 +1,1860 @@
+"""
+General XBRL parser for French IFRS company filings via filings.xbrl.org.
+
+Works directly from the OIM xBRL-JSON format — no HTML download needed.
+Applicable to any company with an LEI that files under French IFRS.
+
+Public API
+----------
+fetch_filings(lei, api_base, headers=None)
+    -> list of filing dicts (sorted newest first)
+
+fetch_xbrl_facts(filing, api_base, headers=None)
+    -> list of fact dicts with keys:
+       concept_full, concept_short, period_type, period_start, period_end,
+       fy_year, unit, value, decimals
+
+build_statements(facts, fy_year=None)
+    -> dict: {statement_type: pd.DataFrame}
+       Columns: French Label | English Label | Concept | Value
+
+build_consolidated(all_facts_by_fy)
+    -> dict: {statement_type: pd.DataFrame}
+       Columns: French Label | English Label | Concept | FY2024 | FY2023 | ...
+
+generate_excel_bytes(statements_dict)
+    -> bytes  (simple xlsx, one sheet per statement type)
+"""
+
+import io
+import json
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
+
+from src import http_client
+
+
+# ---------------------------------------------------------------------------
+# Extract labels from ixbrlviewer.html script tag
+# ---------------------------------------------------------------------------
+
+def extract_labels_from_ixbrl_viewer(html_content: str) -> Dict[str, Tuple[str, str]]:
+    """
+    Parse the ixbrlviewer.html script tag and return {concept_short: (fr_label, en_label)}.
+
+    The viewer embeds a large JSON in a <script> tag with structure:
+      sourceReports[0].targetReports[0].concepts[concept_full].labels.{std|ns0|ns1}.{en, fr}
+    """
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
+    for script in scripts:
+        stripped = script.strip()
+        if not stripped or not stripped.startswith('{'):
+            continue
+        try:
+            data = json.loads(stripped)
+        except Exception:
+            continue
+        try:
+            concepts = data['sourceReports'][0]['targetReports'][0]['concepts']
+        except (KeyError, IndexError):
+            continue
+        result: Dict[str, Tuple[str, str]] = {}
+        for concept_full, cdata in concepts.items():
+            labels = cdata.get('labels', {})
+            for role in ('ns0', 'ns1', 'std'):
+                if role in labels and isinstance(labels[role], dict):
+                    en = (labels[role].get('en') or '').strip()
+                    fr = (labels[role].get('fr') or '').strip()
+                    if en or fr:
+                        concept_short = concept_full.split(':')[-1]
+                        result[concept_short] = (fr or en, en or fr)
+                        break
+        return result
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# IFRS Full concept → (French label, English label)
+# Covers the most common concepts in French IFRS consolidated accounts.
+# These are FALLBACK labels; prefer labels from ixbrlviewer.html when available.
+# ---------------------------------------------------------------------------
+
+IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
+    #  Income Statement 
+    "Revenue":
+        ("Produits des activités ordinaires", "Revenue"),
+    #  Income Statement (standard IFRS) 
+    "RevenueFromContractsWithCustomers":
+        ("Produits des contrats avec les clients", "Revenue from contracts with customers"),
+    "OtherIncome":
+        ("Autres produits", "Other income"),
+    "OtherOperatingIncome":
+        ("Autres produits d'exploitation", "Other operating income"),
+    "MiscellaneousOtherOperatingIncome":
+        ("Autres recettes d'exploitation diverses", "Miscellaneous other operating income"),
+    "MiscellaneousOtherOperatingExpense":
+        ("Autres charges d'exploitation diverses", "Miscellaneous other operating expense"),
+    "CostOfSales":
+        ("Coût des ventes", "Cost of sales"),
+    "GrossProfit":
+        ("Marge brute", "Gross profit"),
+    "DistributionCosts":
+        ("Frais de distribution", "Distribution costs"),
+    "AdministrativeExpense":
+        ("Charges administratives", "Administrative expenses"),
+    "SellingGeneralAndAdministrativeExpense":
+        ("Frais commerciaux, généraux et administratifs", "SG&A expenses"),
+    "OtherExpenseByFunction":
+        ("Autres charges", "Other expenses"),
+    "ServicesExpense":("Charges externes","Services Expense"),
+    "OtherExpenseByNature":
+        ("Autres charges par nature", "Other expenses by nature"),
+    "EmployeeBenefitsExpense":
+        ("Charges au titre des avantages du personnel", "Employee benefits expense"),
+    "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss":
+        ("Dépréciation, amortissement et perte de valeur (reprise de perte de valeur) comptabilisés en résultat", "Depreciation, amortisation and impairment loss recognised in profit or loss"),
+    "DepreciationAndAmortisationExpense":
+        ("Dotations aux amortissements", "Depreciation and amortisation"),
+    "DepreciationRightOfUseAssets":
+        ("Amortissement des droits d'utilisation", "Depreciation of right-of-use assets"),
+    "ImpairmentLossRecognisedInProfitOrLoss":
+        ("Perte de valeur reconnue en résultat", "Impairment loss"),
+    "RawMaterialsAndConsumablesUsed":
+        ("Achats consommés", "Raw materials and consumables used"),
+    "OtherOperatingExpense":
+        ("Autres charges d'exploitation", "Other operating expenses"),
+    "EarningsBeforeInterestTaxesDepreciationAndAmortisation":
+        ("EBITDA", "EBITDA"),
+    "OperatingExpense":
+        ("Charges d'exploitation", "Operating expenses"),
+    "ProfitLossFromOperatingActivities":
+        ("Profits (pertes) d'activités opérationnelles", "Profit (loss) from operating activities"),
+    "ProfitLossBeforeTax":
+        ("Résultat avant impôt", "Profit (loss) before tax"),
+    "FinanceCosts":
+        ("Charges financières", "Finance costs"),
+    "FinanceIncome":
+        ("Produits financiers", "Finance income"),
+    "FinanceIncomeExpense":
+        ("Produits financiers (charges financières)", "Finance income (cost)"),
+    "FinanceCostsRecognisedInProfitOrLoss":
+        ("Charges financières", "Finance costs"),
+    "FinanceIncomeRecognisedInProfitOrLoss":
+        ("Produits financiers", "Finance income"),
+    "GainsLossesOnExchangeDifferences":
+        ("Écarts de change", "Exchange differences"),
+    "InterestExpense":
+        ("Charge d'intérêt", "Interest expense"),
+    "InterestExpenseOnBorrowings":
+        ("Intérêts sur emprunts", "Interest expense on borrowings"),
+    "InterestExpenseOnLeaseLiabilities":
+        ("Intérêts sur dettes locatives", "Interest expense on lease liabilities"),
+    "OtherFinanceIncome":
+        ("Autres produits financiers", "Other finance income"),
+    "OtherFinanceCost":
+        ("Autres charges financières", "Other finance cost"),
+    "FinanceIncomeCost":
+        ("Produits financiers (charges financières)", "Finance income (cost)"),
+    "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod":
+        ("Quote-part dans le résultat des entreprises associées", "Share of profit of associates"),
+    "IncomeTaxExpenseContinuingOperations":
+        ("Charge (produit) d'impôt", "Tax expense (income)"),
+    "ProfitLoss":
+        ("Résultat", "Profit (loss)"),
+    "ProfitLossAttributableToOwnersOfParent":
+        ("Résultat net — part du groupe", "Net income attributable to owners of parent"),
+    "ProfitLossAttributableToNoncontrollingInterests":
+        ("Résultat net — intérêts minoritaires", "Net income attributable to non-controlling interests"),
+    "BasicEarningsLossPerShare":
+        ("Résultat (perte) de base par action", "Basic earnings (loss) per share"),
+    "DilutedEarningsLossPerShare":
+        ("Résultat (perte) dilué par action", "Diluted earnings (loss) per share"),
+    # OCI
+    "OtherComprehensiveIncome":
+        ("Autres éléments du résultat global", "Other comprehensive income"),
+    "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax":
+        ("Autres éléments du résultat global qui seront reclassés en résultat net, nets d'impôt", "Other comprehensive income that will be reclassified to profit or loss, net of tax"),
+    "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax":
+        ("Autres éléments du résultat global qui ne seront pas reclassés en résultat net, nets d'impôt", "Other comprehensive income that will not be reclassified to profit or loss, net of tax"),
+    "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation":
+        ("Autres éléments du résultat global, nets d'impôt, écarts de change résultant de la conversion d'activités à l'étranger", "Other comprehensive income, net of tax, exchange differences on translation"),
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans":
+        ("Autres éléments du résultat global, avant impôt, profits (pertes) résultant de réévaluations au titre des régimes à prestations définies", "Other comprehensive income, before tax, gains (losses) on remeasurements of defined benefit plans"),
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss":
+        ("Impôt sur le résultat en relation avec des composantes des autres éléments du résultat global qui seront reclassées en résultat net", "Income tax relating to components of OCI that will be reclassified to profit or loss"),
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss":
+        ("Impôt sur le résultat en relation avec des composantes des autres éléments du résultat global qui ne seront pas reclassées en résultat net", "Income tax relating to components of OCI that will not be reclassified to profit or loss"),
+    "ComprehensiveIncome":
+        ("Résultat global", "Comprehensive income"),
+    # OVH-specific income statement concepts
+    "OperatingExpensesOtherThanPersonnelExpenses":
+        ("Charges opérationnelles (autres que charges de personnel)", "Operating expenses (other than personnel expenses)"),
+    "CurrentEbitda":
+        ("EBITDA courant", "Current EBITDA"),
+    "CurrentOperatingIncome":
+        ("Résultat opérationnel courant", "Current operating income"),
+    "RevaluationOfHedgingInstruments":
+        ("Réévaluation des instruments de couverture", "Revaluation of hedging instruments"),
+    "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences":
+        ("Résultat financier (hors écarts de change réalisés)", "Net financial (income) expenses (excluding foreign exchange differences)"),
+
+    #  Balance Sheet – Assets 
+    "Assets":
+        ("Actifs", "Assets"),
+    "NoncurrentAssets":
+        ("Actifs non courants", "Non-current assets"),
+    "CurrentAssets":
+        ("Actifs courants", "Current assets"),
+    "Goodwill":
+        ("Goodwill", "Goodwill"),
+    "IntangibleAssetsOtherThanGoodwill":
+        ("Immobilisations incorporelles autres que le goodwill", "Intangible assets other than goodwill"),
+    "PropertyPlantAndEquipment":
+        ("Immobilisations corporelles", "Property, plant and equipment"),
+    "RightOfUseAssets":
+        ("Actifs liés au droit d'utilisation", "Right-of-use assets"),
+    "RightofuseAssets":
+        ("Actifs liés au droit d'utilisation", "Right-of-use assets"),
+    "InvestmentProperty":
+        ("Immeubles de placement", "Investment property"),
+    "InvestmentsAccountedForUsingEquityMethod":
+        ("Participations comptabilisées par mise en équivalence", "Investments accounted for using equity method"),
+    "DeferredTaxAssets":
+        ("Actifs d'impôt différé", "Deferred tax assets"),
+    "NoncurrentFinancialAssets":
+        ("Autres actifs financiers non courants", "Other non-current financial assets"),
+    "OtherNoncurrentFinancialAssets":
+        ("Autres actifs financiers non courants", "Other non-current financial assets"),
+    "NoncurrentDerivativeFinancialAssets":
+        ("Actifs financiers dérivés non courants", "Non-current derivative financial assets"),
+    "OtherNoncurrentAssets":
+        ("Autres actifs non courants", "Other non-current assets"),
+    "OtherNoncurrentReceivables":
+        ("Autres créances non courantes", "Other non-current receivables"),
+    "Inventories":
+        ("Stocks", "Inventories"),
+    "TradeAndOtherCurrentReceivables":
+        ("Clients et autres créances courantes", "Trade and other current receivables"),
+    "TradeReceivables":
+        ("Clients", "Trade receivables"),
+    "CurrentTradesReceivablesAndContractAssets":
+        ("Clients et actifs sur contrats courants", "Current trades receivables and contract assets"),
+    "CurrentTaxAssets":
+        ("Actifs d'impôt exigible, courants", "Current tax assets"),
+    "CurrentTaxAssetsCurrent":
+        ("Actifs d'impôt exigible, courants", "Current tax assets, current"),
+    "CurrentFinancialAssets":
+        ("Actifs financiers courants", "Current financial assets"),
+    "CurrentDerivativeFinancialAssets":
+        ("Actifs financiers dérivés courants", "Current derivative financial assets"),
+    "OtherCurrentAssets":
+        ("Autres actifs courants", "Other current assets"),
+    "OtherReceivablesAndCurrentAssets":
+        ("Autres créances et actifs courants", "Other receivables and current assets"),
+    "CashAndCashEquivalents":
+        ("Trésorerie et équivalents de trésorerie", "Cash and cash equivalents"),
+
+    #  Balance Sheet – Liabilities & Equity 
+    "EquityAndLiabilities":
+        ("Capitaux propres et passifs", "Equity and liabilities"),
+    "Equity":
+        ("Capitaux propres", "Equity"),
+    "EquityAttributableToOwnersOfParent":
+        ("Capitaux propres — part du groupe", "Equity attributable to owners of parent"),
+    "NoncontrollingInterests":
+        ("Intérêts non contrôlants (minoritaires)", "Non-controlling interests"),
+    "IssuedCapital":
+        ("Capital émis", "Issued capital"),
+    "SharePremium":
+        ("Prime d'émission", "Share premium"),
+    "RetainedEarnings":
+        ("Réserves et résultats non distribués", "Retained earnings"),
+    "ReservesAndRetainedEarnings":
+        ("Réserves et report à nouveau", "Reserves and retained earnings"),
+    "RetainedEarningsProfitLossForReportingPeriod":
+        ("Résultats non distribués, profit (perte) pour la période de reporting", "Retained earnings, profit (loss) for reporting period"),
+    "OtherReserves":
+        ("Autres réserves", "Other reserves"),
+    "ReserveOfSharebasedPayments":
+        ("Réserves de paiements fondés sur des actions", "Share-based payment reserve"),
+    "TreasuryShares":
+        ("Actions propres", "Treasury shares"),
+    "Liabilities":
+        ("Total passif", "Total liabilities"),
+    "NoncurrentLiabilities":
+        ("Passifs non courants", "Non-current liabilities"),
+    "CurrentLiabilities":
+        ("Passifs courants", "Current liabilities"),
+    "NoncurrentBorrowings":
+        ("Partie non courante d'emprunts non courants", "Non-current borrowings"),
+    "LongtermBorrowings":
+        ("Partie non courante d'emprunts non courants", "Non-current portion of non-current borrowings"),
+    "NoncurrentLeaseLiabilities":
+        ("Passifs au titre de contrats de location non courants", "Non-current lease liabilities"),
+    "DeferredTaxLiabilities":
+        ("Passifs d'impôt différé", "Deferred tax liabilities"),
+    "NoncurrentProvisions":
+        ("Provisions non courantes", "Non-current provisions"),
+    "OtherNoncurrentLiabilities":
+        ("Autres passifs non courants", "Other non-current liabilities"),
+    "NoncurrentFinancialLiabilities":
+        ("Autres passifs financiers non courants", "Other non-current financial liabilities"),
+    "OtherNoncurrentFinancialLiabilities":
+        ("Autres passifs financiers non courants", "Other non-current financial liabilities"),
+    "NoncurrentDerivativeFinancialLiabilities":
+        ("Passifs financiers dérivés non courants", "Non-current derivative financial liabilities"),
+    "CurrentBorrowings":
+        ("Emprunts courants et partie courante d'emprunts non courants", "Current borrowings"),
+    "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings":
+        ("Emprunts courants et partie courante d'emprunts non courants", "Current borrowings and current portion of non-current borrowings"),
+    "CurrentLeaseLiabilities":
+        ("Passifs au titre de contrats de location courants", "Current lease liabilities"),
+    "CurrentProvisions":
+        ("Provisions courantes", "Current provisions"),
+    "TradeAndOtherCurrentPayables":
+        ("Fournisseurs et autres dettes courantes", "Trade and other current payables"),
+    "TradeAndOtherCurrentPayablesToTradeSuppliers":
+        ("Dettes fournisseurs courantes", "Current trade payables"),
+    "TradePayables":
+        ("Fournisseurs", "Trade payables"),
+    "CurrentTaxLiabilities":
+        ("Passifs d'impôt exigible, courants", "Current tax liabilities"),
+    "CurrentTaxLiabilitiesCurrent":
+        ("Passifs d'impôt exigible, courants", "Current tax liabilities, current"),
+    "CurrentDerivativeFinancialLiabilities":
+        ("Passifs financiers dérivés courants", "Current derivative financial liabilities"),
+    "OtherCurrentLiabilities":
+        ("Autres passifs courants", "Other current liabilities"),
+
+    #  Cash Flow 
+    "CashFlowsFromUsedInOperatingActivities":
+        ("Flux de trésorerie résultant (utilisés dans le cadre) des activités opérationnelles", "Cash flows from (used in) operating activities"),
+    "CashFlowsFromUsedInOperations":
+        ("Flux générés par les opérations", "Cash generated from operations"),
+    "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital":
+        ("Capacité d'autofinancement", "Cash flows from (used in) operations before changes in working capital"),
+    "CashFlowsFromUsedInInvestingActivities":
+        ("Flux de trésorerie résultant (utilisés dans le cadre) d'activités d'investissement", "Cash flows from (used in) investing activities"),
+    "CashFlowsFromUsedInFinancingActivities":
+        ("Flux de trésorerie résultant (utilisés dans le cadre) d'activités de financement", "Cash flows from (used in) financing activities"),
+    "ProfitLossAdjustedForNoncashItems":
+        ("Capacité d'autofinancement", "Profit adjusted for non-cash items"),
+    "AdjustmentsForDepreciationAndAmortisationExpense":
+        ("Ajustements pour dotations aux amortissements", "Adjustments for depreciation and amortisation"),
+    "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss":
+        ("Ajustements pour dotations aux amortissements et perte de valeur (reprise de perte de valeur) comptabilisée en résultat", "Adjustments for depreciation and amortisation expense and impairment loss recognised in profit or loss"),
+    "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss":
+        ("Ajustements pour pertes de valeur", "Adjustments for impairment loss"),
+    "AdjustmentsForProvisions":
+        ("Ajustements pour provisions", "Adjustments for provisions"),
+    "AdjustmentsForIncomeTaxExpense":
+        ("Ajustements pour charge d'impôt sur le résultat", "Adjustments for income tax expense"),
+    "AdjustmentsForFinanceCosts":
+        ("Ajustements pour coût de l'endettement", "Adjustments for finance costs"),
+    "AdjustmentsForSharebasedPayments":
+        ("Ajustements pour paiements fondés sur des actions", "Adjustments for share-based payments"),
+    "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets":
+        ("Ajustements pour pertes (profits) dégagé(e)s sur la sortie d'actifs non courants", "Adjustments for losses (gains) on disposal of non-current assets"),
+    "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets":
+        ("Ajustements pour pertes (profits) dégagé(e)s sur la sortie d'actifs non courants", "Adjustments for losses (gains) on disposal of non-current assets"),
+    "IncreaseDecreaseInWorkingCapital":
+        ("Augmentation (diminution) du fonds de roulement", "Increase (decrease) in working capital"),
+    "IncreaseDecreaseInTradeAndOtherPayables":
+        ("Ajustements pour augmentation (diminution) de fournisseurs et autres créditeurs", "Adjustments for increase (decrease) in trade and other payables"),
+    "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables":
+        ("Ajustements pour augmentation (diminution) de fournisseurs et autres créditeurs", "Adjustments for increase (decrease) in trade and other payables"),
+    "IncreaseDecreaseInTradeAndOtherReceivables":
+        ("Ajustements pour diminution (augmentation) de clients et autres débiteurs", "Adjustments for decrease (increase) in trade and other receivables"),
+    "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables":
+        ("Ajustements pour diminution (augmentation) de clients et autres débiteurs", "Adjustments for decrease (increase) in trade and other receivables"),
+    "IncreaseDecreaseInInventories":
+        ("Variation des stocks", "Decrease (increase) in inventories"),
+    "IncomeTaxesPaid":
+        ("Impôt versé", "Income taxes paid"),
+    "IncomeTaxesPaidRefundClassifiedAsOperatingActivities":
+        ("Impôts sur le résultat payés (remboursés), classés dans les activités opérationnelles", "Income taxes paid (refund), classified as operating activities"),
+    "InterestPaid":
+        ("Intérêts financiers payés", "Interest paid"),
+    "InterestPaidClassifiedAsFinancingActivities":
+        ("Intérêts payés, classés dans les activités de financement", "Interest paid, classified as financing activities"),
+    "InterestPaidClassifiedAsOperatingActivities":
+        ("Intérêts payés (exploitation)", "Interest paid (operating activities)"),
+    "PurchaseOfPropertyPlantAndEquipment":
+        ("Acquisition d'immobilisations corporelles", "Purchase of PP&E"),
+    "PurchaseOfIntangibleAssets":
+        ("Acquisition d'immobilisations incorporelles", "Purchase of intangible assets"),
+    "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets":
+        ("Décaissements liés aux acquisitions d'immobilisations", "Payments for PP&E and intangibles"),
+    "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets":
+        ("Décaissements liés aux acquisitions d'immobilisations corporelles et incorporelles", "Payments related to acquisitions of PP&E and intangible assets"),
+    "ProceedsFromDisposalOfPropertyPlantAndEquipment":
+        ("Produits de cession d'immobilisations corporelles", "Proceeds from disposal of PP&E"),
+    "ProceedsFromDisposalOfNoncurrentAssets":
+        ("Produits de cession d'actifs non courants", "Proceeds from disposal of non-current assets"),
+    "ProceedsFromDisposalOfAssets":
+        ("Produits de cession d'immobilisations", "Proceeds from disposal of assets"),
+    "AcquisitionOfSubsidiariesNetOfCashAcquired":
+        ("Acquisitions de filiales, nettes de trésorerie", "Acquisitions of subsidiaries, net of cash"),
+    "CashInflowsOutflowsRelatedToBusinessCombinationsNetOfCash":
+        ("Encaissements/(décaissements) liés aux regroupements d'entreprises nets de leur trésorerie", "Cash inflows/(outflows) related to business combinations net of cash"),
+    "ProceedsFromSaleOfInterestsInAssociates":
+        ("Cessions de participations dans des entreprises associées", "Proceeds from sale of associates"),
+    "ReceiptsDisbursementsRelatedToLoansAndAdvancesGranted":
+        ("Encaissements/(décaissements) liés aux prêts et avances consentis", "Receipts/(disbursements) related to loans and advances granted"),
+    "ProceedsFromBorrowingsClassifiedAsFinancingActivities":
+        ("Produits d'emprunts, classés dans les activités de financement", "Proceeds from borrowings, classified as financing activities"),
+    "RepaymentsOfBorrowingsClassifiedAsFinancingActivities":
+        ("Remboursements d'emprunts, classés dans les activités de financement", "Repayments of borrowings, classified as financing activities"),
+    "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities":
+        ("Remboursement des dettes locatives", "Repayments of lease liabilities"),
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities":
+        ("Paiements de passifs au titre de contrats de location, classés dans les activités de financement", "Payments of lease liabilities, classified as financing activities"),
+    "PaymentsForRepurchaseOfShares":
+        ("Rachat d'actions propres", "Payments for repurchase of shares"),
+    "PaymentsToAcquireOrRedeemEntitysShares":
+        ("Paiements pour acquérir ou racheter les actions de l'entité", "Payments to acquire or redeem entity's shares"),
+    "ProceedsFromIssuingShares":
+        ("Émission d'actions", "Proceeds from issuing shares"),
+    "DividendsPaid":
+        ("Dividendes versés", "Dividends paid"),
+    "DividendsPaidClassifiedAsFinancingActivities":
+        ("Dividendes versés (financement)", "Dividends paid (financing activities)"),
+    "GuaranteeDepositsReceivedAndOtherFinancialDebt":
+        ("Dépôts de garanties reçus et autres dettes financières", "Guarantee deposits received and other financial debts"),
+    "EffectOfExchangeRateChangesOnCashAndCashEquivalents":
+        ("Effet des variations des taux de change sur la trésorerie et les équivalents de trésorerie", "Effect of exchange rate changes on cash and cash equivalents"),
+    "IncreaseDecreaseInCashAndCashEquivalents":
+        ("Augmentation (diminution) de la trésorerie et des équivalents de trésorerie après effet des variations des taux de change", "Increase (decrease) in cash and cash equivalents"),
+    "CashAndCashEquivalentsAtBeginningOfPeriod":
+        ("Trésorerie d'ouverture", "Cash at beginning of period"),
+    "CashAndCashEquivalentsAtEndOfPeriod":
+        ("Trésorerie de clôture", "Cash at end of period"),
+    "CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition":
+        ("Trésorerie et équivalents de trésorerie si différents de l'état de la situation financière", "Cash and cash equivalents if different from statement of financial position"),
+    "BankOverdraftsClassifiedAsCashEquivalents":
+        ("Découverts bancaires", "Bank overdrafts"),
+}
+
+
+# ---------------------------------------------------------------------------
+# Statement classifier — maps concept short name → statement type
+# ---------------------------------------------------------------------------
+
+STATEMENT_MAP: Dict[str, str] = {
+    #  Income Statement 
+    "Revenue":                              "Income Statement",
+    "RevenueFromContractsWithCustomers":    "Income Statement",
+    # VINCI-specific revenue concepts
+    "Revenuefromcontractswithcustomersotherthanrevenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies": "Income Statement",
+    "Revenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies": "Income Statement",
+    "OtherIncome":                          "Income Statement",
+    "OtherRevenue":                         "Income Statement",
+    "OtherOperatingIncome":                 "Income Statement",
+    "MiscellaneousOtherOperatingIncome":    "Income Statement",
+    "MiscellaneousOtherOperatingExpense":   "Income Statement",
+    "CostOfSales":                          "Income Statement",
+    "GrossProfit":                          "Income Statement",
+    "DistributionCosts":                    "Income Statement",
+    "AdministrativeExpense":                "Income Statement",
+    "SellingGeneralAndAdministrativeExpense": "Income Statement",
+    "OtherExpenseByFunction":               "Income Statement",
+    "OtherExpenseByNature":                 "Income Statement",
+    "EmployeeBenefitsExpense":              "Income Statement",
+    "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Income Statement",
+    "DepreciationAndAmortisationExpense":   "Income Statement",
+    "DepreciationRightOfUseAssets":         "Income Statement",
+    "ImpairmentLossRecognisedInProfitOrLoss": "Income Statement",
+    "RawMaterialsAndConsumablesUsed":       "Income Statement",
+    "OtherOperatingExpense":                "Income Statement",
+    "EarningsBeforeInterestTaxesDepreciationAndAmortisation": "Income Statement",
+    "OperatingExpense":                     "Income Statement",
+    # OVH-specific income statement concepts
+    "OperatingExpensesOtherThanPersonnelExpenses": "Income Statement",
+    "CurrentEbitda":                        "Income Statement",
+    "CurrentOperatingIncome":               "Income Statement",
+    # VINCI-specific operating income concepts
+    "Profitlossfromordinaryoperatingactivities": "Income Statement",
+    "Otheroperatingincomeexpenserecurring": "Income Statement",
+    "Profitlossfromoperatingactivitiesrecurring": "Income Statement",
+    "Otheroperatingincomeexpensenonrecurring": "Income Statement",
+    "ProfitLossFromOperatingActivities":    "Income Statement",
+    "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": "Income Statement",
+    "FinanceCosts":                         "Income Statement",
+    "ExpenseFromSharebasedPaymentTransactionsWithEmployees": "Income Statement",
+    # VINCI-specific finance costs
+    "Grossfinancecosts":                    "Income Statement",
+    "InterestIncomeOnCashAndCashEquivalents": "Income Statement",
+    "Netfinancecosts":                      "Income Statement",
+    "OtherFinanceIncomeCost": "Income Statement",
+    "FinanceIncome":                        "Income Statement",
+    "FinanceIncomeExpense":                 "Income Statement",
+    "FinanceCostsRecognisedInProfitOrLoss": "Income Statement",
+    "FinanceIncomeRecognisedInProfitOrLoss": "Income Statement",
+    "GainsLossesOnExchangeDifferences":     "Income Statement",
+    "InterestExpense":                      "Income Statement",
+    "InterestExpenseOnBorrowings":          "Income Statement",
+    "InterestExpenseOnLeaseLiabilities":    "Income Statement",
+    "OtherFinanceIncome":                   "Income Statement",
+    "OtherFinanceCost":                     "Income Statement",
+    "FinanceIncomeCost":                    "Income Statement",
+    "RevaluationOfHedgingInstruments":      "Income Statement",
+    "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences": "Income Statement",
+    "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod": "Income Statement",
+    "ProfitLossBeforeTax":                  "Income Statement",
+    "IncomeTaxExpenseContinuingOperations": "Income Statement",
+    "ProfitLoss":                           "Income Statement",
+    "Othercomprehensiveincomebeforetaxcashflowhedgesandothercomprehensiveincomebeforetaxhedgesofnetinvestmentsinforeignoperations": "Income Statement",
+    "Othercomprehensiveincomebeforetaxcostofhedging":"Income Statement",
+    "Incometaxrelatedtochangesinthefairvalueofcashflowshedginginstrumentsandhedgingcosts":"Income Statement",
+    "ProfitLossAttributableToOwnersOfParent": "Income Statement",
+    "ProfitLossAttributableToNoncontrollingInterests": "Income Statement",
+    "BasicEarningsLossPerShare":            "Income Statement",
+    "DilutedEarningsLossPerShare":          "Income Statement",
+    "OtherComprehensiveIncome":             "Income Statement",
+    "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax": "Income Statement",
+    "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax": "Income Statement",
+    "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation": "Income Statement",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesFromInvestmentsInEquityInstruments": "Income Statement",
+    "IncomeTaxRelatingToRemeasurementsOfDefinedBenefitPlansOfOtherComprehensiveIncome":"Income Statement",
+    "ShareOfOtherComprehensiveIncomeOfAssociatesAndJointVenturesAccountedForUsingEquityMethodThatWillBeReclassifiedToProfitOrLossNetOfTax": "Income Statement",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans": "Income Statement",
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss": "Income Statement",
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss": "Income Statement",
+    "ComprehensiveIncome":                  "Income Statement",
+    #  Assets 
+    "Assets":                               "Assets",
+    "NoncurrentAssets":                     "Assets",
+    "CurrentAssets":                        "Assets",
+        "Goodwill":                             "Assets",
+        "OtherIntangibleAssets": "Assets",
+    "IntangibleAssetsOtherThanGoodwill":    "Assets",
+    "PropertyPlantAndEquipmentIncludingRightofuseAssets": "Assets",
+    # VINCI-specific assets
+    "Serviceconcessionrights":              "Assets",
+    "Currentcashmanagementfinancialassets": "Assets",
+    "PropertyPlantAndEquipment":            "Assets",
+    "RightOfUseAssets":                     "Assets",
+    "RightofuseAssets":                     "Assets",
+    "InvestmentProperty":                   "Assets",
+    "InvestmentsAccountedForUsingEquityMethod": "Assets",
+    "DeferredTaxAssets":                    "Assets",
+    "NoncurrentFinancialAssets":            "Assets",
+    "OtherNoncurrentFinancialAssets":       "Assets",
+    "InvestmentAccountedForUsingEquityMethod":"Assets",
+    "NoncurrentDerivativeFinancialAssets":  "Assets",
+    "OtherNoncurrentAssets":                "Assets",
+    "OtherNoncurrentReceivables":           "Assets",
+    "Inventories":                          "Assets",
+    "TradeAndOtherCurrentReceivables":      "Assets",
+    "TradeReceivables":                     "Assets",
+    "CurrentTradesReceivablesAndContractAssets": "Assets",
+    "CurrentTaxAssets":                     "Assets",
+    "CurrentTaxAssetsCurrent":              "Assets",
+    "CurrentFinancialAssets":               "Assets",
+    "OtherCurrentFinancialAssets":  "Assets",
+    "CurrentDerivativeFinancialAssets":     "Assets",
+    "OtherCurrentAssets":                   "Assets",
+    "OtherReceivablesAndCurrentAssets":     "Assets",
+    "CashAndCashEquivalents":               "Assets",
+    "CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners":  "Assets",
+    "NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale":  "Assets",
+    #  Liabilities & Equity 
+    "EquityAndLiabilities":                 "Liabilities",
+    "Equity":                               "Liabilities",
+    "AccumulatedOtherComprehensiveIncome": "Liabilities",
+    "EquityAttributableToOwnersOfParent":   "Liabilities",
+    "NoncontrollingInterests":              "Liabilities",
+    "IssuedCapital":                        "Liabilities",
+    "SharePremium":                         "Liabilities",
+    "RetainedEarnings":                     "Liabilities",
+    "ReservesAndRetainedEarnings":          "Liabilities",
+    # VINCI-specific equity
+    "Otherreservesandretainedearningsexcludingprofitlossforreportingperiod": "Liabilities",
+    "ReserveOfExchangeDifferencesOnTranslation":"Liabilities",
+    "RetainedEarningsProfitLossForReportingPeriod": "Liabilities",
+    "OtherReserves":                        "Liabilities",
+    "ReserveOfSharebasedPayments":          "Liabilities",
+    "TreasuryShares":                       "Liabilities",
+    "Liabilities":                          "Liabilities",
+    "NoncurrentLiabilities":               "Liabilities",
+    "CurrentLiabilities":                   "Liabilities",
+    "NoncurrentBorrowings":                 "Liabilities",
+    "LongtermBorrowings":                   "Liabilities",
+    "OtherLongtermProvisions":              "Liabilities",
+    "NoncurrentProvisionsForEmployeeBenefits": "Liabilities",
+    "NoncurrentPortionOfNoncurrentBondsIssued": "Liabilities",
+    "NoncurrentPortionOfOtherNoncurrentBorrowings":"Liabilities",
+    "NoncurrentLeaseLiabilities":           "Liabilities",
+    "DeferredTaxLiabilities":               "Liabilities",
+    "NoncurrentProvisions":                 "Liabilities",
+    "OtherNoncurrentLiabilities":           "Liabilities",
+    "NoncurrentFinancialLiabilities":       "Liabilities",
+    "OtherNoncurrentFinancialLiabilities":  "Liabilities",
+    "NoncurrentDerivativeFinancialLiabilities": "Liabilities",
+    "CurrentBorrowings":                    "Liabilities",
+    "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "Liabilities",
+    "CurrentLeaseLiabilities":              "Liabilities",
+    "CurrentDerivativeFinancialLiabilities": "Liabilities",
+    "ShorttermBorrowings": "Liabilities",
+    "CurrentProvisions":                    "Liabilities",
+    "TradeAndOtherCurrentPayables":         "Liabilities",
+    "TradeAndOtherCurrentPayablesToTradeSuppliers": "Liabilities",
+    "TradePayables":                        "Liabilities",
+    "CurrentTaxLiabilities":               "Liabilities",
+    "CurrentTaxLiabilitiesCurrent":         "Liabilities",
+    "CurrentLiabilitiesOtherThanLiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale": "Liabilities",
+    "LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale":"Liabilities",
+    "TradeAndOtherPayablesToTradeSuppliers":"Liabilities",
+    "OtherCurrentLiabilities":              "Liabilities",
+    "CurrentLeaseLiabilities":"Liabilities",
+    #  Cash Flow 
+    "ProfitLoss": "Cash Flow",
+    "CashFlowsFromUsedInOperatingActivities":   "Cash Flow",
+    "CashFlowsFromUsedInOperations":            "Cash Flow",
+    "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital": "Cash Flow",
+    "CashFlowsFromUsedInInvestingActivities":   "Cash Flow",
+    "CashFlowsFromUsedInFinancingActivities":   "Cash Flow",
+    "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie":"Cash Flow",
+    "ProfitLossAdjustedForNoncashItems":        "Cash Flow",
+        "AdjustmentsForDepreciationAndAmortisationExpense": "Cash Flow",
+    "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Cash Flow",
+    "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Cash Flow",
+    "AdjustmentsForProvisions":             "Cash Flow",
+    # VINCI-specific cash flow adjustments
+    "Adjustmentsforprovisionsandadjustmentsforimpairmentlossreversalofimpairmentlossrecognisedinprofitorloss": "Cash Flow",
+    "Adjustmentsfornetfinancecosts":        "Cash Flow",
+    "FinanceCostsPaidClassifiedAsOperatingActivities": "Cash Flow",
+    "Adjustmentsforinterestexpenseonleaseliabilities": "Cash Flow",
+    "AdjustmentsForIncomeTaxExpense":       "Cash Flow",
+    "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital":"Cash Flow",
+    "AdjustmentsForFinanceCosts":           "Cash Flow",
+    "AdjustmentsForSharebasedPayments":     "Cash Flow",
+    "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets": "Cash Flow",
+    "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets": "Cash Flow",
+    "AdjustmentsForFairValueGainsLosses": "Cash Flow",
+    "AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod":"Cash Flow",
+    "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences": "Cash Flow",
+    "IncreaseDecreaseInWorkingCapital":     "Cash Flow",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities": "Cash Flow",
+    "IncreaseDecreaseInTradeAndOtherPayables": "Cash Flow",
+    "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables": "Cash Flow",
+    "IncreaseDecreaseInTradeAndOtherReceivables": "Cash Flow",
+    "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables": "Cash Flow",
+    "IncreaseDecreaseInInventories":        "Cash Flow",
+    "IncomeTaxesPaid":                      "Cash Flow",
+    "IncomeTaxesPaidRefundClassifiedAsOperatingActivities": "Cash Flow",
+        "InterestPaid":                         "Cash Flow",
+    "InterestPaidClassifiedAsFinancingActivities": "Cash Flow",
+    "InterestPaidClassifiedAsOperatingActivities": "Cash Flow",
+    # VINCI-specific interest and dividends
+    "Interestpaidandinterestreceivedclassifiedasoperatingactivities": "Cash Flow",
+    "Dividendsreceivedfrominvestmentsaccountedforusingequitymethodclassifiedasoperatingactivities": "Cash Flow",
+    "OtherInflowsOutflowsOfCashClassifiedAsOperatingActivities":"Cash Flow",
+        "PurchaseOfPropertyPlantAndEquipment":  "Cash Flow",
+    "PurchaseOfIntangibleAssets":           "Cash Flow",
+    "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets": "Cash Flow",
+    "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets": "Cash Flow",
+    # VINCI-specific investing activities
+    "Purchaseofpropertyplantandequipmentandpurchaseofintangibleassetsclassifiedasinvestingactivities": "Cash Flow",
+    "Proceedsfromsalesofpropertyplantandequipmentandproceedsfromsalesofintangibleassetsclassifiedasinvestingactivities": "Cash Flow",
+    "Increasedecreaseinpropertyplantandequipmentandintangibleassetsclassifiedasinvestingactivities": "Cash Flow",
+    "Purchaseofconcessionfixedassetsnetofgrantsreceivedclassifiedasinvestingactivities": "Cash Flow",
+    "Increasedecreaseinfinancialreceivablespppcontractsandothersclassifiedasinvestingactivities": "Cash Flow",
+    "Growthinvestmentsinconcessionsandpppsclassifiedasinvestingactivities": "Cash Flow",
+    "Cashflowsusedinobtainingcontrolofsubsidiariesorotherbusinessespurchaseofinterestsininvestmentsaccountedforusingequitymethodandpurchaseofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities": "Cash Flow",
+    "Cashflowsfromlosingcontrolofsubsidiariesorotherbusinessesproceedsfromsalesofinvestmentsaccountedforusingequitymethodandproceedsfromsalesofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities": "Cash Flow",
+    "CashAndCashEquivalentsInSubsidiaryOrBusinessesAcquiredOrDisposed2013":
+"Cash Flow",    "Increasedecreaseininvestmentsclassifiedasinvestingactivities": "Cash Flow",
+"OtherInflowsOutflowsOfCashClassifiedAsInvestingActivities":"Cash Flow",
+    "ProceedsFromDisposalOfPropertyPlantAndEquipment": "Cash Flow",
+    "ProceedsFromDisposalOfNoncurrentAssets": "Cash Flow",
+    "ProceedsFromDisposalOfAssets":         "Cash Flow",
+    "AcquisitionOfSubsidiariesNetOfCashAcquired": "Cash Flow",
+    "CashInflowsOutflowsRelatedToBusinessCombinationsNetOfCash": "Cash Flow",
+    "ProceedsFromSaleOfInterestsInAssociates": "Cash Flow",
+    "ReceiptsDisbursementsRelatedToLoansAndAdvancesGranted": "Cash Flow",
+    "ProceedsFromBorrowingsClassifiedAsFinancingActivities": "Cash Flow",
+    "RepaymentsOfBorrowingsClassifiedAsFinancingActivities": "Cash Flow",
+    "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "Cash Flow",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "Cash Flow",
+    "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities":"Cash Flow",
+        "PaymentsForRepurchaseOfShares":        "Cash Flow",
+    "PaymentsToAcquireOrRedeemEntitysShares": "Cash Flow",
+    # VINCI-specific financing activities
+    "Proceedsfromissuingsharesproceedsfromissuingotherequityinstrumentsandpaymentsofotherequityinstrumentsclassifiedasfinancingactivities": "Cash Flow",
+    "Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares": "Cash Flow",
+    "CapitalIncreasesAndReductionsOfSubsidiariesSubscribedByThirdParties":"Cash Flow",
+    "Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares":"Cash Flow",
+    "Proceedsfromchangesinownershipinterestsinsubsidiariesandpaymentsfromchangesinownershipinterestsinsubsidiaries": "Cash Flow",
+    "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities": "Cash Flow",
+    "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie": "Cash Flow",
+    "ProceedsFromIssuingShares":            "Cash Flow",
+    "DividendsPaid":                        "Cash Flow",
+    "DividendsPaidClassifiedAsFinancingActivities": "Cash Flow",
+    "DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities":"Cash Flow",
+    "DividendsPaidToNoncontrollingInterestsClassifiedAsFinancingActivities":"Cash Flow",
+    "ProceedsFromNoncurrentBorrowings":"Cash Flow",
+    "RepaymentsOfNoncurrentBorrowings":"Cash Flow",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities":"Cash Flow",
+    "GuaranteeDepositsReceivedAndOtherFinancialDebt": "Cash Flow",
+    "EffectOfExchangeRateChangesOnCashAndCashEquivalents": "Cash Flow",
+    "IncreaseDecreaseInCashAndCashEquivalents": "Cash Flow",
+    "CashAndCashEquivalentsAtBeginningOfPeriod": "Cash Flow",
+    "CashAndCashEquivalentsAtEndOfPeriod":   "Cash Flow",
+    "CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition": "Cash Flow",
+    "BankOverdraftsClassifiedAsCashEquivalents": "Cash Flow",
+}
+
+# Preferred display order within each statement type
+_STATEMENT_ORDER = {
+    "Income Statement": [
+        "Revenue", "RevenueFromContractsWithCustomers",
+        # VINCI revenue
+        "Revenuefromcontractswithcustomersotherthanrevenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies",
+        "Revenuefromconcessionsubsidiariesderivedfromworkcarriedoutbynongroupcompanies",
+        "OtherIncome", "OtherRevenue", "OtherOperatingIncome", "MiscellaneousOtherOperatingIncome",
+        "EmployeeBenefitsExpense", "OperatingExpensesOtherThanPersonnelExpenses",
+        "CostOfSales", "GrossProfit", "RawMaterialsAndConsumablesUsed",
+        "OtherOperatingExpense", "MiscellaneousOtherOperatingExpense", "OtherExpenseByNature",
+        "OperatingExpense", "DistributionCosts", "AdministrativeExpense",
+        "SellingGeneralAndAdministrativeExpense", "OtherExpenseByFunction",
+        "DepreciationAndAmortisationExpense", "DepreciationRightOfUseAssets",
+        "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
+        "ImpairmentLossRecognisedInProfitOrLoss",
+                "EarningsBeforeInterestTaxesDepreciationAndAmortisation", "CurrentEbitda",
+        "CurrentOperatingIncome",
+        # VINCI operating income
+        "Profitlossfromordinaryoperatingactivities",
+        "Otheroperatingincomeexpenserecurring",
+        "Profitlossfromoperatingactivitiesrecurring",
+        "Otheroperatingincomeexpensenonrecurring",
+        "ProfitLossFromOperatingActivities",
+        "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod",
+                "FinanceIncome", "FinanceIncomeRecognisedInProfitOrLoss", "OtherFinanceIncome",
+        "FinanceCosts", "FinanceCostsRecognisedInProfitOrLoss", "OtherFinanceCost",
+        # VINCI finance costs
+        "Grossfinancecosts","InterestIncomeOnCashAndCashEquivalents", "Netfinancecosts","OtherFinanceIncomeCost",
+        "InterestExpense", "InterestExpenseOnBorrowings", "InterestExpenseOnLeaseLiabilities",
+        "RevaluationOfHedgingInstruments", "GainsLossesOnExchangeDifferences",
+        "FinanceIncomeExpense", "FinanceIncomeCost",
+        "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences",
+        "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod",
+        "ProfitLossBeforeTax", "IncomeTaxExpenseContinuingOperations",
+        "ProfitLoss", "Othercomprehensiveincomebeforetaxcashflowhedgesandothercomprehensiveincomebeforetaxhedgesofnetinvestmentsinforeignoperations","ProfitLossAttributableToOwnersOfParent",
+        "Othercomprehensiveincomebeforetaxcostofhedging",
+        "Incometaxrelatedtochangesinthefairvalueofcashflowshedginginstrumentsandhedgingcosts",
+        "ProfitLossAttributableToNoncontrollingInterests",
+        "BasicEarningsLossPerShare", "DilutedEarningsLossPerShare",
+        "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation",
+        "ShareOfOtherComprehensiveIncomeOfAssociatesAndJointVenturesAccountedForUsingEquityMethodThatWillBeReclassifiedToProfitOrLossNetOfTax",
+        "IncomeTaxRelatingToRemeasurementsOfDefinedBenefitPlansOfOtherComprehensiveIncome",
+        "OtherComprehensiveIncomeBeforeTaxGainsLossesFromInvestmentsInEquityInstruments",
+        "ExpenseFromSharebasedPaymentTransactionsWithEmployees",
+        "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss",
+        "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax",
+        "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans",
+        "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss",
+        "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax",
+        "OtherComprehensiveIncome", "ComprehensiveIncome",
+    ],
+        "Assets": [
+        "Goodwill", "OtherIntangibleAssets","IntangibleAssetsOtherThanGoodwill", "PropertyPlantAndEquipmentIncludingRightofuseAssets",
+        # VINCI concession assets
+        "Serviceconcessionrights",
+        "PropertyPlantAndEquipment",
+        "RightOfUseAssets", "RightofuseAssets", "InvestmentProperty",
+        "InvestmentsAccountedForUsingEquityMethod",
+        "NoncurrentFinancialAssets", "NoncurrentDerivativeFinancialAssets", "OtherNoncurrentFinancialAssets","InvestmentAccountedForUsingEquityMethod",
+        "OtherNoncurrentReceivables", "DeferredTaxAssets", "OtherNoncurrentAssets",
+        "NoncurrentAssets",
+        "Inventories", "TradeReceivables", "TradeAndOtherCurrentReceivables",
+        "CurrentTradesReceivablesAndContractAssets",
+        "CurrentTaxAssets", "CurrentTaxAssetsCurrent",
+        "CurrentFinancialAssets", "OtherCurrentFinancialAssets","CurrentDerivativeFinancialAssets",
+        "OtherCurrentAssets", "OtherReceivablesAndCurrentAssets",
+        # VINCI cash management assets
+        "Currentcashmanagementfinancialassets",
+        "CashAndCashEquivalents","CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners","NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale", "CurrentAssets", "Assets",
+    ],
+        "Liabilities": [
+        "IssuedCapital", "SharePremium",
+        "RetainedEarnings", "ReservesAndRetainedEarnings",
+        # VINCI reserves
+        "Otherreservesandretainedearningsexcludingprofitlossforreportingperiod",
+        "ReserveOfExchangeDifferencesOnTranslation",
+        "RetainedEarningsProfitLossForReportingPeriod",
+        "OtherReserves", "ReserveOfSharebasedPayments", "TreasuryShares","AccumulatedOtherComprehensiveIncome",
+        "EquityAttributableToOwnersOfParent", "NoncontrollingInterests", "Equity",
+        "NoncurrentBorrowings", "LongtermBorrowings","OtherLongtermProvisions",
+        "NoncurrentLeaseLiabilities","NoncurrentProvisionsForEmployeeBenefits","NoncurrentPortionOfNoncurrentBondsIssued","NoncurrentPortionOfOtherNoncurrentBorrowings",
+        "NoncurrentFinancialLiabilities", "OtherNoncurrentFinancialLiabilities", "NoncurrentDerivativeFinancialLiabilities",
+        "NoncurrentProvisions", "DeferredTaxLiabilities", "OtherNoncurrentLiabilities",
+        "NoncurrentLiabilities",
+        "CurrentBorrowings", "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
+        "CurrentLeaseLiabilities",
+        "TradePayables", "TradeAndOtherCurrentPayables", "TradeAndOtherCurrentPayablesToTradeSuppliers",
+        "CurrentTaxLiabilities", "CurrentTaxLiabilitiesCurrent","TradeAndOtherPayablesToTradeSuppliers",
+        "CurrentDerivativeFinancialLiabilities", "ShorttermBorrowings",  "CurrentLiabilitiesOtherThanLiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale","LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale", 
+        "CurrentProvisions", "OtherCurrentLiabilities","CurrentLeaseLiabilities", "CurrentLiabilities",
+        "Liabilities", "EquityAndLiabilities",
+    ],
+        "Cash Flow": [
+        "ProfitLoss", "ProfitLossAdjustedForNoncashItems",
+        "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital",
+        "AdjustmentsForDepreciationAndAmortisationExpense",
+        "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
+        "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
+        "AdjustmentsForProvisions",
+        # VINCI cash flow adjustments
+        "Adjustmentsforprovisionsandadjustmentsforimpairmentlossreversalofimpairmentlossrecognisedinprofitorloss",
+        "AdjustmentsForSharebasedPayments",
+        "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets",
+        "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets",
+        "AdjustmentsForFairValueGainsLosses","AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod",
+                "AdjustmentsForFinanceCosts",
+        # VINCI finance cost adjustments
+        "Adjustmentsfornetfinancecosts",
+        "FinanceCostsPaidClassifiedAsOperatingActivities",
+        "Adjustmentsforinterestexpenseonleaseliabilities",
+        "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences",
+        "AdjustmentsForIncomeTaxExpense",
+        "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital",
+        "IncreaseDecreaseInInventories",
+        "IncreaseDecreaseInTradeAndOtherReceivables",
+        "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables",
+        "IncreaseDecreaseInTradeAndOtherPayables",
+        "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables",
+        "IncreaseDecreaseInWorkingCapital",
+        "IncomeTaxesPaidClassifiedAsOperatingActivities",
+                "IncomeTaxesPaid", "IncomeTaxesPaidRefundClassifiedAsOperatingActivities",
+        "InterestPaid", "InterestPaidClassifiedAsOperatingActivities",
+        # VINCI interest and dividends
+        "Interestpaidandinterestreceivedclassifiedasoperatingactivities",
+        "Dividendsreceivedfrominvestmentsaccountedforusingequitymethodclassifiedasoperatingactivities","OtherInflowsOutflowsOfCashClassifiedAsOperatingActivities",
+                "CashFlowsFromUsedInOperatingActivities", "CashFlowsFromUsedInOperations",
+        "PurchaseOfPropertyPlantAndEquipment", "PurchaseOfIntangibleAssets",
+        "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets",
+        "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets",
+        # VINCI investing activities
+        "Purchaseofpropertyplantandequipmentandpurchaseofintangibleassetsclassifiedasinvestingactivities",
+        "Proceedsfromsalesofpropertyplantandequipmentandproceedsfromsalesofintangibleassetsclassifiedasinvestingactivities",
+        "Increasedecreaseinpropertyplantandequipmentandintangibleassetsclassifiedasinvestingactivities",
+        "Purchaseofconcessionfixedassetsnetofgrantsreceivedclassifiedasinvestingactivities",
+        "Increasedecreaseinfinancialreceivablespppcontractsandothersclassifiedasinvestingactivities",
+        "Growthinvestmentsinconcessionsandpppsclassifiedasinvestingactivities",
+        "Cashflowsusedinobtainingcontrolofsubsidiariesorotherbusinessespurchaseofinterestsininvestmentsaccountedforusingequitymethodandpurchaseofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities",
+        "Cashflowsfromlosingcontrolofsubsidiariesorotherbusinessesproceedsfromsalesofinvestmentsaccountedforusingequitymethodandproceedsfromsalesofinvestmentsotherthaninvestmentsaccountedforusingequitymethodclassifiedasinvestingactivities",
+        "CashAndCashEquivalentsInSubsidiaryOrBusinessesAcquiredOrDisposed2013",
+        "Increasedecreaseininvestmentsclassifiedasinvestingactivities",
+        "OtherInflowsOutflowsOfCashClassifiedAsInvestingActivities",
+        "ProceedsFromDisposalOfPropertyPlantAndEquipment",
+        "ProceedsFromDisposalOfNoncurrentAssets", "ProceedsFromDisposalOfAssets",
+        "AcquisitionOfSubsidiariesNetOfCashAcquired",
+        "CashInflowsOutflowsRelatedToBusinessCombinationsNetOfCash",
+        "ProceedsFromSaleOfInterestsInAssociates",
+        "ReceiptsDisbursementsRelatedToLoansAndAdvancesGranted",
+        "CashFlowsFromUsedInInvestingActivities",
+        "ProceedsFromBorrowingsClassifiedAsFinancingActivities",
+        "RepaymentsOfBorrowingsClassifiedAsFinancingActivities",
+                "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
+        "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
+        "PaymentsForRepurchaseOfShares", "PaymentsToAcquireOrRedeemEntitysShares",
+        # VINCI financing activities
+        "Proceedsfromissuingsharesproceedsfromissuingotherequityinstrumentsandpaymentsofotherequityinstrumentsclassifiedasfinancingactivities",
+        "Paymentstoacquireorredeementityssharesandproceedsfromsaleorissueoftreasuryshares",
+        "CapitalIncreasesAndReductionsOfSubsidiariesSubscribedByThirdParties",
+        "Proceedsfromchangesinownershipinterestsinsubsidiariesandpaymentsfromchangesinownershipinterestsinsubsidiaries",
+        "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities",
+        "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie",
+        "ProceedsFromIssuingShares",
+        "DividendsPaid", "DividendsPaidClassifiedAsFinancingActivities","DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities","DividendsPaidToNoncontrollingInterestsClassifiedAsFinancingActivities","ProceedsFromNoncurrentBorrowings","RepaymentsOfNoncurrentBorrowings","PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
+        "Increasedecreaseincurrentcashmanagementfinancialassetsandothercurrentfinancialliabilitiesclassifiedasfinancingactivities",
+        "InterestPaidClassifiedAsFinancingActivities",
+        "GuaranteeDepositsReceivedAndOtherFinancialDebt",
+        "CashFlowsFromUsedInFinancingActivities",
+        "Autreaugmentationdiminutiondelatresorerieetdesequivalentsdetresorerie",
+        "EffectOfExchangeRateChangesOnCashAndCashEquivalents",
+        "IncreaseDecreaseInCashAndCashEquivalents",
+        "CashAndCashEquivalentsAtBeginningOfPeriod",
+        "CashAndCashEquivalentsAtEndOfPeriod",
+        "CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition",
+        "BankOverdraftsClassifiedAsCashEquivalents",
+    ],
+}
+
+STATEMENT_TYPES = ["Income Statement", "Assets", "Liabilities", "Cash Flow"]
+
+# Default headers for the OIM API
+_DEFAULT_HEADERS = {
+    "Accept": "application/json,*/*",
+    "User-Agent": "XBRL-Research/1.0 research@example.com",
+}
+
+# Custom mapping cache
+_CUSTOM_MAPPING_CACHE: Optional[Dict] = None
+_CUSTOM_MAPPING_ENABLED: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _concept_short(concept_full: str) -> str:
+    """'ifrs-full:Revenue' → 'Revenue'  (strip any namespace prefix)."""
+    if ":" in concept_full:
+        return concept_full.split(":")[-1]
+    return concept_full
+
+
+def _parse_period(period: str):
+    """
+    Parse an XBRL period string into (period_type, period_start, period_end, fy_year).
+
+    Duration: '2022-01-01/2022-12-31' → ('duration', '2022-01-01', '2022-12-31', '2022')
+    Instant:  '2022-12-31'            → ('instant',  '',           '2022-12-31', '2022')
+    Instant:  '2025-01-01'            → ('instant',  '',           '2025-01-01', '2024')
+              (Jan 1 dates represent year-end of prior year)
+    """
+    if not period:
+        return "unknown", "", "", ""
+    if "/" in period:
+        parts = period.split("/", 1)
+        start, end = parts[0].strip(), parts[1].strip()
+        # If the period ends on Jan 1 (e.g. "2025-01-01T00:00:00"), the actual
+        # fiscal year is the prior year (calendar-year companies report Jan 1 → Jan 1).
+        end_date = end[:10]  # "YYYY-MM-DD"
+        if end_date[5:] == "01-01" and len(end) >= 4:
+            fy_year = str(int(end[:4]) - 1)
+        else:
+            fy_year = end[:4] if len(end) >= 4 else ""
+        return "duration", start, end, fy_year
+    else:
+        # Instant (point-in-time) period
+        period_clean = period.strip()
+        period_date = period_clean[:10]  # "YYYY-MM-DD"
+        
+        # For instant dates on January 1, the fiscal year is the prior year
+        # because Jan 1, 2025 represents the balance sheet as of Dec 31, 2024 (end of FY2024)
+        if len(period_date) >= 10 and period_date[5:10] == "01-01":
+            fy_year = str(int(period_date[:4]) - 1) if len(period_date) >= 4 else ""
+        else:
+            fy_year = period_date[:4] if len(period_date) >= 4 else ""
+        
+        return "instant", "", period_clean, fy_year
+
+
+def _to_numeric(value) -> Optional[float]:
+    """Convert a value to float; return None on failure."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_number(n: float) -> str:
+    """Format a number removing unnecessary trailing zeros after decimal point."""
+    if n == int(n):
+        return f"{int(n):,}"
+    return f"{n:,.1f}"
+
+
+def _format_value(value: Optional[float], decimals) -> str:
+    """
+    Format a numeric value for display, scaling by decimals precision.
+
+    decimals <= -6  → display in millions  (e.g. 993,100,000,000 → 993.1)
+    decimals <= -3  → display in thousands (e.g. 993,100,000     → 993,100)
+    otherwise       → display raw integer
+    """
+    if value is None:
+        return ""
+    try:
+        dec = int(decimals)
+        if dec <= -6:
+            return _fmt_number(value / 1_000_000)
+        elif dec <= -3:
+            return _fmt_number(value / 1_000)
+        else:
+            return _fmt_number(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def get_value_unit_label(decimals) -> str:
+    """Return a human-readable unit label for the given XBRL decimals value."""
+    try:
+        dec = int(decimals)
+        if dec <= -6:
+            return "€ millions"
+        elif dec <= -3:
+            return "€ thousands"
+        else:
+            return "€"
+    except (TypeError, ValueError):
+        return "€"
+
+
+def _extract_currency_and_unit(facts: List[dict]) -> Tuple[str, str]:
+    """
+    Extract currency and unit information from a list of facts.
+    
+    Returns:
+        Tuple of (currency, unit_scale) e.g. ('EUR', 'millions')
+    """
+    # Default to EUR for European companies
+    currency = "EUR"
+    unit_scale = "millions"
+    
+    # Find a fact with unit and decimals information
+    for fact in facts:
+        if fact.get("value_numeric") is not None:
+            # Extract currency from unit field
+            unit = fact.get("unit", "")
+            if unit:
+                # Unit is typically like "iso4217:EUR" or just "EUR"
+                if ":" in unit:
+                    currency = unit.split(":")[-1].upper()
+                else:
+                    currency = unit.upper()
+            
+            # Extract unit scale from decimals
+            decimals = fact.get("decimals", "")
+            try:
+                dec = int(decimals)
+                if dec <= -6:
+                    unit_scale = "millions"
+                elif dec <= -3:
+                    unit_scale = "thousands"
+                else:
+                    unit_scale = "units"
+            except (TypeError, ValueError):
+                unit_scale = "millions"
+            
+            # Found valid info, return
+            if currency and unit_scale:
+                return (currency, unit_scale)
+    
+    return (currency, unit_scale)
+
+
+def _format_instant_date(period_end: str) -> str:
+    """
+    Format an instant period date for display as column header.
+    
+    Examples:
+        "2024-12-31T00:00:00" -> "31-Dec-2024"
+        "2025-01-01T00:00:00" -> "31-Dec-2024" (represents prior year-end)
+        "2024-12-31" -> "31-Dec-2024"
+    """
+    if not period_end:
+        return ""
+    
+    # Extract date part (YYYY-MM-DD)
+    date_str = period_end[:10] if len(period_end) >= 10 else period_end
+    
+    # Parse date
+    try:
+        from datetime import datetime
+        if len(date_str) >= 10 and date_str[5:10] == "01-01":
+            # Jan 1 represents prior year-end (Dec 31)
+            year = int(date_str[:4]) - 1
+            return f"31-Dec-{year}"
+        else:
+            # Parse the actual date
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%d-%b-%Y")
+    except:
+        return date_str
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def fetch_filings(lei: str, api_base: str, headers: dict = None) -> List[dict]:
+    """
+    Fetch filing list for a company by LEI from filings.xbrl.org API.
+    Returns a list of filing dicts sorted by period_end descending.
+    """
+    hdrs = {**_DEFAULT_HEADERS, **(headers or {})}
+    url = f"{api_base}/api/filings"
+    resp = http_client.get(
+        url,
+        params={"filter[entity.identifier]": lei, "page[size]": 50},
+        headers=hdrs,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    filings_raw = data.get("data", [])
+    filings = []
+    for f in filings_raw:
+        attrs = dict(f.get("attributes", {}))
+        attrs["_id"] = f.get("id", "")
+        filings.append(attrs)
+    filings.sort(key=lambda x: x.get("period_end", ""), reverse=True)
+    return filings
+
+
+def fetch_xbrl_facts(filing: dict, api_base: str, headers: dict = None) -> List[dict]:
+    """
+    Download the OIM xBRL-JSON for a filing and extract all numeric facts.
+
+    Returns a list of fact dicts with keys:
+        concept_full, concept_short, period_type, period_start, period_end,
+        fy_year, unit, value_raw, value_numeric, decimals
+    """
+    json_url = filing.get("json_url", "")
+    if not json_url:
+        return []
+
+    hdrs = {**_DEFAULT_HEADERS, **(headers or {})}
+    full_url = api_base + json_url if not json_url.startswith("http") else json_url
+    resp = http_client.get(full_url, headers=hdrs, timeout=120)
+    resp.raise_for_status()
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = json.loads(resp.content.decode("utf-8", errors="replace"))
+
+    facts_raw = data.get("facts", {})
+    result = []
+
+    for _fact_id, fact in facts_raw.items():
+        dims    = fact.get("dimensions", {})
+        concept = dims.get("concept", "")
+        period  = dims.get("period", "")
+        unit    = dims.get("unit", "")
+        raw_val = fact.get("value", "")
+        decimals = fact.get("decimals", "")
+
+        if not concept:
+            continue
+
+        p_type, p_start, p_end, fy_year = _parse_period(period)
+        numeric = _to_numeric(raw_val)
+
+        result.append({
+            "concept_full":    concept,
+            "concept_short":   _concept_short(concept),
+            "period_type":     p_type,
+            "period_start":    p_start,
+            "period_end":      p_end,
+            "fy_year":         fy_year,
+            "unit":            unit,
+            "value_raw":       raw_val,
+            "value_numeric":   numeric,
+            "decimals":        decimals,
+        })
+
+    return result
+
+
+def _select_best_fact(facts_for_concept: List[dict]) -> Optional[dict]:
+    """
+    Among multiple facts for the same concept + period, pick the best one.
+    Preference: EUR unit > numeric > first.
+    """
+    if not facts_for_concept:
+        return None
+    # Prefer EUR
+    eur = [f for f in facts_for_concept if "EUR" in str(f.get("unit", "")).upper()]
+    candidates = eur if eur else facts_for_concept
+    # Prefer numeric
+    numeric = [f for f in candidates if f.get("value_numeric") is not None]
+    return (numeric or candidates)[0]
+
+
+def _load_custom_mapping_config() -> Dict:
+    """Load custom XBRL mapping configuration from JSON file."""
+    global _CUSTOM_MAPPING_CACHE, _CUSTOM_MAPPING_ENABLED
+    
+    if _CUSTOM_MAPPING_CACHE is not None:
+        print(f"[DEBUG] Using cached mapping config (enabled={_CUSTOM_MAPPING_ENABLED})")
+        return _CUSTOM_MAPPING_CACHE
+    
+    try:
+        from config.config import load_config
+        cfg = load_config()
+        
+        # Check if custom mapping is enabled
+        _CUSTOM_MAPPING_ENABLED = cfg.getboolean("XBRL", "use_custom_mapping", fallback=False)
+        print(f"[DEBUG] Custom mapping enabled: {_CUSTOM_MAPPING_ENABLED}")
+        
+        if not _CUSTOM_MAPPING_ENABLED:
+            print(f"[DEBUG] Custom mapping is DISABLED in config.ini")
+            _CUSTOM_MAPPING_CACHE = {}
+            return _CUSTOM_MAPPING_CACHE
+        
+        # Load mapping file
+        mapping_file = cfg.get("XBRL", "mapping_config_file", fallback="config/xbrl_mapping_config.json")
+        mapping_path = Path(mapping_file)
+        
+        print(f"[DEBUG] Looking for mapping file: {mapping_path.absolute()}")
+        
+        if not mapping_path.exists():
+            print(f"[DEBUG] Custom mapping file NOT FOUND: {mapping_path.absolute()}")
+            _CUSTOM_MAPPING_CACHE = {}
+            return _CUSTOM_MAPPING_CACHE
+        
+        with open(mapping_path, 'r', encoding='utf-8') as f:
+            _CUSTOM_MAPPING_CACHE = json.load(f)
+        
+        # Count concepts
+        total_concepts = 0
+        for key, value in _CUSTOM_MAPPING_CACHE.items():
+            if isinstance(value, dict) and 'concepts' in value:
+                total_concepts += len(value['concepts'])
+        
+        print(f"[DEBUG] Loaded custom XBRL mappings from {mapping_path}")
+        print(f"[DEBUG] Total companies/sections: {len(_CUSTOM_MAPPING_CACHE)}")
+        print(f"[DEBUG] Total concepts: {total_concepts}")
+        print(f"[DEBUG] Companies: {[k for k in _CUSTOM_MAPPING_CACHE.keys() if not k.startswith('_')]}")
+        
+        return _CUSTOM_MAPPING_CACHE
+        
+    except Exception as e:
+        print(f"[DEBUG] ERROR loading custom XBRL mapping: {e}")
+        import traceback
+        traceback.print_exc()
+        _CUSTOM_MAPPING_CACHE = {}
+        return _CUSTOM_MAPPING_CACHE
+
+
+def get_company_key_from_name(company_name: str) -> Optional[str]:
+    """Detect company key from company name for mapping lookup.
+    
+    Args:
+        company_name: Company name (e.g., 'Vinci', 'OVHcloud', 'TotalEnergies')
+    
+    Returns:
+        Company key for mapping lookup (e.g., 'vinci', 'ovhcloud', 'total') or None
+    """
+    if not company_name:
+        return None
+    
+    mapping = _load_custom_mapping_config()
+    if not mapping:
+        return None
+    
+    name_lower = company_name.lower().strip()
+    
+    # Direct match
+    if name_lower in mapping:
+        return name_lower
+    
+    # Fuzzy match - check if company name contains any mapping key
+    for key in mapping.keys():
+        if key.startswith('_'):
+            continue
+        if key in name_lower or name_lower in key:
+            return key
+    
+    # Check company_info names in mapping
+    for key, value in mapping.items():
+        if key.startswith('_'):
+            continue
+        if isinstance(value, dict) and '_company_info' in value:
+            info_name = value['_company_info'].get('name', '').lower()
+            if info_name and (info_name in name_lower or name_lower in info_name):
+                return key
+    
+    return None
+
+
+def _get_inherited_concepts(company_key: str, mapping: Dict) -> Dict:
+    """Get all concepts for a company including inherited ones.
+    
+    Args:
+        company_key: Company identifier (e.g., 'vinci', 'eiffage')
+        mapping: Full mapping configuration
+    
+    Returns:
+        Dictionary of all concepts (own + inherited)
+    """
+    if company_key not in mapping:
+        return {}
+    
+    company_data = mapping[company_key]
+    all_concepts = {}
+    
+    # First, add inherited concepts (lower priority)
+    inherits_from = company_data.get('_inherits_from', [])
+    for shared_section in inherits_from:
+        if shared_section in mapping:
+            shared_concepts = mapping[shared_section].get('concepts', {})
+            all_concepts.update(shared_concepts)
+    
+    # Then, add company-specific concepts (higher priority - overrides inherited)
+    company_concepts = company_data.get('concepts', {})
+    all_concepts.update(company_concepts)
+    
+    return all_concepts
+
+
+def _get_custom_label(concept_full: str, company_key: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """Get custom label for a concept from mapping config.
+    
+    Supports inheritance: company-specific concepts override shared concepts.
+    
+    Args:
+        concept_full: Full concept name with namespace (e.g., 'vinci:Revenue')
+        company_key: Company identifier (e.g., 'vinci', 'ovhcloud'). If None, auto-detect from concept.
+    
+    Returns:
+        (fr_label, en_label) tuple if found, None otherwise
+    """
+    mapping = _load_custom_mapping_config()
+    
+    if not mapping or not _CUSTOM_MAPPING_ENABLED:
+        return None
+    
+    # Auto-detect company from concept namespace if not provided
+    if company_key is None and ':' in concept_full:
+        namespace = concept_full.split(':')[0].lower()
+        # Try exact namespace match first
+        if namespace in mapping and not namespace.startswith('_'):
+            company_key = namespace
+        else:
+            # Try to find matching company key
+            for key in mapping.keys():
+                if key.startswith('_'):
+                    continue
+                if namespace == key or namespace in key:
+                    company_key = key
+                    break
+    
+    if not company_key:
+        # Try global fallback
+        if '_global_fallback' in mapping:
+            concepts = mapping['_global_fallback'].get('concepts', {})
+            if concept_full in concepts:
+                c = concepts[concept_full]
+                return (c.get('fr_label', ''), c.get('en_label', ''))
+        return None
+    
+    # Get all concepts (including inherited)
+    company_key = company_key.lower()
+    all_concepts = _get_inherited_concepts(company_key, mapping)
+    
+    if concept_full in all_concepts:
+        c = all_concepts[concept_full]
+        return (c.get('fr_label', ''), c.get('en_label', ''))
+    
+    # Try global fallback
+    if '_global_fallback' in mapping:
+        global_concepts = mapping['_global_fallback'].get('concepts', {})
+        if concept_full in global_concepts:
+            c = global_concepts[concept_full]
+            return (c.get('fr_label', ''), c.get('en_label', ''))
+    
+    return None
+
+
+def _resolve_labels(
+    concept_short: str,
+    concept_full: str = "",
+    labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Return (fr_label, en_label) for a concept.
+    
+    Priority order (HIGHEST TO LOWEST):
+    1. Custom mapping from xbrl_mapping_config.json (if enabled) - HIGHEST PRIORITY
+    2. ixbrlviewer.html labels (labels_dict) - official filing labels
+    3. IFRS standard labels (IFRS_CONCEPT_LABELS)
+    4. Fallback to concept_short
+    
+    Args:
+        concept_short: Short concept name (e.g., 'Revenue')
+        concept_full: Full concept with namespace (e.g., 'vinci:Revenue')
+        labels_dict: Labels extracted from ixbrlviewer.html
+        company_key: Company identifier for custom mapping lookup
+    """
+    # Debug: show what we received
+    if concept_full and ':' in concept_full:
+        namespace = concept_full.split(':')[0]
+        if namespace.lower() in ['vinci', 'ovhcloud', 'total']:
+            print(f"[DEBUG] _resolve_labels called: concept_full='{concept_full}', company_key='{company_key}', enabled={_CUSTOM_MAPPING_ENABLED}")
+    
+    # 1. Try custom mapping FIRST (if enabled and concept_full provided) - HIGHEST PRIORITY
+    if concept_full and _CUSTOM_MAPPING_ENABLED:
+        custom_labels = _get_custom_label(concept_full, company_key)
+        if custom_labels and (custom_labels[0] or custom_labels[1]):
+            print(f"[DEBUG] Custom label found for {concept_full} (company_key={company_key}): {custom_labels}")
+            return custom_labels
+        else:
+            if concept_full and ':' in concept_full:
+                namespace = concept_full.split(':')[0]
+                if namespace.lower() in ['vinci', 'ovhcloud', 'total']:
+                    print(f"[DEBUG] No custom label for {concept_full} (company_key={company_key})")
+    
+    # 2. Try ixbrlviewer.html labels (official filing labels)
+    if labels_dict and concept_short in labels_dict:
+        print(f"[DEBUG] Using ixbrlviewer label for {concept_short}: {labels_dict[concept_short]}")
+        return labels_dict[concept_short]
+    
+    # 3. Try IFRS standard labels
+    if concept_short in IFRS_CONCEPT_LABELS:
+        return IFRS_CONCEPT_LABELS[concept_short]
+    
+    # 4. Fallback to concept name
+    return (concept_short, concept_short)
+
+
+def build_statements(
+    facts: List[dict],
+    fy_year: str = None,
+    labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Build financial statement DataFrames from a list of facts (single filing).
+
+    If fy_year is provided, only facts for that year are included.
+    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+                 Takes precedence over IFRS_CONCEPT_LABELS when provided.
+    company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
+    Returns dict: {statement_type: DataFrame}
+    Columns: French Label | English Label | Concept | Value
+    """
+    # Filter by fy_year
+    if fy_year:
+        facts = [f for f in facts if f.get("fy_year") == fy_year]
+
+    # Determine expected period type per statement
+    # P&L and Cash Flow = duration; Balance Sheet = instant
+    _stmt_period = {
+        "Income Statement": "duration",
+        "Cash Flow":        "duration",
+        "Assets":           "instant",
+        "Liabilities":      "instant",
+    }
+
+    # Group facts by concept_short + period_type, keeping best fact
+    # key: (concept_short, period_type, fy_year)
+    grouped: Dict[tuple, List[dict]] = {}
+    for fact in facts:
+        key = (fact["concept_short"], fact["period_type"], fact.get("fy_year", ""))
+        grouped.setdefault(key, []).append(fact)
+
+    best_facts: Dict[tuple, dict] = {k: _select_best_fact(v) for k, v in grouped.items()}
+
+    result = {}
+
+    for stmt_type in STATEMENT_TYPES:
+        order = _STATEMENT_ORDER[stmt_type]
+        expected_ptype = _stmt_period[stmt_type]
+        rows = []
+
+        for concept_short in order:
+            stmt_for_concept = STATEMENT_MAP.get(concept_short)
+            if stmt_for_concept != stmt_type:
+                continue
+
+            # Find best fact for this concept
+            # Try expected period type first, then any
+            fact = None
+            for ptype in (expected_ptype, "duration", "instant"):
+                key = (concept_short, ptype, fy_year or "")
+                if key in best_facts and best_facts[key]:
+                    fact = best_facts[key]
+                    break
+            # If fy_year not specified, search without fy_year filter
+            if fact is None:
+                for k, f in best_facts.items():
+                    if k[0] == concept_short and f:
+                        fact = f
+                        break
+
+            if fact is None:
+                continue
+
+            concept_full = fact.get("concept_full", concept_short)
+            fr_label, en_label = _resolve_labels(concept_short, concept_full, labels_dict, company_key)
+            value_str = _format_value(fact.get("value_numeric"), fact.get("decimals", ""))
+
+            rows.append({
+                "French Label":   fr_label,
+                "English Label":  en_label,
+                "Concept":        concept_full,
+                "Value":          value_str,
+            })
+
+        if rows:
+            result[stmt_type] = pd.DataFrame(rows)
+
+    return result
+
+
+def build_consolidated(
+    all_facts_by_fy: Dict[str, List[dict]],
+    labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Build consolidated financial statement DataFrames with all years as columns.
+
+    all_facts_by_fy: {fy_label: [facts_list]}  e.g. {'FY2024': [...], 'FY2023': [...]}
+    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
+
+    Returns dict: {statement_type: DataFrame}
+    For Assets/Liabilities: Columns show instant dates with currency/unit (e.g., "31-Dec-2024 (EUR millions)")
+    For Income/Cash Flow: Columns show fiscal years with currency/unit (e.g., "FY2024 (EUR millions)")
+    """
+    if not all_facts_by_fy:
+        return {}
+
+    fy_labels = sorted(all_facts_by_fy.keys(), reverse=True)
+    
+    # Extract currency and unit information from facts
+    # Use facts from the first fiscal year as representative
+    first_fy_facts = all_facts_by_fy.get(fy_labels[0], [])
+    currency, unit_scale = _extract_currency_and_unit(first_fy_facts)
+    currency_unit_suffix = f" ({currency} {unit_scale})"
+    
+    # Build mapping: fy_label -> period_end date for instant statements
+    fy_to_period_end: Dict[str, str] = {}
+    for fy_label, facts in all_facts_by_fy.items():
+        # Find an instant fact to get the period_end
+        for fact in facts:
+            if fact.get("period_type") == "instant" and fact.get("period_end"):
+                fy_to_period_end[fy_label] = fact["period_end"]
+                break
+
+        # Build per-FY statement dicts
+    per_fy: Dict[str, Dict[str, pd.DataFrame]] = {}
+    for fy_label in fy_labels:
+        fy_year = fy_label.replace("FY", "") if fy_label.startswith("FY") else fy_label
+        per_fy[fy_label] = build_statements(all_facts_by_fy[fy_label], fy_year=fy_year, labels_dict=labels_dict, company_key=company_key)
+
+    # Build concept_short → concept_full mapping from all available facts
+    concept_full_map: Dict[str, str] = {}
+    for facts in all_facts_by_fy.values():
+        for f in facts:
+            cs = f.get("concept_short", "")
+            cf = f.get("concept_full", "")
+            if cs and cf and cs not in concept_full_map:
+                concept_full_map[cs] = cf
+
+    result = {}
+
+    for stmt_type in STATEMENT_TYPES:
+        order = _STATEMENT_ORDER[stmt_type]
+
+        # Collect all data per concept across years
+        concept_data: Dict[str, dict] = {}  # concept_short → row dict
+
+        for concept_short in order:
+            if STATEMENT_MAP.get(concept_short) != stmt_type:
+                continue
+            concept_full = concept_full_map.get(concept_short, concept_short)
+            fr_label, en_label = _resolve_labels(concept_short, concept_full, labels_dict, company_key)
+            row = {
+                "French Label":  fr_label,
+                "English Label": en_label,
+                "Concept":       concept_full,
+            }
+            has_any = False
+            for fy_label in fy_labels:
+                df = per_fy.get(fy_label, {}).get(stmt_type)
+                if df is not None and not df.empty:
+                    match = df[df["Concept"] == concept_full]
+                    if not match.empty:
+                        row[fy_label] = match.iloc[0]["Value"]
+                        has_any = True
+                    else:
+                        row[fy_label] = ""
+                else:
+                    row[fy_label] = ""
+
+            if has_any:
+                concept_data[concept_short] = row
+
+        if concept_data:
+            # Determine column headers based on statement type
+            if stmt_type in ["Assets", "Liabilities"]:
+                # Use instant dates for balance sheet items with currency/unit
+                # Need to rename the FY columns to date columns
+                date_headers = [
+                    _format_instant_date(fy_to_period_end.get(fy_lbl, "")) + currency_unit_suffix
+                    for fy_lbl in fy_labels
+                ]
+                
+                # Create DataFrame with FY labels first
+                df = pd.DataFrame(list(concept_data.values()))
+                
+                # Rename FY columns to date columns with currency/unit
+                rename_map = {fy_lbl: date_hdr for fy_lbl, date_hdr in zip(fy_labels, date_headers)}
+                df = df.rename(columns=rename_map)
+                
+                # Reorder columns to ensure proper order
+                columns = ["French Label", "English Label", "Concept"] + date_headers
+                df = df[columns]
+            else:
+                # Use FY labels for income statement and cash flow with currency/unit
+                fy_headers_with_unit = [fy_lbl + currency_unit_suffix for fy_lbl in fy_labels]
+                
+                # Create DataFrame with FY labels first
+                df = pd.DataFrame(list(concept_data.values()))
+                
+                # Rename FY columns to include currency/unit
+                rename_map = {fy_lbl: fy_hdr for fy_lbl, fy_hdr in zip(fy_labels, fy_headers_with_unit)}
+                df = df.rename(columns=rename_map)
+                
+                # Reorder columns
+                columns = ["French Label", "English Label", "Concept"] + fy_headers_with_unit
+                df = df[columns]
+            
+            result[stmt_type] = df
+
+    return result
+
+
+def build_filing_view(
+    facts: List[dict],
+    labels_dict: Optional[Dict[str, Tuple[str, str]]] = None,
+    company_key: Optional[str] = None,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Build financial statement DataFrames from a single filing's facts.
+
+    A filing typically contains comparative data for two years (current + one prior).
+    Only the two most recent fiscal years (from duration facts) are shown — this
+    prevents spurious extra years (e.g. equity-statement opening balances) from
+    appearing as extra columns.
+
+    labels_dict: optional {concept_short: (fr_label, en_label)} from ixbrlviewer.html.
+    company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
+
+    Returns dict: {statement_type: DataFrame}
+    Columns: French Label | English Label | Concept | FY2025 | FY2024
+    """
+    print(f"[DEBUG]  build_filing_view called with company_key='{company_key}'")
+    print(f"[DEBUG]  labels_dict has {len(labels_dict) if labels_dict else 0} entries")
+    print(f"[DEBUG]  Processing {len(facts)} facts")
+    print(f"[DEBUG]  Custom mapping enabled: {_CUSTOM_MAPPING_ENABLED}")
+    
+    # Show sample concepts to verify namespace
+    if facts:
+        sample_concepts = [f.get('concept_full', '') for f in facts[:5] if f.get('concept_full')]
+        print(f"[DEBUG]  Sample concepts: {sample_concepts}")
+    # Determine the two most recent fiscal years from DURATION facts
+    # (duration facts represent P&L and cash flow periods, which reliably identify
+    # the reporting year and its one comparative year).
+    duration_years = sorted(
+        {f["fy_year"] for f in facts if f.get("fy_year") and f.get("period_type") == "duration"},
+        reverse=True,
+    )
+    # Take at most 2 most recent years; fall back to instant years if no duration facts
+    if duration_years:
+        keep_years = set(duration_years[:2])
+    else:
+        all_years = sorted(
+            {f["fy_year"] for f in facts if f.get("fy_year")},
+            reverse=True,
+        )
+        keep_years = set(all_years[:2])
+
+    # Group facts by fy_year, filtering to keep_years only (drop UNKNOWN and extras)
+    all_facts_by_fy: Dict[str, List[dict]] = {}
+    for fact in facts:
+        fy_year = fact.get("fy_year", "")
+        if fy_year not in keep_years:
+            continue
+        fy_lbl = f"FY{fy_year}"
+        all_facts_by_fy.setdefault(fy_lbl, []).append(fact)
+
+    return build_consolidated(all_facts_by_fy, labels_dict=labels_dict, company_key=company_key)
+
+
+def generate_excel_bytes(statements_dict: Dict[str, pd.DataFrame]) -> bytes:
+    """
+    Generate a simple Excel workbook from statement DataFrames.
+    One sheet per statement type.
+    Returns raw bytes.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for stmt_type, df in statements_dict.items():
+            if df is None or df.empty:
+                continue
+            # Clean sheet name (max 31 chars)
+            sheet_name = stmt_type[:31]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            # Auto-fit column widths
+            ws = writer.sheets[sheet_name]
+            for col_cells in ws.columns:
+                max_len = 0
+                col_letter = col_cells[0].column_letter
+                for cell in col_cells:
+                    try:
+                        cell_len = len(str(cell.value)) if cell.value else 0
+                        max_len = max(max_len, cell_len)
+                    except Exception:
+                        pass
+                ws.column_dimensions[col_letter].width = min(max_len + 4, 60)
+
+    return output.getvalue()
+
+
+def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
+    """
+    Generate an Excel workbook with XBRL facts in two sheets:
+      Sheet 1 – "All Facts":   one row per raw fact
+      Sheet 2 – "By Concept":  pivoted (concept rows × year columns, values in thousands)
+
+    Fact dicts are expected to have keys from fetch_xbrl_facts():
+      concept_full, concept_short, period_type, period_start, period_end,
+      fy_year, unit, value_numeric, decimals, fy_label
+    """
+    try:
+        import xlsxwriter
+    except ImportError:
+        raise RuntimeError("xlsxwriter is required: pip install xlsxwriter")
+
+    output = io.BytesIO()
+    wb = xlsxwriter.Workbook(output, {"nan_inf_to_errors": True})
+
+    def F(**kw):
+        d = {"font_name": "Arial", "font_size": 9, "valign": "vcenter"}
+        d.update(kw)
+        return wb.add_format(d)
+
+    #  Sheet 1: All Facts 
+    ws1 = wb.add_worksheet("All Facts")
+    hdr = [
+        "FY Label", "Concept (full)", "Namespace", "Concept (short)",
+        "French Label", "English Label",
+        "Period Type", "Period Start", "Period End", "FY Year",
+        "Value (raw)", "Value (thousands)", "Value (millions)", "Unit", "Decimals",
+    ]
+    col_w = [10, 70, 14, 50, 50, 50, 10, 14, 14, 10, 18, 18, 18, 30, 10]
+    ws1.set_row(0, 20)
+    for ci, (h, w) in enumerate(zip(hdr, col_w)):
+        ws1.set_column(ci, ci, w)
+        ws1.write(0, ci, h, F(bold=True, align="center", border=1))
+
+    for ri, fact in enumerate(all_facts, start=1):
+        concept_full  = fact.get("concept_full", "")
+        concept_short = fact.get("concept_short", "")
+        namespace     = concept_full.split(":")[0] if ":" in concept_full else ""
+        
+        # Try to get labels from enriched fact first, fallback to IFRS labels
+        fr_lbl = fact.get("fr_label", "")
+        en_lbl = fact.get("en_label", "")
+        if not fr_lbl and not en_lbl:
+            # Fallback to IFRS labels if not enriched
+            fr_lbl, en_lbl = IFRS_CONCEPT_LABELS.get(concept_short, ("", ""))
+        
+        val_num = fact.get("value_numeric")
+        try:
+            val_thou = val_num / 1000 if val_num is not None else None
+            val_mill = val_num / 1000000 if val_num is not None else None
+        except Exception:
+            val_thou = None
+            val_mill = None
+
+        ws1.write(ri, 0,  fact.get("fy_label", ""),      F(border=1))
+        ws1.write(ri, 1,  concept_full,                   F(border=1))
+        ws1.write(ri, 2,  namespace,                      F(border=1))
+        ws1.write(ri, 3,  concept_short,                  F(border=1))
+        ws1.write(ri, 4,  fr_lbl,                         F(border=1))
+        ws1.write(ri, 5,  en_lbl,                         F(border=1))
+        ws1.write(ri, 6,  fact.get("period_type", ""),    F(border=1, align="center"))
+        ws1.write(ri, 7,  fact.get("period_start", ""),   F(border=1, align="center"))
+        ws1.write(ri, 8,  fact.get("period_end", ""),     F(border=1, align="center"))
+        ws1.write(ri, 9,  fact.get("fy_year", ""),        F(border=1, align="center"))
+        if val_num is not None:
+            ws1.write_number(ri, 10, val_num,
+                F(border=1, align="right", num_format="#,##0.##;(#,##0.##)"))
+        else:
+            ws1.write(ri, 10, fact.get("value_raw", ""), F(border=1))
+        if val_thou is not None:
+            ws1.write_number(ri, 11, val_thou,
+                F(border=1, align="right", num_format="#,##0;(#,##0)"))
+        else:
+            ws1.write(ri, 11, "", F(border=1))
+        if val_mill is not None:
+            ws1.write_number(ri, 12, val_mill,
+                F(border=1, align="right", num_format="#,##0.##;(#,##0.##)"))
+        else:
+            ws1.write(ri, 12, "", F(border=1))
+        ws1.write(ri, 13, fact.get("unit", ""),          F(border=1))
+        ws1.write(ri, 14, str(fact.get("decimals", "")), F(border=1, align="center"))
+
+    ws1.autofilter(0, 0, len(all_facts), len(hdr) - 1)
+    ws1.freeze_panes(1, 0)
+
+    #  Sheet 2: By Concept (pivoted) 
+    ws2 = wb.add_worksheet("By Concept")
+    all_years = sorted({f.get("fy_year") for f in all_facts if f.get("fy_year")})
+
+    # Build pivot: (concept_full, concept_short, period_type) → {year: value_thousands}
+    pivot: Dict[tuple, dict] = {}
+    for fact in all_facts:
+        if fact.get("value_numeric") is None:
+            continue
+        concept_full  = fact.get("concept_full", "")
+        concept_short = fact.get("concept_short", "")
+        period_type   = fact.get("period_type", "")
+        key = (concept_full, concept_short, period_type)
+        if key not in pivot:
+            pivot[key] = {}
+        yr = fact.get("fy_year")
+        if yr and yr not in pivot[key]:
+            try:
+                pivot[key][yr] = fact["value_numeric"] / 1000
+            except Exception:
+                pass
+
+    p_hdr = ["Concept (full)", "Concept (short)", "French Label", "English Label",
+             "Period Type"] + [str(y) for y in all_years]
+    p_w   = [70, 50, 50, 50, 10] + [16] * len(all_years)
+    ws2.set_row(0, 20)
+    for ci, (h, w) in enumerate(zip(p_hdr, p_w)):
+        ws2.set_column(ci, ci, w)
+        ws2.write(0, ci, h, F(bold=True, align="center", border=1))
+
+    for ri, ((cf, cs, pt), yr_vals) in enumerate(pivot.items(), start=1):
+        fr_lbl, en_lbl = IFRS_CONCEPT_LABELS.get(cs, ("", ""))
+        ws2.write(ri, 0, cf, F(border=1))
+        ws2.write(ri, 1, cs, F(border=1))
+        ws2.write(ri, 2, fr_lbl, F(border=1))
+        ws2.write(ri, 3, en_lbl, F(border=1))
+        ws2.write(ri, 4, pt,     F(border=1, align="center"))
+        for ci, yr in enumerate(all_years, start=5):
+            val = yr_vals.get(yr)
+            if val is not None:
+                ws2.write_number(ri, ci, val,
+                    F(border=1, align="right", num_format="#,##0;(#,##0)"))
+            else:
+                ws2.write(ri, ci, None, F(border=1))
+
+    ws2.autofilter(0, 0, len(pivot), len(p_hdr) - 1)
+    ws2.freeze_panes(1, 5)
+
+    wb.close()
+    output.seek(0)
+    return output.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Module initialization - load custom mapping at import time
+# ---------------------------------------------------------------------------
+print("[DEBUG] XBRL parser module loading...")
+try:
+    _load_custom_mapping_config()
+    print(f"[DEBUG] Custom mapping initialized: enabled={_CUSTOM_MAPPING_ENABLED}")
+except Exception as e:
+    print(f"[DEBUG] Failed to initialize custom mapping: {e}")
+    import traceback
+    traceback.print_exc()
