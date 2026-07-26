@@ -1,0 +1,159 @@
+"""
+Currency and Unit Debug Logger
+
+Logs all currency/unit extraction attempts to help debug issues.
+"""
+
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+
+
+class CurrencyUnitLogger:
+    """Logger for currency and unit extraction debugging."""
+    
+    def __init__(self):
+        """Initialize logger with file handler."""
+        # Create logs directory if it doesn't exist
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        
+        # Create log file with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = logs_dir / f"currency_unit_debug_{timestamp}.log"
+        
+        # Configure logger
+        self.logger = logging.getLogger("currency_unit_debug")
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Remove existing handlers
+        self.logger.handlers = []
+        
+        # File handler
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        
+        # Formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        self.logger.info("="*80)
+        self.logger.info("Currency/Unit Debug Logger Initialized")
+        self.logger.info(f"Log file: {log_file}")
+        self.logger.info("="*80)
+    
+    def log_extraction_attempt(self, rows, source="unknown"):
+        """Log extraction attempt from rows."""
+        self.logger.info(f"\n--- EXTRACTION ATTEMPT from {source} ---")
+        
+        if not rows:
+            self.logger.warning("  No rows provided!")
+            return
+        
+        self.logger.info(f"  Total rows: {len(rows)}")
+        
+        # Check first row
+        first_row = rows[0]
+        self.logger.info(f"  First row keys: {list(first_row.keys())}")
+        
+        # Check for Currency and Unit
+        currency = first_row.get('Currency', '')
+        unit = first_row.get('Unit', '')
+        
+        self.logger.info(f"  Currency in first row: '{currency}'")
+        self.logger.info(f"  Unit in first row: '{unit}'")
+        
+        # Check all rows
+        currencies_found = set()
+        units_found = set()
+        
+        for i, row in enumerate(rows[:10]):  # Check first 10 rows
+            row_currency = row.get('Currency', '')
+            row_unit = row.get('Unit', '')
+            
+            if row_currency:
+                currencies_found.add(row_currency)
+            if row_unit:
+                units_found.add(row_unit)
+        
+        self.logger.info(f"  Currencies found in first 10 rows: {currencies_found}")
+        self.logger.info(f"  Units found in first 10 rows: {units_found}")
+        
+        return (currency, unit)
+    
+    def log_mapping_result_storage(self, mapping_result, statement_type, source="unknown"):
+        """Log what's being stored in mapping result."""
+        self.logger.info(f"\n--- STORING MAPPING RESULT for {statement_type} from {source} ---")
+        
+        currency = mapping_result.get('currency', '')
+        unit = mapping_result.get('unit', '')
+        
+        self.logger.info(f"  Currency being stored: '{currency}'")
+        self.logger.info(f"  Unit being stored: '{unit}'")
+        
+        # Also check old format
+        year_currencies = mapping_result.get('year_currencies', {})
+        unit_scale = mapping_result.get('unit_scale', '')
+        
+        self.logger.info(f"  year_currencies (old format): {year_currencies}")
+        self.logger.info(f"  unit_scale (old format): '{unit_scale}'")
+    
+    def log_summary_extraction(self, results_dict, key_prefix):
+        """Log currency/unit extraction for summary generation."""
+        self.logger.info(f"\n--- SUMMARY GENERATION - Extracting currency/unit ---")
+        self.logger.info(f"  Key prefix: {key_prefix}")
+        
+        for stmt_name, results in results_dict.items():
+            self.logger.info(f"\n  Statement: {stmt_name}")
+            
+            # New format
+            currency = results.get('currency', '')
+            unit = results.get('unit', '')
+            
+            # Old format
+            year_currencies = results.get('year_currencies', {})
+            unit_scale = results.get('unit_scale', '')
+            
+            self.logger.info(f"    currency (new): '{currency}'")
+            self.logger.info(f"    unit (new): '{unit}'")
+            self.logger.info(f"    year_currencies (old): {year_currencies}")
+            self.logger.info(f"    unit_scale (old): '{unit_scale}'")
+    
+    def log_display_attempt(self, key_prefix, mapping_results_keys):
+        """Log currency/unit extraction for UI display."""
+        self.logger.info(f"\n--- UI DISPLAY - Extracting currency/unit ---")
+        self.logger.info(f"  Key prefix: {key_prefix}")
+        self.logger.info(f"  Available mapping result keys: {mapping_results_keys}")
+        
+        # This will be called from the display function
+        pass
+    
+    def log_final_result(self, currency, unit, source="unknown"):
+        """Log final currency/unit that will be displayed."""
+        self.logger.info(f"\n--- FINAL RESULT from {source} ---")
+        self.logger.info(f"  Currency: '{currency}'")
+        self.logger.info(f"  Unit: '{unit}'")
+        self.logger.info(f"  Display string: '{currency} {unit}' if both else 'Values in original currency'")
+
+
+# Global logger instance
+_logger = None
+
+def get_logger():
+    """Get or create global logger instance."""
+    global _logger
+    if _logger is None:
+        _logger = CurrencyUnitLogger()
+    return _logger
