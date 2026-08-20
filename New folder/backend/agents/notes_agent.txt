@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-MAX_NOTES_PER_BATCH = 10
+MAX_NOTES_PER_BATCH = 5
 
 
 def _find_all_note_refs(pdf_text: dict[int, str], financial_statements: dict) -> set[str]:
@@ -92,10 +92,42 @@ def _find_notes_pages(pdf_text: dict[int, str], financial_statements: dict) -> l
     return notes_pages
 
 
+def _try_parse_json(raw: str) -> dict | None:
+    """Try to parse JSON, handling truncated responses and markdown fences."""
+    content = raw.strip()
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0]
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0]
+    content = content.strip()
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # Try fixing truncated JSON by closing open braces/brackets
+    fixed = content
+    open_braces = fixed.count("{") - fixed.count("}")
+    open_brackets = fixed.count("[") - fixed.count("]")
+    if open_braces > 0 or open_brackets > 0:
+        last_comma = max(fixed.rfind(","), fixed.rfind("\n"))
+        if last_comma > len(fixed) // 2:
+            fixed = fixed[:last_comma]
+        fixed += "}" * max(open_braces, 0)
+        fixed += "]" * max(open_brackets, 0)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 async def _extract_notes_batch(
     llm, note_refs: list[str], pages_text: str,
 ) -> dict:
-    """Extract a batch of notes from the given pages."""
+    """Extract a batch of notes from the given pages with retry logic."""
     prompt = f"""You are a financial notes extraction expert. From the following annual report pages, extract the content of these specific notes: {note_refs}
 
 For each note, extract:
@@ -104,7 +136,7 @@ For each note, extract:
 - All numerical breakdowns and sub-items with their values for each year
 - Any relevant explanations about how values are composed
 
-Return a JSON object:
+Return a JSON object with this EXACT structure (no other text before or after the JSON):
 {{
   "note_5": {{
     "title": "Revenue",
@@ -117,32 +149,46 @@ Return a JSON object:
   }}
 }}
 
-Important:
-- Extract ALL the notes listed: {note_refs}
+CRITICAL RULES:
+- You MUST extract ALL of these notes: {note_refs}
 - Include every sub-item with numerical values for each year
 - If a note has sub-notes (e.g., 17(a), 17(b)), include them under the main note
 - Include the page numbers where each note appears
-- Return ONLY valid JSON — no other text
+- Return ONLY the JSON object — no markdown fences, no explanations, no text before or after
+- Make sure the JSON is complete and valid — do not truncate
 
 Pages:
 {pages_text}"""
 
-    response = await llm.ainvoke(prompt)
-    content = response.content
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            response = await llm.ainvoke(prompt)
+            content = response.content
+            logger.info("  Batch %s (attempt %d): LLM response length=%d",
+                        note_refs[:3], attempt + 1, len(content))
 
-    logger.info("  Batch %s: LLM response length=%d", note_refs[:3], len(content))
+            result = _try_parse_json(content)
+            if result and isinstance(result, dict):
+                return result
 
-    try:
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error("  Batch %s: JSON parse failed: %s", note_refs[:3], e)
-        logger.error("  First 500 chars: %s", content[:500])
-        logger.error("  Last 200 chars: %s", content[-200:] if len(content) > 200 else content)
-        return {}
+            logger.warning("  Batch %s (attempt %d): JSON parse failed, response tail: %s",
+                           note_refs[:3], attempt + 1, content[-200:] if len(content) > 200 else content)
+
+        except Exception as e:
+            logger.error("  Batch %s (attempt %d): LLM call failed: %s",
+                         note_refs[:3], attempt + 1, e)
+
+    # Final fallback: try one note at a time
+    if len(note_refs) > 1:
+        logger.info("  Batch %s: falling back to single-note extraction", note_refs[:3])
+        combined = {}
+        for ref in note_refs:
+            single = await _extract_notes_batch(llm, [ref], pages_text)
+            combined.update(single)
+        return combined
+
+    return {}
 
 
 async def notes_agent_node(state: BREFState) -> dict:
@@ -191,6 +237,21 @@ async def notes_agent_node(state: BREFState) -> dict:
         logger.info("  Batch %d/%d: notes %s", batch_idx + 1, len(batches), batch)
         result = await _extract_notes_batch(llm, batch, pages_text)
         all_notes.update(result)
+
+    # Check for missing notes and retry them individually
+    extracted_nums = set()
+    for key in all_notes:
+        nums = re.findall(r'\d+', key)
+        extracted_nums.update(nums)
+
+    missing = sorted_refs if not extracted_nums else [
+        r for r in sorted_refs if r not in extracted_nums
+    ]
+    if missing and len(missing) < len(sorted_refs):
+        logger.info("  Retrying %d missing notes: %s", len(missing), missing)
+        for ref in missing:
+            result = await _extract_notes_batch(llm, [ref], pages_text)
+            all_notes.update(result)
 
     logger.info("  Extracted %d notes:", len(all_notes))
     for note_key, note_data in sorted(all_notes.items()):
