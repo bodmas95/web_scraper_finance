@@ -3,6 +3,8 @@ export interface Company {
   company_name: string
   currency: string
   unit: number
+  ticker?: string
+  lei?: string
 }
 
 export interface Country {
@@ -44,6 +46,7 @@ export interface StatementData {
   year_headers: string[]
   pages: number[]
   unit_scale: string | null
+  currency?: string | null
   fields?: Record<string, Record<string, number>>
 }
 
@@ -57,6 +60,7 @@ export interface ExtractionResult {
   cash_flow: StatementData | null
   notes: Record<string, unknown> | null
   extracted_at: string
+  filing_years?: string[]
 }
 
 export interface FieldMapping {
@@ -67,6 +71,7 @@ export interface FieldMapping {
   confidence: number
   reason?: string
   indent_level?: number
+  sign_flipped?: boolean
 }
 
 export interface MappingResult {
