@@ -1,0 +1,244 @@
+"""
+EDGAR Extraction Service
+Fetches 10-K financial statements from SEC EDGAR using the edgartools library.
+Converts structured XBRL data into the standard extraction row format.
+"""
+
+import asyncio
+import logging
+import os
+import re
+from typing import Any
+
+import pandas as pd
+
+from config import settings
+from services.edgar_proxy_wrapper import setup_edgar_with_proxy
+
+logger = logging.getLogger(__name__)
+
+# Setup proxy once at module level
+_proxy_initialized = False
+
+def _ensure_proxy_setup():
+    """Ensure proxy is set up before making EDGAR requests."""
+    global _proxy_initialized
+    if not _proxy_initialized:
+        setup_edgar_with_proxy(settings)
+        _proxy_initialized = True
+
+
+def _extract_year(col_name: str) -> str | None:
+    m = re.search(r"(\d{4})", str(col_name))
+    return m.group(1) if m else None
+
+
+def _parse_number(val) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return None if pd.isna(val) else float(val)
+    s = str(val).replace(",", "").strip()
+    if not s or s in ("", "nan", "None", "NaN"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+METADATA_COLUMNS = {
+    "concept", "label", "index", "Currency", "Unit", "standard_concept",
+    "level", "abstract", "dimension", "is_breakdown", "dimension_axis",
+    "dimension_member", "dimension_member_label", "dimension_label",
+    "balance", "weight", "preferred_sign", "parent_concept", "parent_abstract_concept",
+}
+
+
+def _process_statement(stmt_obj, report_year: int) -> dict | None:
+    if stmt_obj is None:
+        return None
+
+    try:
+        if hasattr(stmt_obj, "to_dataframe"):
+            df = stmt_obj.to_dataframe()
+        elif isinstance(stmt_obj, pd.DataFrame):
+            df = stmt_obj
+        else:
+            return None
+
+        if df is None or df.empty:
+            return None
+
+        df = df.reset_index(drop=False)
+
+        if "dimension_member" in df.columns:
+            parent_mask = df["dimension_member"].isna() | (df["dimension_member"] == "")
+            df = df[parent_mask].copy()
+
+        if df.empty:
+            return None
+
+        # Identify year columns and build mapping
+        year_col_map: dict[str, str] = {}
+        for col in df.columns:
+            if col in METADATA_COLUMNS:
+                continue
+            yr = _extract_year(col)
+            if yr:
+                year_col_map[col] = yr
+
+        if not year_col_map:
+            return None
+
+        years = sorted(set(year_col_map.values()), reverse=True)
+
+        # Build scale map from XBRL facts if available
+        concept_scales: dict[str, str] = {}
+        try:
+            if hasattr(stmt_obj, "xbrl") and hasattr(stmt_obj.xbrl, "facts"):
+                facts_df = stmt_obj.xbrl.facts.to_dataframe()
+                scale_mapping = {-12: "Trillions", -9: "Billions", -6: "Millions", -3: "Thousands"}
+                for _, fact in facts_df.iterrows():
+                    concept = str(fact.get("concept", "")).replace(":", "_")
+                    decimals = fact.get("decimals")
+                    if concept and decimals is not None and concept not in concept_scales:
+                        try:
+                            concept_scales[concept] = scale_mapping.get(int(float(decimals)), "")
+                        except (ValueError, TypeError):
+                            pass
+        except Exception:
+            pass
+
+        # Determine dominant scale
+        if concept_scales:
+            from collections import Counter
+            scale_counts = Counter(s for s in concept_scales.values() if s)
+            unit_scale = scale_counts.most_common(1)[0][0] if scale_counts else None
+        else:
+            unit_scale = None
+
+        scale_factors = {
+            "Trillions": 1_000_000_000_000,
+            "Billions": 1_000_000_000,
+            "Millions": 1_000_000,
+            "Thousands": 1_000,
+        }
+
+        rows = []
+        for _, row in df.iterrows():
+            is_abstract = row.get("abstract") in (True, "true", "True")
+            if is_abstract:
+                continue
+
+            label = str(row.get("label", "")).strip()
+            if not label:
+                continue
+
+            parent = str(row.get("parent_abstract_concept", "") or "").strip() or None
+
+            row_dict: dict[str, Any] = {"label": label}
+            if parent:
+                row_dict["parent"] = parent
+
+            has_value = False
+            concept = str(row.get("concept", "")).replace(":", "_")
+            row_scale = concept_scales.get(concept, unit_scale or "")
+            divisor = scale_factors.get(row_scale, 1)
+
+            for orig_col, yr in year_col_map.items():
+                raw = row.get(orig_col)
+                val = _parse_number(raw)
+                if val is not None:
+                    if divisor > 1:
+                        val = val / divisor
+                    row_dict[yr] = round(val)
+                    has_value = True
+
+            if has_value:
+                rows.append(row_dict)
+
+        if not rows:
+            return None
+
+        return {
+            "rows": rows,
+            "year_headers": years[:2],
+            "unit_scale": unit_scale,
+        }
+
+    except Exception as e:
+        logger.error("Error processing EDGAR statement: %s", e)
+        return None
+
+
+def _fetch_sync(ticker: str, year: int) -> dict:
+    # Ensure proxy is configured before making requests
+    _ensure_proxy_setup()
+    
+    from edgar import Company
+
+    company = Company(ticker)
+    logger.info("Fetching EDGAR financials for %s (FY%d)", ticker, year)
+
+    financials = None
+    try:
+        filings = company.get_filings(form="10-K")
+        for filing in filings:
+            fy = getattr(filing, "fiscal_year", None)
+            if fy is None and hasattr(filing, "filing_date"):
+                fy = filing.filing_date.year
+            if fy == year:
+                logger.info("Found 10-K filing for FY%d", year)
+                try:
+                    obj = filing.obj()
+                    financials = obj.financials if hasattr(obj, "financials") else obj
+                except Exception:
+                    pass
+                break
+    except Exception as e:
+        logger.warning("Filing search failed: %s, falling back to latest", e)
+
+    if financials is None:
+        financials = company.get_financials()
+
+    if not financials:
+        raise ValueError(f"No financials available for {ticker}")
+
+    result = {}
+    stmt_map = {
+        "income_statement": ("income_statement", financials.income_statement),
+        "balance_sheet": ("balance_sheet", financials.balance_sheet),
+        "cash_flow": ("cash_flow", financials.cashflow_statement),
+    }
+
+    for key, (_, getter) in stmt_map.items():
+        try:
+            stmt_obj = getter()
+            processed = _process_statement(stmt_obj, year)
+            result[key] = processed
+        except Exception as e:
+            logger.error("EDGAR %s extraction failed: %s", key, e)
+            result[key] = None
+
+    return result
+
+
+async def fetch_edgar_financials(ticker: str, year: int) -> dict:
+    result = await asyncio.to_thread(_fetch_sync, ticker, year)
+
+    for key in ("income_statement", "balance_sheet", "cash_flow"):
+        if result.get(key) is None:
+            result[key] = {
+                "rows": [],
+                "year_headers": [str(year), str(year - 1)],
+                "unit_scale": None,
+            }
+
+    logger.info(
+        "EDGAR extraction complete: IS=%d rows, BS=%d rows, CF=%d rows",
+        len(result["income_statement"]["rows"]),
+        len(result["balance_sheet"]["rows"]),
+        len(result["cash_flow"]["rows"]),
+    )
+    return result
