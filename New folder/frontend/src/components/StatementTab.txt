@@ -27,6 +27,8 @@ interface StatementTabProps {
   data: StatementData
   sourceId: string
   onUpdateRows?: (statementType: string, rows: ExtractionRow[]) => void
+  regionCode?: string
+  currency?: string
 }
 
 export function StatementTab({
@@ -34,7 +36,10 @@ export function StatementTab({
   data,
   sourceId,
   onUpdateRows,
+  regionCode,
+  currency,
 }: StatementTabProps) {
+  const showPdfPanel = regionCode !== 'AMER' && regionCode !== 'EMEA' && data.pages && data.pages.length > 0
   const allPageNums = data.pages || []
   const [currentPageIdx, setCurrentPageIdx] = useState(0)
   const [pageImage, setPageImage] = useState<string | null>(null)
@@ -167,9 +172,15 @@ export function StatementTab({
 
   const formatNumber = (val: unknown): string => {
     if (val == null || val === '') return ''
-    if (typeof val === 'number') return val.toLocaleString()
+    if (typeof val === 'number')
+      return val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })
     return String(val)
   }
+
+  const effectiveCurrency = data.currency || currency
+  const unitLabel = [effectiveCurrency, data.unit_scale].filter(Boolean).join(' | ')
+  const hasConcept = rows.some((r) => r.concept)
+  const hasStandardConcept = rows.some((r) => r.standard_concept)
 
   return (
     <div className="space-y-4">
@@ -215,17 +226,23 @@ export function StatementTab({
       </div>
 
       <div
-        className={
-          sourceId
-            ? 'grid gap-4'
-            : ''
-        }
-        style={sourceId ? { gridTemplateColumns: '55% 45%' } : undefined}
+        className={showPdfPanel ? 'grid gap-4' : ''}
+        style={showPdfPanel ? { gridTemplateColumns: '55% 45%' } : undefined}
       >
         <div className="min-w-0 overflow-auto rounded-md border" style={{ maxHeight: '520px' }}>
           <Table>
             <TableHeader>
               <TableRow>
+                {hasConcept && (
+                  <TableHead className="sticky top-0 z-10 min-w-[140px] bg-card">
+                    Concept
+                  </TableHead>
+                )}
+                {hasStandardConcept && (
+                  <TableHead className="sticky top-0 z-10 min-w-[140px] bg-card">
+                    Standard Concept
+                  </TableHead>
+                )}
                 <TableHead className="sticky top-0 z-10 min-w-[250px] bg-card">
                   Label
                 </TableHead>
@@ -234,7 +251,12 @@ export function StatementTab({
                     key={y}
                     className="sticky top-0 z-10 bg-card text-right"
                   >
-                    {y}
+                    <div>{y}</div>
+                    {unitLabel && (
+                      <div className="text-[10px] font-normal text-muted-foreground">
+                        ({unitLabel})
+                      </div>
+                    )}
                   </TableHead>
                 ))}
               </TableRow>
@@ -242,6 +264,16 @@ export function StatementTab({
             <TableBody>
               {rows.map((row, idx) => (
                 <TableRow key={idx}>
+                  {hasConcept && (
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.concept || ''}
+                    </TableCell>
+                  )}
+                  {hasStandardConcept && (
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.standard_concept || ''}
+                    </TableCell>
+                  )}
                   <TableCell className="text-xs">
                     {row.parent ? (
                       <span>
@@ -278,7 +310,7 @@ export function StatementTab({
           </Table>
         </div>
 
-        {sourceId && (
+        {showPdfPanel && (
           <div className="flex flex-col overflow-hidden rounded-lg border">
             <div className="flex items-center justify-between border-b bg-muted/50 px-3 py-2">
               <span className="text-xs font-medium text-muted-foreground">
