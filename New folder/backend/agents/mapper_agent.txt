@@ -46,6 +46,7 @@ FORCE_POSITIVE = {
     },
 }
 FORCE_POSITIVE["EMEA"] = FORCE_POSITIVE["APAC"]
+FORCE_POSITIVE["AMER"] = FORCE_POSITIVE["US"]
 
 
 def _get_field_code(field_key: str) -> str:
@@ -172,9 +173,9 @@ def _find_value_match(
     fields: dict,
     year: str,
     used: set[str],
-) -> str | None:
+) -> tuple[str | None, bool]:
     if not target_value:
-        return None
+        return None, False
     abs_target = abs(target_value)
     tolerance = max(abs_target * 0.01, 1)
     for field_name, year_values in fields.items():
@@ -186,10 +187,10 @@ def _find_value_match(
             if str(y).endswith(year) or year in str(y):
                 if isinstance(val, (int, float)):
                     if abs(val - target_value) <= tolerance:
-                        return field_name
+                        return field_name, False
                     if abs(abs(val) - abs_target) <= tolerance:
-                        return field_name
-    return None
+                        return field_name, True
+    return None, False
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +243,61 @@ def _calculate_field(formula: str, mapped: dict, year_key: str) -> float | None:
 
 
 # ---------------------------------------------------------------------------
+# Reusable recalculation (called from mapper and from PUT save endpoint)
+# ---------------------------------------------------------------------------
+
+def recalculate_statement(
+    stmt_result: dict,
+    field_defs: dict,
+    stmt_type: str,
+    region: str,
+) -> dict:
+    calc_fields = {k: v for k, v in field_defs.items() if v.get("is_calculated")}
+    if not calc_fields:
+        return stmt_result
+
+    updated = {k: dict(v) for k, v in stmt_result.items()}
+
+    sorted_calcs = sorted(
+        calc_fields.items(),
+        key=lambda item: len(_parse_formula(item[1].get("calculation", ""))),
+    )
+
+    for iteration in range(5):
+        changed = False
+        for field_key, field_def in sorted_calcs:
+            formula = field_def.get("calculation", "")
+            if not formula:
+                continue
+            indent = field_def.get("indent_level", 0)
+
+            calc_current = _calculate_field(formula, updated, "current_year")
+            calc_previous = _calculate_field(formula, updated, "previous_year")
+
+            if calc_current is not None:
+                calc_current = _apply_sign(calc_current, field_key, stmt_type, region)
+                calc_previous = _apply_sign(calc_previous, field_key, stmt_type, region)
+                new_entry = {
+                    "previous_year": calc_previous,
+                    "current_year": calc_current,
+                    "source_field": formula,
+                    "match_method": "calculated",
+                    "confidence": 1.0,
+                    "indent_level": indent,
+                    "reason": f"Calculated: {formula}",
+                    "sign_flipped": False,
+                }
+                old = updated.get(field_key, {})
+                if old.get("current_year") != calc_current or old.get("previous_year") != calc_previous:
+                    updated[field_key] = new_entry
+                    changed = True
+        if not changed:
+            break
+
+    return updated
+
+
+# ---------------------------------------------------------------------------
 # Main mapper node
 # ---------------------------------------------------------------------------
 
@@ -252,8 +308,26 @@ async def mapper_agent_node(state: BREFState) -> dict:
     notes = state.get("notes", {})
     bref_previous = state.get("bref_previous", {})
     report_year = state.get("report_year", 2024)
-    previous_year = str(report_year - 1)
-    current_year = str(report_year)
+    
+    # Smart year matching: use extraction years if available
+    extraction_years = []
+    for stmt_type in ["income_statement", "balance_sheet", "cash_flow"]:
+        stmt = financial_statements.get(stmt_type, {})
+        year_headers = stmt.get("year_headers", [])
+        if year_headers:
+            extraction_years = [str(y) for y in year_headers]
+            break
+    
+    if extraction_years and len(extraction_years) >= 2:
+        # Use the two most recent years from extraction
+        current_year = extraction_years[0]
+        previous_year = extraction_years[1]
+        logger.info("Using extraction years: current=%s, previous=%s", current_year, previous_year)
+    else:
+        # Fallback to report_year
+        previous_year = str(report_year - 1)
+        current_year = str(report_year)
+        logger.info("Using report_year: current=%s, previous=%s", current_year, previous_year)
 
     clean_region = region.split("/")[0] if "/" in region else region
     mappings_config = get_field_mappings(clean_region)
@@ -317,6 +391,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                     "confidence": 0.0,
                     "indent_level": indent,
                     "reason": "BREF previous year is blank",
+                    "sign_flipped": False,
                 }
                 logger.info("  [--] %-45s  blank prev year, skipped", field_key[:45])
                 continue
@@ -327,10 +402,11 @@ async def mapper_agent_node(state: BREFState) -> dict:
             match_method = None
             confidence = 0.0
             reason = ""
+            sign_flipped = False
 
             # --- 1b. Direct value match (prev year BREF → extraction) ---
             if prev_bref_value is not None:
-                matched_field = _find_value_match(
+                matched_field, sign_flipped = _find_value_match(
                     prev_bref_value, extracted_fields, previous_year, used_labels,
                 )
                 if matched_field:
@@ -370,7 +446,14 @@ async def mapper_agent_node(state: BREFState) -> dict:
                                 break
 
             if matched_field:
+                raw_value = current_value
                 current_value = _apply_sign(current_value, field_key, stmt_type, clean_region)
+                if raw_value is not None and current_value is not None:
+                    try:
+                        if float(raw_value) * float(current_value) < 0:
+                            sign_flipped = True
+                    except (ValueError, TypeError):
+                        pass
                 stmt_result[field_key] = {
                     "previous_year": prev_bref_value,
                     "current_year": current_value,
@@ -379,6 +462,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                     "confidence": confidence,
                     "indent_level": indent,
                     "reason": reason,
+                    "sign_flipped": sign_flipped,
                 }
                 p1_matched += 1
                 tag = "[OK]" if confidence >= 0.9 else "[~~]"
@@ -447,7 +531,15 @@ async def mapper_agent_node(state: BREFState) -> dict:
                     for lbl in matched_labels:
                         used_labels.add(lbl.strip())
 
+                    raw_cprm = target_val
                     target_val = _apply_sign(target_val, fk, stmt_type, clean_region)
+                    cprm_sign_flipped = False
+                    if raw_cprm is not None and target_val is not None:
+                        try:
+                            if float(raw_cprm) * float(target_val) < 0:
+                                cprm_sign_flipped = True
+                        except (ValueError, TypeError):
+                            pass
 
                     match_method = "composite_decomposition" if len(matched_labels) > 1 else "llm_mapping"
 
@@ -459,6 +551,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                         "confidence": conf_num,
                         "indent_level": info["indent_level"],
                         "reason": reason,
+                        "sign_flipped": cprm_sign_flipped,
                     }
 
                     tag = {"high": "[OK]", "medium": "[~~]", "low": "[!!]"}.get(conf_str, "[??]")
@@ -479,6 +572,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                             "confidence": 0.0,
                             "indent_level": info["indent_level"],
                             "reason": f"CPRM agent failed: {e}",
+                            "sign_flipped": False,
                         }
 
         # ─────────────────────────────────────────────────────────────
@@ -520,6 +614,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                             "confidence": 1.0,
                             "indent_level": indent,
                             "reason": f"Calculated: {formula}",
+                            "sign_flipped": False,
                         }
                         calculated_this_round += 1
                         logger.info("  [==] %-45s = curr: %s, prev: %s  (%s)",
@@ -540,6 +635,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                         "confidence": 0.0,
                         "indent_level": indent,
                         "reason": f"Missing dependencies for: {formula}",
+                        "sign_flipped": False,
                     }
                     logger.info("  [!!] %-45s  missing deps (%s)", field_key[:45], formula)
 
@@ -560,6 +656,7 @@ async def mapper_agent_node(state: BREFState) -> dict:
                     "confidence": 0.0,
                     "indent_level": indent,
                     "reason": "Field not in mapping scope",
+                    "sign_flipped": False,
                 }
 
         total = len(ordered_result)
