@@ -26,7 +26,7 @@ interface FileUploadProps {
   region: Region
   country: Country
   company: Company
-  onSourceReady: (source: Source) => void
+  onSourceReady: (source: Source | null) => void
 }
 
 export function FileUpload({
@@ -48,9 +48,12 @@ export function FileUpload({
 
   const handleYearChange = useCallback(async (newYear: number) => {
     setReportYear(newYear)
+    
     // Check if we have a source for this year
     const matchingSource = sources.find(s => s.report_year === newYear)
+    
     if (matchingSource) {
+      // Found existing source for this year
       setActiveSource(matchingSource)
       const isReady = needsPdf
         ? matchingSource.annual_report && matchingSource.bref_template
@@ -81,35 +84,39 @@ export function FileUpload({
       setActiveSource(newSource)
       setSources(prev => [newSource, ...prev])
     } else {
-      // For PDF, just clear the active source
+      // For APAC (PDF-based), clear the active source when year changes
+      // User needs to upload new files for this year
       setActiveSource(null)
+      onSourceReadyRef.current(null)  // Notify parent to clear results
     }
   }, [sources, needsPdf, region.region_code, company.company_id, country.country_code])
 
   const loadDocuments = useCallback(async () => {
     const docs = await fetchDocuments(company.company_id)
     setSources(docs)
-    if (docs.length > 0) {
-      // Find source matching current reportYear, or use latest
-      const matchingSource = docs.find(d => d.report_year === reportYear)
-      const sourceToUse = matchingSource || docs[0]
-      setActiveSource(sourceToUse)
-      // Only update reportYear if we're using a different source
-      if (!matchingSource) {
-        setReportYear(sourceToUse.report_year)
-      }
-      const isReady = needsPdf
-        ? sourceToUse.annual_report && sourceToUse.bref_template
-        : sourceToUse.bref_template
-      if (isReady) {
-        onSourceReadyRef.current(sourceToUse)
-      }
-    }
-  }, [company.company_id, needsPdf, reportYear])
+    // Don't auto-select or change year - let user control it
+  }, [company.company_id])
 
   useEffect(() => {
     loadDocuments()
-  }, [loadDocuments])
+  }, [company.company_id])
+
+  // Separate effect to handle initial source selection
+  useEffect(() => {
+    if (sources.length > 0 && !activeSource) {
+      // Only auto-select on initial load
+      const matchingSource = sources.find(d => d.report_year === reportYear)
+      if (matchingSource) {
+        setActiveSource(matchingSource)
+        const isReady = needsPdf
+          ? matchingSource.annual_report && matchingSource.bref_template
+          : matchingSource.bref_template
+        if (isReady) {
+          onSourceReadyRef.current(matchingSource)
+        }
+      }
+    }
+  }, [sources, reportYear, activeSource, needsPdf])
 
   const handleAnnualReportUpload = async (
     e: React.ChangeEvent<HTMLInputElement>
@@ -208,17 +215,31 @@ export function FileUpload({
           {needsYearInput && (
             <div className="flex items-end gap-4">
               <div className="space-y-2">
-                <Label>Report Year</Label>
+                <Label htmlFor="report-year">Report Year</Label>
                 <input
+                  id="report-year"
                   type="number"
-                  className="flex h-9 w-28 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="flex h-9 w-32 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   value={reportYear}
                   min={2000}
                   max={new Date().getFullYear()}
+                  step={1}
                   onChange={(e) => {
                     const val = Number(e.target.value)
                     if (val >= 2000 && val <= new Date().getFullYear()) {
                       handleYearChange(val)
+                    }
+                  }}
+                  onBlur={(e) => {
+                    // Ensure valid value on blur
+                    const val = Number(e.target.value)
+                    if (val < 2000) {
+                      e.target.value = '2000'
+                      handleYearChange(2000)
+                    } else if (val > new Date().getFullYear()) {
+                      const currentYear = new Date().getFullYear()
+                      e.target.value = String(currentYear)
+                      handleYearChange(currentYear)
                     }
                   }}
                 />
