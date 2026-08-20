@@ -31,52 +31,35 @@ def setup_edgar_with_proxy(config_settings):
         proxy_host = config_settings.PROXY_SERVER_HOST
         proxy_port = config_settings.PROXY_SERVER_PORT
         PROXY = f"http://{proxy_host}:{proxy_port}"
-        logger.info(f"📡 EDGAR: Using server proxy {PROXY} (no auth)")
-        
-        # Set environment variables (some libraries check these)
-        os.environ['HTTP_PROXY'] = PROXY
-        os.environ['HTTPS_PROXY'] = PROXY
-        os.environ['http_proxy'] = PROXY
-        os.environ['https_proxy'] = PROXY
-        
-        # Patch httpx.Client to always use proxy
+        logger.info("EDGAR: Using server proxy %s (no auth)", PROXY)
+
+        # Patch httpx.Client to always use proxy (scoped to httpx only,
+        # no global HTTP_PROXY env vars that would leak into requests/XBRL)
         import httpx
-        
-        logger.info("  Patching httpx.Client.__init__ to use proxy...")
+
         _original_client_init = httpx.Client.__init__
-        
+
         def patched_client_init(self, *args, **kwargs):
-            # Force proxy configuration
             if 'proxy' not in kwargs and 'proxies' not in kwargs:
                 kwargs['proxy'] = PROXY
             if 'verify' not in kwargs:
-                kwargs['verify'] = False  # Disable SSL verification
-            logger.debug(f"  Creating httpx.Client with proxy={kwargs.get('proxy')}, verify={kwargs.get('verify')}")
+                kwargs['verify'] = False
             _original_client_init(self, *args, **kwargs)
-        
+
         httpx.Client.__init__ = patched_client_init
-        
-        # Also patch any existing clients in edgar module
+
         try:
             import edgar.httprequests as hr
-            logger.info("  Checking for existing edgar.httprequests.client...")
-            # Force recreate the client with proxy
             if hasattr(hr, 'client'):
-                logger.info("  Found existing client, recreating with proxy...")
                 hr.client = httpx.Client(proxy=PROXY, verify=False)
-            else:
-                logger.info("  No existing client found")
         except Exception as e:
-            logger.warning(f"  Error patching edgar.httprequests: {e}")
-        
+            logger.warning("Error patching edgar.httprequests: %s", e)
+
         from edgar import set_identity
         set_identity(config_settings.EDGAR_IDENTITY)
-        
-        logger.info(f"✅ EDGAR configured with server proxy (httpx patched)")
-        logger.info(f"   Proxy: {PROXY}")
-        logger.info(f"   User-Agent: {config_settings.EDGAR_IDENTITY}")
-        logger.info(f"   SSL Verification: Disabled")
-        return  # Exit early - no need to patch with curl
+
+        logger.info("EDGAR configured with server proxy (httpx patched)")
+        return
         
     elif proxy_mode == 'system':
         # NTLM proxy (with authentication)
@@ -127,33 +110,46 @@ def setup_edgar_with_proxy(config_settings):
             )
         return res.stdout.decode("utf-8", errors="replace") if as_text else res.stdout
     
-    # Define FakeResponse class to mimic requests.Response
+    # Define FakeResponse class to mimic httpx.Response
     class FakeResponse:
         def __init__(self, url, content: bytes, status_code: int = 200):
             self.url = url
             self._content = content
             self.status_code = status_code
-        
+            self.headers = {"content-type": "text/html"}
+
         @property
         def content(self):
             return self._content
-        
+
         @property
         def text(self):
             return self._content.decode("utf-8", errors="replace")
-        
+
         def json(self):
             return json.loads(self.text)
-        
+
+        def read(self):
+            return self._content
+
         def iter_lines(self):
-            for line in self._content.splitlines():
+            for line in self.text.splitlines():
                 yield line
-        
+
+        def iter_bytes(self, chunk_size=None):
+            yield self._content
+
         def raise_for_status(self):
             if self.status_code >= 400:
                 raise RuntimeError(f"HTTP {self.status_code} for {self.url}")
-        
+
         def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
             pass
     
     # Define patched functions
@@ -161,13 +157,17 @@ def setup_edgar_with_proxy(config_settings):
         content = curl_fetch(url, as_text=False)
         return FakeResponse(url, content, status_code=200)
     
+    TEXT_EXTENSIONS = ('.htm', '.html', '.txt', '.sgml', '.xml', '.json', '.xsd')
+
     def patched_download_file(url, as_text=None, path=None):
         content = curl_fetch(url, as_text=False)
         if path:
             with open(path, "wb") as f:
                 f.write(content)
             return path
-        if as_text:
+        if as_text is False:
+            return content
+        if as_text or any(url.lower().split('?')[0].endswith(ext) for ext in TEXT_EXTENSIONS):
             return content.decode("utf-8", errors="replace")
         return content
     
@@ -178,26 +178,45 @@ def setup_edgar_with_proxy(config_settings):
         content = curl_fetch(url, as_text=False)
         yield FakeResponse(url, content, status_code=200)
     
-    # Import edgar modules and patch them
+    def patched_download_text(url, *args, **kwargs):
+        content = curl_fetch(url, as_text=True)
+        return content
+
+    # Import edgar and patch all modules that use HTTP functions
     import edgar.httprequests as hr
-    import edgar.entity.submissions as subs
-    import edgar.sgml.sgml_common as sgml_common
-    import edgar.attachments as attachments
     from edgar import set_identity
-    
-    # Patch package-level functions
+
+    # Patch the source module first
     hr.get_with_retry = patched_get_with_retry
     hr.download_file = patched_download_file
     hr.download_json = patched_download_json
+    hr.download_text = patched_download_text
     hr.stream_with_retry = patched_stream_with_retry
-    
-    # Patch directly imported references in other modules
-    subs.download_json = patched_download_json
-    sgml_common.stream_with_retry = patched_stream_with_retry
-    attachments.get_with_retry = patched_get_with_retry
-    
-    # Set identity
+
+    # Dynamically patch every edgar submodule that imported these functions
+    import edgar
+    import pkgutil
+    patch_map = {
+        "get_with_retry": patched_get_with_retry,
+        "download_file": patched_download_file,
+        "download_json": patched_download_json,
+        "download_text": patched_download_text,
+        "stream_with_retry": patched_stream_with_retry,
+    }
+    patched_count = 0
+    for _imp, modname, _ispkg in pkgutil.walk_packages(edgar.__path__, prefix="edgar."):
+        try:
+            mod = __import__(modname, fromlist=[""])
+            if mod is hr:
+                continue
+            for fn_name, fn_impl in patch_map.items():
+                if hasattr(mod, fn_name):
+                    setattr(mod, fn_name, fn_impl)
+                    patched_count += 1
+        except Exception:
+            pass
+
     set_identity(UA)
-    
-    logger.info(f"✅ EDGAR library patched successfully with proxy support")
-    logger.info(f"   User-Agent: {UA}")
+
+    logger.info("EDGAR library patched with NTLM proxy (curl): %d sub-patches applied", patched_count)
+    logger.info("   User-Agent: %s", UA)
