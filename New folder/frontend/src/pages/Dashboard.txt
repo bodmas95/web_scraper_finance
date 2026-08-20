@@ -46,7 +46,13 @@ export function Dashboard() {
     setMapping(null)
   }
 
-  const handleSourceReady = (src: Source) => {
+  const handleSourceReady = (src: Source | null) => {
+    // Clear results if source changed or became null
+    if (!src || src.id !== source?.id) {
+      setExtraction(null)
+      setMapping(null)
+      setError(null)
+    }
     setSource(src)
   }
 
