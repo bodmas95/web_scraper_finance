@@ -19,16 +19,16 @@ except ImportError:
     }
 
 try:
-    from src.mapping_v1.adapter import (
+    from src.mapping import (
         map_all_fields,
         validate_mappings,
-        FIELD_MAPPINGS,
-        get_field_mappings,
         load_bref_fields,
         create_clean_output_excel,
         STATEMENT_SHEET_MAP,
         fast_map_fields,
         apply_sign_corrections,
+        get_field_mappings,
+        FIELD_MAPPINGS,
     )
     BREF_MAPPING_AVAILABLE = True
 except ImportError:
@@ -732,9 +732,7 @@ def _map_single_statement_raw(
     print("[mapping_v1]           Pass 2 (alias) + Pass 3 (self-reasoning) will run")
 
     with contextlib.redirect_stdout(mapping_logger):
-        from src.mapping_v1.mapper             import map_fields
-        from src.mapping_v1.validator          import validate_results
-        from src.mapping_v1.region_adjustments import apply_sign_corrections
+        from src.mapping import map_fields, validate_results, apply_sign_corrections
 
         synthetic_fields = [
             {"label": r.get("label", ""), "reference_value": None,
@@ -781,7 +779,7 @@ def _map_single_statement_raw(
 
     # ── Normalise to UI shape ─────────────────────────────────────────────────
     print("[mapping_v1] STEP 7 — converting results to UI shape via adapter._to_old_shape")
-    from src.mapping_v1.adapter import _to_old_shape
+    from src.mapping import _to_old_shape
     ui_fields = [_to_old_shape(f) for f in fields]
     for f in ui_fields:
         f["mode"]             = "raw"
@@ -895,7 +893,7 @@ def _map_single_statement_validated(
         print("[mapping_v1]           Pass 3: self-reasoning (still unmatched)")
 
         try:
-            from src.mapping_v1.pipeline import run as v1_run
+            from src.mapping import run_pipeline as v1_run
             result = v1_run(
                 excel_path      = tmp_path,
                 extraction_data = {statement_type: rows},
@@ -939,7 +937,7 @@ def _map_single_statement_validated(
 
         # ── Normalise to UI shape ─────────────────────────────────────────────
         print("[mapping_v1] STEP 6 — converting to UI shape via adapter._to_old_shape")
-        from src.mapping_v1.adapter import _to_old_shape
+        from src.mapping import _to_old_shape
         ui_fields = [_to_old_shape(f) for f in fields]
         for f in ui_fields:
             f["mode"]             = "validated"
@@ -1056,7 +1054,7 @@ def _map_single_statement_bref_direct(
         print("[bref_direct]           Pass 3: self-reasoning (still unmatched)")
 
         try:
-            from src.mapping_v1.pipeline import run as v1_run
+            from src.mapping import run_pipeline as v1_run
             result = v1_run(
                 excel_path      = tmp_path,
                 extraction_data = {statement_type: rows},
@@ -1141,7 +1139,7 @@ def _map_single_statement_bref_direct(
 
         # ── Normalise to UI shape ─────────────────────────────────────────────
         print("[bref_direct] STEP 7 — converting to UI shape via adapter._to_old_shape")
-        from src.mapping_v1.adapter import _to_old_shape
+        from src.mapping import _to_old_shape
         ui_fields = [_to_old_shape(f) for f in fields]
         for f in ui_fields:
             f["mode"]             = "bref_direct"
@@ -1153,7 +1151,7 @@ def _map_single_statement_bref_direct(
                 f["editable"] = True
 
         print("[bref_direct] STEP 8 — generating clean output Excel")
-        from src.mapping_v1.adapter import create_clean_output_excel
+        from src.mapping import create_clean_output_excel
         excel_out = create_clean_output_excel(
             ui_fields, target_year=target_year, statement_type=statement_type
         )
@@ -1496,7 +1494,7 @@ def _render_summary_generation_section(
         else:
             with st.spinner("🔄 Generating financial summary... This may take a moment."):
                 try:
-                    from src.mapping_v1.pipeline import generate_summary
+                    from src.mapping import generate_summary
                     
                     result = generate_summary(
                         results_by_statement=results_by_statement,
@@ -1624,8 +1622,7 @@ def _render_calculation_section(
             st.error("BREF template not available — cannot run calculations without it.")
         else:
             import tempfile, os
-            from src.mapping_v1.pipeline import run_calculations
-            from src.mapping_v1.adapter  import _to_old_shape
+            from src.mapping import run_calculations, _to_old_shape
 
             # Build results_by_statement from session state (or uploaded corrected file)
             results_by_statement = {}
@@ -2018,13 +2015,23 @@ def _style_mapping_row(row, region: str, statement_type: str):
 
 
 def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_prefix: str):
+    """Display mapping results for a single statement in a tab.
 
-    """Display mapping results for a single statement in a tab"""
-    
+    Delegates to the unified editable table in bref_editable_ui.
+    """
+    from src.components.bref_editable_ui import render_editable_bref_table
+    render_editable_bref_table(mapping_key, statement_type, key_prefix)
+    return
+
+
+def _display_mapping_results_tab_LEGACY(mapping_key: str, statement_type: str, key_prefix: str):
+
+    """LEGACY: Old display function kept for reference. Not called anywhere."""
+
     if mapping_key not in st.session_state.bref_mapping_results:
         st.info("No mapping results available")
         return
-    
+
     mapping_results = st.session_state.bref_mapping_results[mapping_key]
     fields = mapping_results["fields"]
     mode = mapping_results["mode"]
@@ -2094,7 +2101,7 @@ def _display_mapping_results_tab(mapping_key: str, statement_type: str, key_pref
         logger.info(f"{'='*80}\n")
     
     # Get field mappings to access indent_level
-    from src.mapping_v1.adapter import get_field_mappings
+    from src.mapping import get_field_mappings
     field_mappings_dict = get_field_mappings(mapping_results.get("region", "US"))
     statement_fields = field_mappings_dict.get(statement_type, {})
     
