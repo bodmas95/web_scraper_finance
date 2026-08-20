@@ -1,0 +1,135 @@
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from database import get_db, get_gridfs
+from models.source import SourceResponse
+from bson import ObjectId
+from datetime import datetime
+
+router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+
+@router.post("/annual-report")
+async def upload_annual_report(
+    file: UploadFile = File(...),
+    company_id: str = Form(...),
+    region_code: str = Form(...),
+    country_code: str = Form(...),
+    report_year: int = Form(...),
+):
+    db = get_db()
+    gridfs = get_gridfs()
+
+    content = await file.read()
+    gridfs_id = await gridfs.upload_from_stream(
+        file.filename,
+        content,
+        metadata={
+            "company_id": company_id,
+            "type": "annual_report",
+            "content_type": file.content_type,
+        },
+    )
+
+    source = await db["source"].find_one(
+        {"company_id": company_id, "report_year": report_year}
+    )
+
+    if source:
+        await db["source"].update_one(
+            {"_id": source["_id"]},
+            {
+                "$set": {
+                    "region_code": region_code,
+                    "country_code": country_code,
+                    "annual_report": {
+                        "filename": file.filename,
+                        "gridfs_id": str(gridfs_id),
+                    },
+                    "uploaded_at": datetime.utcnow(),
+                }
+            },
+        )
+        source_id = str(source["_id"])
+    else:
+        result = await db["source"].insert_one(
+            {
+                "company_id": company_id,
+                "region_code": region_code,
+                "country_code": country_code,
+                "report_year": report_year,
+                "annual_report": {
+                    "filename": file.filename,
+                    "gridfs_id": str(gridfs_id),
+                },
+                "bref_template": None,
+                "uploaded_at": datetime.utcnow(),
+            }
+        )
+        source_id = str(result.inserted_id)
+
+    return {"source_id": source_id, "filename": file.filename, "status": "uploaded"}
+
+
+@router.post("/bref-template")
+async def upload_bref_template(
+    file: UploadFile = File(...),
+    company_id: str = Form(...),
+    report_year: int = Form(...),
+):
+    db = get_db()
+    gridfs = get_gridfs()
+
+    source = await db["source"].find_one(
+        {"company_id": company_id, "report_year": report_year}
+    )
+    if not source:
+        raise HTTPException(404, "Upload the annual report first")
+
+    content = await file.read()
+    gridfs_id = await gridfs.upload_from_stream(
+        file.filename,
+        content,
+        metadata={
+            "company_id": company_id,
+            "type": "bref_template",
+            "content_type": file.content_type,
+        },
+    )
+
+    await db["source"].update_one(
+        {"_id": source["_id"]},
+        {
+            "$set": {
+                "bref_template": {
+                    "filename": file.filename,
+                    "gridfs_id": str(gridfs_id),
+                },
+            }
+        },
+    )
+
+    return {
+        "source_id": str(source["_id"]),
+        "filename": file.filename,
+        "status": "uploaded",
+    }
+
+
+@router.get("/{company_id}")
+async def get_documents(company_id: str):
+    db = get_db()
+    sources = await db["source"].find(
+        {"company_id": company_id}, {"_id": 1, "report_year": 1, "annual_report": 1, "bref_template": 1, "uploaded_at": 1}
+    ).sort("report_year", -1).to_list(None)
+    for s in sources:
+        s["id"] = str(s.pop("_id"))
+    return sources
+
+
+@router.get("/source/{source_id}")
+async def get_source(source_id: str):
+    db = get_db()
+    source = await db["source"].find_one({"_id": ObjectId(source_id)})
+    if not source:
+        raise HTTPException(404, "Source not found")
+    source["id"] = str(source.pop("_id"))
+    return source

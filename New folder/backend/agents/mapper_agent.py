@@ -1,0 +1,574 @@
+from agents.state import BREFState
+from agents.cprm_agent import resolve_unmatched_fields
+from services.llm_service import get_llm
+from field_mappings import get_field_mappings
+from difflib import SequenceMatcher
+import json
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Sign correction lists (force-positive fields by region/statement)
+# ---------------------------------------------------------------------------
+
+FORCE_POSITIVE = {
+    "US": {
+        "income_statement": [
+            "I2", "I4", "I48", "I49", "I53", "I54", "I46", "I55",
+            "I6", "I8", "I10", "I14", "I17", "I35",
+        ],
+        "balance_sheet": [
+            "B150", "B17", "B149", "B18", "B15", "B33", "B14", "B4",
+            "B6", "B2", "B3", "B19", "B13", "B1",
+            "L22", "L75", "L21", "L15", "L27",
+        ],
+        "cash_flow": ["ACF22", "ACF23", "ACF26", "ACF27"],
+    },
+    "APAC": {
+        "income_statement": [
+            "Q5", "Q6", "Q48", "Q49", "Q50", "Q7", "Q8", "Q14",
+            "Q105", "Q97", "Q22", "Q28", "Q29", "Q29ifrs16",
+            "Q28init", "Q30", "Q35",
+        ],
+        "balance_sheet": [
+            "U16", "U10", "U2", "U6", "U24", "U200", "U31", "U39",
+            "U1", "U22", "U41", "U41init",
+            "U53", "U53init", "U63", "U63init", "U75", "U71",
+            "U52", "U52init", "U62ifrs16", "U62init",
+        ],
+        "cash_flow": [
+            "ICF23", "ICF24", "ICF27", "ICF28", "ICF53", "ICF53ifrs16",
+            "ICF54", "ICF54ifrs16", "ICF53bis", "ICF54ter",
+        ],
+    },
+}
+FORCE_POSITIVE["EMEA"] = FORCE_POSITIVE["APAC"]
+
+
+def _get_field_code(field_key: str) -> str:
+    return field_key.split(" | ")[0].strip()
+
+
+def _should_force_positive(field_key: str, stmt_type: str, region: str) -> bool:
+    code = _get_field_code(field_key)
+    codes = FORCE_POSITIVE.get(region, {}).get(stmt_type, [])
+    return code in codes
+
+
+def _apply_sign(value, field_key: str, stmt_type: str, region: str):
+    if value is None:
+        return None
+    if _should_force_positive(field_key, stmt_type, region):
+        try:
+            v = float(value)
+            return abs(v) if v < 0 else v
+        except (ValueError, TypeError):
+            return value
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Label normalisation and matching (from reference fast_mapper.py)
+# ---------------------------------------------------------------------------
+
+_KEEP_PLURAL = frozenset([
+    "assets", "liabilities", "expenses", "sales", "loss", "gross",
+    "less", "business", "goodwill", "costs",
+])
+
+
+def normalize_label(label: str) -> str:
+    if not label:
+        return ""
+    n = label.lower().strip()
+    n = re.sub(r'[^a-z0-9\s\-&/(),.]', '', n)
+    n = re.sub(r'\s+', ' ', n)
+    n = re.sub(r'[,.\(\)\[\]\{\}]', '', n)
+    n = re.sub(r'\s*-\s*', ' ', n)
+    n = re.sub(r'\s*&\s*', ' and ', n)
+    n = re.sub(r'\s*/\s*', ' ', n)
+    n = re.sub(r'\s+', ' ', n).strip()
+    words = []
+    for w in n.split():
+        if w.endswith('s') and w not in _KEEP_PLURAL:
+            if w.endswith('ies'):
+                words.append(w[:-3] + 'y')
+            elif w.endswith('es') and len(w) > 3:
+                words.append(w[:-2])
+            elif len(w) > 3:
+                words.append(w[:-1])
+            else:
+                words.append(w)
+        else:
+            words.append(w)
+    return ' '.join(words)
+
+
+def _find_exact_match(aliases: list[str], extraction_labels: list[str], used: set[str]) -> str | None:
+    norm_aliases = {normalize_label(a): a for a in aliases if a and a != "No other alias"}
+    for lbl in extraction_labels:
+        if lbl in used:
+            continue
+        nlbl = normalize_label(lbl)
+        if nlbl in norm_aliases:
+            return lbl
+    return None
+
+
+def _find_fuzzy_match(
+    aliases: list[str], extraction_labels: list[str], used: set[str], threshold: float = 0.75,
+) -> tuple[str, float] | None:
+    best_match = None
+    best_score = 0.0
+    for alias in aliases:
+        if not alias or alias == "No other alias":
+            continue
+        na = normalize_label(alias)
+        a_tokens = set(na.split())
+        for lbl in extraction_labels:
+            if lbl in used:
+                continue
+            nl = normalize_label(lbl)
+            l_tokens = set(nl.split())
+            if not a_tokens or not l_tokens:
+                continue
+            overlap = len(a_tokens & l_tokens)
+            total = len(a_tokens | l_tokens)
+            token_score = overlap / total if total else 0
+            seq_score = SequenceMatcher(None, na, nl).ratio()
+            combined = token_score * 0.6 + seq_score * 0.4
+            if combined > best_score:
+                best_score = combined
+                best_match = lbl
+    if best_score >= threshold:
+        return (best_match, best_score)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Rows → flat fields helper
+# ---------------------------------------------------------------------------
+
+def _rows_to_fields(rows: list[dict]) -> dict[str, dict]:
+    fields = {}
+    for row in rows:
+        label = row.get("label", "")
+        if not label:
+            continue
+        vals = {k: v for k, v in row.items() if k not in ("label", "parent")}
+        fields[label] = vals
+    return fields
+
+
+# ---------------------------------------------------------------------------
+# Value matching (reference year BREF value → extraction)
+# ---------------------------------------------------------------------------
+
+def _find_value_match(
+    target_value: float,
+    fields: dict,
+    year: str,
+    used: set[str],
+) -> str | None:
+    if not target_value:
+        return None
+    abs_target = abs(target_value)
+    tolerance = max(abs_target * 0.01, 1)
+    for field_name, year_values in fields.items():
+        if field_name in used:
+            continue
+        if not isinstance(year_values, dict):
+            continue
+        for y, val in year_values.items():
+            if str(y).endswith(year) or year in str(y):
+                if isinstance(val, (int, float)):
+                    if abs(val - target_value) <= tolerance:
+                        return field_name
+                    if abs(abs(val) - abs_target) <= tolerance:
+                        return field_name
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Calculation engine (iterative, dependency-sorted)
+# ---------------------------------------------------------------------------
+
+def _parse_formula(formula: str) -> list[tuple[str, str]]:
+    formula = formula.replace(" ", "").replace("(", "").replace(")", "")
+    tokens = re.split(r'([+\-*/])', formula)
+    tokens = [t for t in tokens if t]
+    parsed = []
+    if tokens:
+        parsed.append(('+', tokens[0]))
+    for i in range(1, len(tokens), 2):
+        if i + 1 < len(tokens):
+            parsed.append((tokens[i], tokens[i + 1]))
+    return parsed
+
+
+def _calculate_field(formula: str, mapped: dict, year_key: str) -> float | None:
+    parsed = _parse_formula(formula)
+    result = 0.0
+    found_any = False
+    for op, code in parsed:
+        value = None
+        for fk, data in mapped.items():
+            fc = _get_field_code(fk)
+            if fc == code:
+                value = data.get(year_key)
+                break
+        if value is None:
+            value = 0.0
+        else:
+            try:
+                value = float(value)
+                found_any = True
+            except (ValueError, TypeError):
+                value = 0.0
+        if op == '+':
+            result += value
+        elif op == '-':
+            result -= value
+        elif op == '*':
+            result *= value
+        elif op == '/':
+            if value == 0:
+                return None
+            result /= value
+    return result if found_any else None
+
+
+# ---------------------------------------------------------------------------
+# Main mapper node
+# ---------------------------------------------------------------------------
+
+async def mapper_agent_node(state: BREFState) -> dict:
+    llm = get_llm()
+    region = state["region"]
+    financial_statements = state.get("financial_statements", {})
+    notes = state.get("notes", {})
+    bref_previous = state.get("bref_previous", {})
+    report_year = state.get("report_year", 2024)
+    previous_year = str(report_year - 1)
+    current_year = str(report_year)
+
+    clean_region = region.split("/")[0] if "/" in region else region
+    mappings_config = get_field_mappings(clean_region)
+    result = {}
+
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("BREF MAPPER: Region=%s, Year=%s→%s", clean_region, previous_year, current_year)
+    logger.info("=" * 70)
+
+    for stmt_type, field_defs in mappings_config.items():
+        stmt_data = financial_statements.get(stmt_type, {})
+        rows = stmt_data.get("rows", [])
+        extracted_fields = _rows_to_fields(rows) if rows else stmt_data.get("fields", {})
+        extraction_labels = list(extracted_fields.keys())
+        bref_prev_stmt = bref_previous.get(stmt_type, {})
+
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("MAPPING: %s (%d BREF fields)", stmt_type.upper().replace("_", " "), len(field_defs))
+        logger.info("  Extracted fields: %d | Previous BREF values: %d", len(extracted_fields), len(bref_prev_stmt))
+        logger.info("=" * 70)
+
+        stmt_result: dict = {}
+        unmatched_fields: dict = {}
+        used_labels: set[str] = set()
+
+        # ─────────────────────────────────────────────────────────────
+        # PHASE 1: Value Match + Alias Match (skip calculated fields)
+        # ─────────────────────────────────────────────────────────────
+        logger.info("")
+        logger.info("─── PHASE 1: Value Match + Alias Match ───")
+        p1_matched = 0
+        p1_total = 0
+
+        for field_key, field_def in field_defs.items():
+            if field_def.get("is_calculated"):
+                continue
+            p1_total += 1
+            indent = field_def.get("indent_level", 0)
+
+            # --- 1a. Look up previous BREF value ---
+            prev_bref_value = None
+            field_code = _get_field_code(field_key)
+            for bref_key, bref_vals in bref_prev_stmt.items():
+                bk = bref_key.strip()
+                if bk == field_key.strip() or bk.startswith(field_code + " ") or bk == field_code:
+                    for y, v in bref_vals.items():
+                        if previous_year in str(y):
+                            prev_bref_value = v
+                            break
+                    break
+
+            # --- If BREF previous year is blank, skip mapping entirely ---
+            if prev_bref_value is None:
+                stmt_result[field_key] = {
+                    "previous_year": None,
+                    "current_year": None,
+                    "source_field": None,
+                    "match_method": "blank_reference",
+                    "confidence": 0.0,
+                    "indent_level": indent,
+                    "reason": "BREF previous year is blank",
+                }
+                logger.info("  [--] %-45s  blank prev year, skipped", field_key[:45])
+                continue
+
+            matched_field = None
+            current_value = None
+            prev_value = prev_bref_value
+            match_method = None
+            confidence = 0.0
+            reason = ""
+
+            # --- 1b. Direct value match (prev year BREF → extraction) ---
+            if prev_bref_value is not None:
+                matched_field = _find_value_match(
+                    prev_bref_value, extracted_fields, previous_year, used_labels,
+                )
+                if matched_field:
+                    match_method = "direct_value_match"
+                    confidence = 0.95
+                    reason = f"Previous year BREF value {prev_bref_value} matched '{matched_field}'"
+                    used_labels.add(matched_field)
+                    for y, val in extracted_fields[matched_field].items():
+                        if current_year in str(y):
+                            current_value = val
+                            break
+
+            # --- 1c. Alias match (exact, then fuzzy) ---
+            if not matched_field:
+                aliases = field_def.get("aliases", [])
+                valid_aliases = [a for a in aliases if a and a != "No other alias"]
+
+                if valid_aliases:
+                    matched_field = _find_exact_match(valid_aliases, extraction_labels, used_labels)
+                    if matched_field:
+                        match_method = "alias_exact"
+                        confidence = 0.90
+                        reason = f"Exact alias match to '{matched_field}'"
+                    else:
+                        fuzzy = _find_fuzzy_match(valid_aliases, extraction_labels, used_labels, threshold=0.75)
+                        if fuzzy:
+                            matched_field, score = fuzzy
+                            match_method = "alias_fuzzy"
+                            confidence = 0.70 + score * 0.20
+                            reason = f"Fuzzy alias match to '{matched_field}' (score={score:.2f})"
+
+                    if matched_field:
+                        used_labels.add(matched_field)
+                        for y, val in extracted_fields[matched_field].items():
+                            if current_year in str(y):
+                                current_value = val
+                                break
+
+            if matched_field:
+                current_value = _apply_sign(current_value, field_key, stmt_type, clean_region)
+                stmt_result[field_key] = {
+                    "previous_year": prev_bref_value,
+                    "current_year": current_value,
+                    "source_field": matched_field,
+                    "match_method": match_method,
+                    "confidence": confidence,
+                    "indent_level": indent,
+                    "reason": reason,
+                }
+                p1_matched += 1
+                tag = "[OK]" if confidence >= 0.9 else "[~~]"
+                logger.info("  %s %-45s = %-30s (%s)", tag, field_key[:45], matched_field[:30], match_method)
+            else:
+                unmatched_fields[field_key] = {
+                    "field_def": field_def,
+                    "prev_bref_value": prev_bref_value,
+                    "indent_level": indent,
+                }
+
+        logger.info("")
+        logger.info("  Phase 1: %d/%d matched (%d remaining)", p1_matched, p1_total, len(unmatched_fields))
+
+        # ─────────────────────────────────────────────────────────────
+        # PHASE 2: CPRM Agent for unmatched NON-calculated fields
+        # Deep arithmetic decomposition using extracted rows + notes
+        # ─────────────────────────────────────────────────────────────
+        if unmatched_fields:
+            logger.info("")
+            logger.info("─── PHASE 2: CPRM Agent (%d fields) ───", len(unmatched_fields))
+
+            rows_text_lines = []
+            for row in rows:
+                label = row.get("label", "")
+                parent = row.get("parent", "")
+                year_cols = {k: v for k, v in row.items() if k not in ("label", "parent")}
+                values_str = " | ".join(f"{k}: {v}" for k, v in year_cols.items())
+                prefix = f"{parent} > " if parent else ""
+                rows_text_lines.append(f"{prefix}{label}: {values_str}")
+            extracted_text = "\n".join(rows_text_lines) if rows_text_lines else json.dumps(extracted_fields, indent=2, default=str)
+
+            fields_for_cprm = []
+            for fk, info in unmatched_fields.items():
+                fd = info["field_def"]
+                al = fd.get("aliases", [])
+                al = [a for a in al if a and a != "No other alias"]
+                fields_for_cprm.append({
+                    "label": fk,
+                    "description": ", ".join(al) if al else fk,
+                    "reference_value": info["prev_bref_value"],
+                })
+
+            try:
+                cprm_results = await resolve_unmatched_fields(
+                    unmatched_fields=fields_for_cprm,
+                    extracted_text=extracted_text,
+                    notes=notes,
+                    previous_year=previous_year,
+                    current_year=current_year,
+                    stmt_type=stmt_type,
+                    already_used=used_labels,
+                )
+
+                field_keys = list(unmatched_fields.keys())
+                for fk, cprm_result in zip(field_keys, cprm_results):
+                    info = unmatched_fields[fk]
+                    target_val = cprm_result.get("target_value")
+                    conf_str = cprm_result.get("confidence", "low")
+                    conf_num = {"high": 0.90, "medium": 0.70, "low": 0.50}.get(conf_str, 0.50)
+                    matched_labels = cprm_result.get("matched_labels", [])
+                    formula_desc = cprm_result.get("formula_description", "")
+                    reason = cprm_result.get("reason", "")
+
+                    source_label = ", ".join(matched_labels) if matched_labels else formula_desc or None
+                    for lbl in matched_labels:
+                        used_labels.add(lbl.strip())
+
+                    target_val = _apply_sign(target_val, fk, stmt_type, clean_region)
+
+                    match_method = "composite_decomposition" if len(matched_labels) > 1 else "llm_mapping"
+
+                    stmt_result[fk] = {
+                        "previous_year": info["prev_bref_value"],
+                        "current_year": target_val,
+                        "source_field": source_label,
+                        "match_method": match_method,
+                        "confidence": conf_num,
+                        "indent_level": info["indent_level"],
+                        "reason": reason,
+                    }
+
+                    tag = {"high": "[OK]", "medium": "[~~]", "low": "[!!]"}.get(conf_str, "[??]")
+                    logger.info("  %s %-45s → %s (conf: %s)", tag, fk[:45], str(source_label or "")[:40], conf_str)
+
+                logger.info("  Phase 2: %d/%d resolved by CPRM agent", min(len(cprm_results), len(field_keys)), len(field_keys))
+
+            except Exception as e:
+                logger.error("  Phase 2 CPRM FAILED: %s", e)
+                for fk in unmatched_fields:
+                    if fk not in stmt_result:
+                        info = unmatched_fields[fk]
+                        stmt_result[fk] = {
+                            "previous_year": info["prev_bref_value"],
+                            "current_year": None,
+                            "source_field": None,
+                            "match_method": "unmatched",
+                            "confidence": 0.0,
+                            "indent_level": info["indent_level"],
+                            "reason": f"CPRM agent failed: {e}",
+                        }
+
+        # ─────────────────────────────────────────────────────────────
+        # PHASE 3: Calculations (iterative, dependency-sorted)
+        # Calculated fields NEVER go to LLM.
+        # ─────────────────────────────────────────────────────────────
+        calc_fields = {k: v for k, v in field_defs.items() if v.get("is_calculated")}
+        if calc_fields:
+            logger.info("")
+            logger.info("─── PHASE 3: Calculations (%d fields) ───", len(calc_fields))
+
+            sorted_calcs = sorted(
+                calc_fields.items(),
+                key=lambda item: len(_parse_formula(item[1].get("calculation", ""))),
+            )
+
+            max_iterations = 5
+            for iteration in range(max_iterations):
+                calculated_this_round = 0
+                for field_key, field_def in sorted_calcs:
+                    if field_key in stmt_result:
+                        continue
+                    formula = field_def.get("calculation", "")
+                    if not formula:
+                        continue
+                    indent = field_def.get("indent_level", 0)
+
+                    calc_current = _calculate_field(formula, stmt_result, "current_year")
+                    calc_previous = _calculate_field(formula, stmt_result, "previous_year")
+
+                    if calc_current is not None:
+                        calc_current = _apply_sign(calc_current, field_key, stmt_type, clean_region)
+                        calc_previous = _apply_sign(calc_previous, field_key, stmt_type, clean_region)
+                        stmt_result[field_key] = {
+                            "previous_year": calc_previous,
+                            "current_year": calc_current,
+                            "source_field": formula,
+                            "match_method": "calculated",
+                            "confidence": 1.0,
+                            "indent_level": indent,
+                            "reason": f"Calculated: {formula}",
+                        }
+                        calculated_this_round += 1
+                        logger.info("  [==] %-45s = curr: %s, prev: %s  (%s)",
+                                    field_key[:45], calc_current, calc_previous, formula)
+
+                if calculated_this_round == 0:
+                    break
+
+            for field_key, field_def in sorted_calcs:
+                if field_key not in stmt_result:
+                    formula = field_def.get("calculation", "")
+                    indent = field_def.get("indent_level", 0)
+                    stmt_result[field_key] = {
+                        "previous_year": None,
+                        "current_year": None,
+                        "source_field": formula,
+                        "match_method": "calculated",
+                        "confidence": 0.0,
+                        "indent_level": indent,
+                        "reason": f"Missing dependencies for: {formula}",
+                    }
+                    logger.info("  [!!] %-45s  missing deps (%s)", field_key[:45], formula)
+
+        # ─────────────────────────────────────────────────────────────
+        # Reorder output to match field_mappings.py (BREF template order)
+        # ─────────────────────────────────────────────────────────────
+        ordered_result: dict = {}
+        for field_key in field_defs:
+            if field_key in stmt_result:
+                ordered_result[field_key] = stmt_result[field_key]
+            else:
+                indent = field_defs[field_key].get("indent_level", 0)
+                ordered_result[field_key] = {
+                    "previous_year": None,
+                    "current_year": None,
+                    "source_field": None,
+                    "match_method": "blank_reference",
+                    "confidence": 0.0,
+                    "indent_level": indent,
+                    "reason": "Field not in mapping scope",
+                }
+
+        total = len(ordered_result)
+        matched = sum(1 for v in ordered_result.values() if v.get("match_method") not in ("unmatched", "blank_reference"))
+        high_conf = sum(1 for v in ordered_result.values() if v.get("confidence", 0) >= 0.9)
+        logger.info("")
+        logger.info("  SUMMARY %s: %d/%d mapped, %d high confidence", stmt_type.upper(), matched, total, high_conf)
+        logger.info("=" * 70)
+
+        result[stmt_type] = ordered_result
+
+    return {"bref_mappings": result, "status": "mapping_complete"}
