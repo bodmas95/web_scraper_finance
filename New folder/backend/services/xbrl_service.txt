@@ -648,21 +648,25 @@ def _extract_currency_and_scale(facts: list[dict]) -> tuple[str, str | None, int
     return currency, None, 1
 
 
-def _build_consolidated(all_facts: list[dict]) -> dict:
-    """Build consolidated multi-year statements from all XBRL facts."""
+def _build_consolidated(all_facts: list[dict], filing_years: list[str]) -> dict:
+    """Build consolidated multi-year statements from all XBRL facts.
+    
+    Args:
+        all_facts: List of XBRL facts from all filings
+        filing_years: List of fiscal years from the filing period_end dates
+    """
+    # Use the filing years as the authoritative source
+    keep_years = set(filing_years[:3])  # Keep up to 3 years
+    
+    logger.info("Filing years to keep: %s", sorted(keep_years, reverse=True))
+    
+    # Also log what years are in the facts for debugging
     duration_years = sorted(
         {f["fy_year"] for f in all_facts
          if f.get("fy_year") and f.get("period_type") == "duration"},
         reverse=True,
     )
-    if duration_years:
-        keep_years = set(duration_years[:3])
-    else:
-        all_years = sorted(
-            {f["fy_year"] for f in all_facts if f.get("fy_year")},
-            reverse=True,
-        )
-        keep_years = set(all_years[:3])
+    logger.info("Duration years found in facts: %s", duration_years)
 
     currency, unit_label, divisor = _extract_currency_and_scale(all_facts)
 
@@ -735,12 +739,27 @@ def _fetch_sync(lei: str) -> dict:
         raise ValueError(f"No XBRL filings found for LEI {lei}")
 
     logger.info("Found %d filings for LEI=%s", len(filings), lei)
+    
+    # Log first 5 filings to debug year issues
+    for i, f in enumerate(filings[:5]):
+        logger.info("  Filing %d: period_end=%s, period_start=%s", 
+                   i+1, f.get("period_end", ""), f.get("period_start", ""))
 
+    # Extract actual filing years from period_end dates
     filing_years = []
-    for f in filings:
+    for f in filings[:3]:  # Only use the 3 most recent filings
         pe = f.get("period_end", "")
-        if pe and len(pe) >= 4:
-            filing_years.append(pe[:4])
+        if pe and len(pe) >= 10:
+            # Parse the fiscal year from period_end
+            end_date = pe[:10]
+            if end_date[5:10] == "01-01":
+                # If period ends on Jan 1, fiscal year is previous year
+                fy = str(int(end_date[:4]) - 1)
+            else:
+                fy = end_date[:4]
+            filing_years.append(fy)
+    
+    logger.info("Filing years (from period_end): %s", filing_years)
 
     all_facts = []
     for filing in filings[:3]:
@@ -752,8 +771,8 @@ def _fetch_sync(lei: str) -> dict:
     if not all_facts:
         raise ValueError(f"No XBRL facts found for LEI {lei}")
 
-    result = _build_consolidated(all_facts)
-    result["filing_years"] = sorted(set(filing_years), reverse=True)
+    result = _build_consolidated(all_facts, filing_years)
+    result["filing_years"] = filing_years
     return result
 
 
