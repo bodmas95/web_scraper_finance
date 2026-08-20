@@ -32,6 +32,7 @@ export function Dashboard() {
   const [mapping, setMapping] = useState<MappingResult | null>(null)
   const [extracting, setExtracting] = useState(false)
   const [mappingInProgress, setMappingInProgress] = useState(false)
+  const [summaryRefreshKey, setSummaryRefreshKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   const handleSelectionChange = (sel: {
@@ -101,7 +102,16 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <RegionSelector onSelectionChange={handleSelectionChange} />
+      <RegionSelector
+        onSelectionChange={handleSelectionChange}
+        onClear={() => {
+          setSelection(null)
+          setSource(null)
+          setExtraction(null)
+          setMapping(null)
+          setError(null)
+        }}
+      />
 
       {selection && (
         <FileUpload
@@ -120,8 +130,11 @@ export function Dashboard() {
                 Ready to extract financial data
               </p>
               <p className="text-xs text-muted-foreground">
-                AI agents will extract income statement, balance sheet, and cash
-                flow from the annual report.
+                {selection?.region.region_code === 'AMER'
+                  ? 'Data will be fetched from SEC EDGAR (10-K filing).'
+                  : selection?.region.region_code === 'EMEA'
+                    ? 'Data will be fetched from XBRL (IFRS filing).'
+                    : 'AI agents will extract income statement, balance sheet, and cash flow from the annual report.'}
               </p>
             </div>
             <Button onClick={handleExtract} disabled={extracting}>
@@ -154,13 +167,18 @@ export function Dashboard() {
           mappingInProgress={mappingInProgress}
           hasBrefTemplate={hasBrefTemplate}
           hasMapping={!!mapping}
+          regionCode={selection?.region.region_code}
+          currency={selection?.company.currency}
         />
       )}
 
       {mapping && (
         <MappingView
           mapping={mapping}
-          onUpdateMapping={setMapping}
+          onUpdateMapping={(updated) => {
+            setMapping(updated)
+            setSummaryRefreshKey((k) => k + 1)
+          }}
         />
       )}
 
@@ -168,6 +186,7 @@ export function Dashboard() {
         <SummaryView
           sourceId={source.id}
           reportYear={mapping.report_year}
+          refreshKey={summaryRefreshKey}
         />
       )}
     </div>
