@@ -401,12 +401,16 @@ class ExtractionCache:
                 {'company_name': 1, 'target_year': 1, 'access_count': 1, '_id': 0}
             ).sort('access_count', -1).limit(5))
             
+                # Filter out None values before sorting
+            valid_companies = [c for c in companies if c is not None]
+            valid_years = [y for y in years if y is not None]
+            
             return {
                 'total_cached': total,
-                'unique_companies': len(companies),
-                'unique_years': len(years),
-                'companies': sorted(companies),
-                'years': sorted(years),
+                'unique_companies': len(valid_companies),
+                'unique_years': len(valid_years),
+                'companies': sorted(valid_companies),
+                'years': sorted(valid_years),
                 'total_size_mb': round(total_size / (1024 * 1024), 2),
                 'total_accesses': total_accesses,
                 'most_accessed': most_accessed,
