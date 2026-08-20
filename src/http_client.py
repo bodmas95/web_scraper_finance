@@ -34,15 +34,21 @@ _PROXY_CFG = get_section("PROXY")
 
 PROXY_USE  = _PROXY_CFG.get("proxy_use", "none").strip().lower()
 
+# Debug: Print proxy configuration
+import sys
+print(f"[HTTP_CLIENT] PROXY_USE = {PROXY_USE}", file=sys.stderr)
+
 # system-mode (NTLM via pycurl) — reads the renamed corporate_* keys
 PROXY_HOST = _PROXY_CFG.get("corporate_host", "")
 PROXY_PORT = int(_PROXY_CFG.get("corporate_port", "8080") or "8080")
 PROXY_USER = _PROXY_CFG.get("corporate_username", "")
 PROXY_PASS = _PROXY_CFG.get("corporate_password", "")
 
-# system-mode (IP-based, no auth)
-_SYS_HOST  = _PROXY_CFG.get("system_host", "")
-_SYS_PORT  = _PROXY_CFG.get("system_port", "")
+print(f"[HTTP_CLIENT] Corporate Proxy: {PROXY_HOST}:{PROXY_PORT}, User: {PROXY_USER[:10] if PROXY_USER else 'None'}...", file=sys.stderr)
+
+# server-mode (IP-based, no auth)
+_SYS_HOST  = _PROXY_CFG.get("server_host", "")
+_SYS_PORT  = _PROXY_CFG.get("server_port", "")
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +106,21 @@ def _requests_get(
     proxies = _system_proxies() if PROXY_USE == "server" else None
     resp = requests.get(
         url, headers=headers, params=params, timeout=timeout, proxies=proxies
+    )
+    return HttpResponse(resp.status_code, resp.content, dict(resp.headers))
+
+
+def _requests_post(
+    url: str,
+    headers: dict = None,
+    json = None,
+    data = None,
+    timeout: int = 30,
+) -> HttpResponse:
+    # proxy_use=server → IP-based proxy via requests (no auth)
+    proxies = _system_proxies() if PROXY_USE == "server" else None
+    resp = requests.post(
+        url, headers=headers, json=json, data=data, timeout=timeout, proxies=proxies
     )
     return HttpResponse(resp.status_code, resp.content, dict(resp.headers))
 
@@ -223,7 +244,51 @@ def _pycurl_get(
     status, resp_headers, body = proxy_request("GET", url, headers=headers, timeout=timeout)
     return HttpResponse(status, body, resp_headers)
 
+def _pycurl_post(
+        url: str, 
+        headers: dict = None,
+        json= None,
+        data= None,
+        timeout: int = 30,
+    ) -> HttpResponse:
+        status, resp_headers, body= proxy_request(
+            "POST",
+            url, 
+            headers= headers,
+            json= json,
+            data= data,
+            timeout= timeout,
+        )
+        return HttpResponse(status, body, resp_headers)
 
+
+def post(
+    url: str,
+    headers: dict = None,
+    json = None,
+    data = None,
+    timeout: int = 30,
+) -> HttpResponse:
+    import sys
+    print(f"[HTTP_CLIENT POST] URL: {url}, PROXY_USE: {PROXY_USE}", file=sys.stderr)
+    
+    if PROXY_USE == "system":
+        print(f"[HTTP_CLIENT POST] Using pycurl with NTLM proxy", file=sys.stderr)
+        return _pycurl_post(
+            url= url,
+            headers= headers,
+            json = json,
+            data= data,
+            timeout= timeout,
+        )
+    print(f"[HTTP_CLIENT POST] Using requests (proxy_use={PROXY_USE})", file=sys.stderr)
+    return _requests_post(
+        url= url,
+        headers= headers,
+        json= json,
+        data = data,
+        timeout= timeout,
+    )
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -247,25 +312,3 @@ def get(
     if PROXY_USE == "system":
         return _pycurl_get(url, headers=headers, params=params, timeout=timeout)
     return _requests_get(url, headers=headers, params=params, timeout=timeout)
-
-
-def post(
-    url: str,
-    headers: dict = None,
-    json: Any = None,
-    data: Any = None,
-    timeout: int = 30,
-) -> HttpResponse:
-    """
-    Perform an HTTP POST request using the backend from config.ini [PROXY] proxy_use.
-    """
-    if PROXY_USE == "system":
-        status, resp_headers, body = proxy_request(
-            "POST", url, headers=headers, json=json, data=data, timeout=timeout
-        )
-        return HttpResponse(status, body, resp_headers)
-    proxies = _system_proxies() if PROXY_USE == "server" else None
-    resp = requests.post(
-        url, headers=headers, json=json, data=data, timeout=timeout, proxies=proxies
-    )
-    return HttpResponse(resp.status_code, resp.content, dict(resp.headers))

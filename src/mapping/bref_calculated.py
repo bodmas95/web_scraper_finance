@@ -258,12 +258,12 @@ def calculate_all_fields(
                         
                         if diff_percent <= tolerance_percent:
                             # Values match within tolerance - use extracted value, mark as validated
-                            print(f"✓ {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MATCH")
+                            print(f" {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MATCH")
                             result["*" + field_key] = extracted_float  # Use extracted value
                             result[field_key + "_validation"] = "VALIDATED"
                         else:
                             # Values don't match - flag for review
-                            print(f"⚠️ {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MISMATCH")
+                            print(f" {field_key}: Extracted={extracted_float}, Calculated={calculated_value} (diff: {diff_percent:.1f}%) - MISMATCH")
                             result["*" + field_key] = extracted_float  # Still use extracted value as primary
                             result[field_key + "_calculated"] = calculated_value  # Store calculated value for reference
                             result[field_key + "_validation"] = "MISMATCH"
@@ -271,7 +271,7 @@ def calculate_all_fields(
                     
                     except (ValueError, TypeError):
                         # Extracted value is not numeric - use calculated value
-                        print(f"✓ {field_key}: Extracted value invalid, using calculated={calculated_value}")
+                        print(f" {field_key}: Extracted value invalid, using calculated={calculated_value}")
                         result["*" + field_key] = calculated_value
                         result[field_key + "_validation"] = "CALCULATED_ONLY"
                         # CRITICAL: Also store without * prefix for lookups
@@ -280,7 +280,7 @@ def calculate_all_fields(
                     # CASE 2: Field not extracted - use calculated value
                     result["*" + field_key] = calculated_value
                     result[field_key + "_validation"] = "CALCULATED_ONLY"
-                    print(f"✓ Calculated {field_key}: {calculated_value} (formula: {formula})")
+                    print(f" Calculated {field_key}: {calculated_value} (formula: {formula})")
                     
                     # CRITICAL: Also store without * prefix for lookups
                     result[field_key] = calculated_value
@@ -300,12 +300,12 @@ def calculate_all_fields(
             
             if extracted_value is not None:
                 # Use extracted value even though we couldn't validate it
-                print(f"⚠️ {field_key}: Using extracted value (could not calculate for validation)")
+                print(f" {field_key}: Using extracted value (could not calculate for validation)")
                 result["*" + field_key] = extracted_value
                 result[field_key + "_validation"] = "EXTRACTED_ONLY"
             else:
                 formula = field_def.get("calculation", "")
-                print(f"✗ Could not calculate {field_key} (formula: {formula}) - missing dependencies")
+                print(f" Could not calculate {field_key} (formula: {formula}) - missing dependencies")
     
     # Apply region-specific sign corrections to calculated fields
     result = apply_calculated_sign_corrections(
@@ -432,7 +432,7 @@ def recalculate_dependent_fields(
             recalculated[field_key] = new_value
             # Update for cascading calculations
             updated_values[field_key] = new_value
-            print(f"♻️ Recalculated {field_key}: {new_value} (due to {updated_field} change)")
+            print(f" Recalculated {field_key}: {new_value} (due to {updated_field} change)")
     
     return recalculated
 
@@ -496,9 +496,9 @@ def create_ordered_output(
 # CALCULATED FIELDS REFERENCE - COMPLETE LIST (Extracted from field_mappings.py)
 # ==============================================================================
 """
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                    US INCOME STATEMENT (I-prefix) - 9 fields                ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                    US INCOME STATEMENT (I-prefix) - 9 fields                
+
 *I1 | Total Net sales (turnover) = I30+I31+I79+I47
 *I3 | Gross profit - TRR31 = I1-I2
 *I81 | EBITDA = I3-I4-I54-I46-I55+I42+I5-I6
@@ -509,9 +509,9 @@ def create_ordered_output(
 *I37 | Income from continuing operations = I21-I35+I36
 *I24 | Net profit for the year = I37+I38
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                 APAC/EMEA INCOME STATEMENT (Q-prefix) - 12 fields            ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                 APAC/EMEA INCOME STATEMENT (Q-prefix) - 12 fields            
+
 *Q93 | Total Revenue - TRR = Q1+Q3
 *Q47 | GROSS PROFIT - TRR31 = Q93-Q5
 *Q20 | EBIT = Q47-Q6-Q7-Q8-Q14-Q97+Q9+Q10
@@ -525,9 +525,9 @@ def create_ordered_output(
 *Q37 | Profit for the year from continuing operations = Q70+Q36+Q102+Q35
 *Q39 | Net profit (loss) for the year = Q37+Q38
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                   US BALANCE SHEET (B/L-prefix) - 10 fields                 ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                   US BALANCE SHEET (B/L-prefix) - 10 fields                 
+
 ASSETS (B-prefix):
 *B18 | Net Cash and cash equivalents = B150+B148+B17+B149
 *B32 | Customers & other debtors = B46+B15+B33+B35
@@ -542,9 +542,9 @@ LIABILITIES (L-prefix):
 *L111 | TOTAL EQUITY = L7+L8+L177
 *L28 | TOTAL LIABILITIES AND EQUITIES = L27+L15+L16+L59+L17+L18+L111
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                APAC/EMEA BALANCE SHEET (U/L-prefix) - 18 fields              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                APAC/EMEA BALANCE SHEET (U/L-prefix) - 18 fields              
+
 ASSETS (U-prefix):
 *U10 | Other Intangible assets Net = U11+U12+U13+U14
 *U2 | Tangible assets: Property, plant and equipment = U4+U3+U5+U115+U116+U201
@@ -571,9 +571,9 @@ LIABILITIES (L/U-prefix):
 *U78init | TOTAL LIABILITIES and EQUITIES IFRS16 = U52INIT+U62INIT+U161
 *U78 | TOTAL LIABILITIES and EQUITIES = U52IFRS+U62IFRS+U161
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                     US CASH FLOW (ACF-prefix) - 10 fields                   ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                     US CASH FLOW (ACF-prefix) - 10 fields                   
+
 *ACF01 | Cash-flow before change in WC (FFO) = ACF36-ACF35
 *ACF02 | +/- Change in WC = ACF39+ACF40+ACF41+ACF42+ACF43
 *ACF03 | Operating cash flow = ACF01+ACF02
@@ -585,9 +585,9 @@ LIABILITIES (L/U-prefix):
 *ACF11 | +/- Change in Cash = ACF05+ACF06+ACF07+ACF49+ACF08+ACF09+ACF52+ACF53+ACF54+ACF10
 *ACF14 | CASH AT BEGINNING OF PERIOD = ACF11+ACF12
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                  APAC/EMEA CASH FLOW (ICF-prefix) - 11 fields                ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                  APAC/EMEA CASH FLOW (ICF-prefix) - 11 fields                
+
 *ICF01 | Cash-flow before change in WCR (FFO) = ICF52-ICF53-ICF54
 *ICF02 | +/- Change in WCR = ICF45+ICF46+ICF47+ICF48+ICF49
 *ICF03 | Operating cash flow = ICF01+ICF02
@@ -600,9 +600,9 @@ LIABILITIES (L/U-prefix):
 *ICF11 | +/- Change in Cash = ICF05+ICF06+ICF07+ICF08+ICF09+ICF33+ICF10
 *ICF13 | TRESORERIE A LA CLOTURE = ICF11+ICF12+ICF16
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                              SUMMARY                                         ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+
+                              SUMMARY                                         
+
 Total Calculated Fields by Statement:
   - US Income Statement: 9 fields
   - APAC Income Statement: 12 fields

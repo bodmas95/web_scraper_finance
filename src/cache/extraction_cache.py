@@ -59,8 +59,8 @@ class ExtractionCache:
         # Create indexes for fast lookup
         self._create_indexes()
         
-        logger.info("✅ ExtractionCache initialized successfully")
-        print(f"✅ ExtractionCache initialized (DB: {db_name}, Collection: {collection_name})")
+        logger.info("ExtractionCache initialized successfully")
+        print(f"ExtractionCache initialized (DB: {db_name}, Collection: {collection_name})")
     
     def _create_indexes(self):
         """Create MongoDB indexes for fast lookup."""
@@ -81,31 +81,42 @@ class ExtractionCache:
             self.cache_collection.create_index([
                 ('company_name', 1),
                 ('target_year', 1)
-            ])
+                        ])
             
-            logger.info("✅ Cache indexes created successfully")
-            print("✅ Cache indexes created successfully")
+            logger.info("Cache indexes created successfully")
+            print("Cache indexes created successfully")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
-            print(f"⚠️ Warning: Could not create indexes: {e}")
+            print(f" Warning: Could not create indexes: {e}")
     
-    def _generate_cache_key(self, company_name: str, pdf_hash: str, target_year: int) -> str:
+    def _generate_cache_key(self, company_name: str, pdf_hash: str, target_year: int, manual_pages: Dict = None) -> str:
         """
-        Generate unique cache key based on company, PDF content, and year.
+        Generate unique cache key based on PDF content, year, and manual pages.
+        
+        CRITICAL: Cache key is based on PDF CONTENT (hash), NOT filename!
+        This ensures the same PDF with different filenames uses the same cache entry.
         
         Args:
-            company_name: Company name
-            pdf_hash: MD5 hash of PDF content
+            company_name: Company name (stored for display, but NOT used in cache key)
+            pdf_hash: MD5 hash of PDF content (PRIMARY identifier)
             target_year: Target fiscal year
+            manual_pages: Manual page numbers dict (optional)
         
         Returns:
             Unique cache key (MD5 hash)
         """
-        # Normalize company name (lowercase, strip whitespace)
-        normalized_name = company_name.lower().strip()
+        # CRITICAL: Use ONLY pdf_hash + year + manual_pages for cache key
+        # Do NOT include company_name - it's just metadata for display
+        # This ensures same PDF with different filenames shares the same cache
+        key_data = f"{pdf_hash}_{target_year}"
         
-        # Create key data
-        key_data = f"{normalized_name}_{pdf_hash}_{target_year}"
+        # Add manual pages to key if specified
+        if manual_pages:
+            # Sort by statement type for consistency
+            sorted_pages = sorted(manual_pages.items())
+            pages_str = "_".join([f"{stmt}:{page}" for stmt, page in sorted_pages if page is not None])
+            if pages_str:
+                key_data += f"_manual_{pages_str}"
         
         # Generate MD5 hash
         return hashlib.md5(key_data.encode()).hexdigest()
@@ -122,7 +133,7 @@ class ExtractionCache:
         """
         return hashlib.md5(pdf_bytes).hexdigest()
     
-    def get(self, company_name: str, pdf_bytes: bytes, target_year: int) -> Optional[Dict]:
+    def get(self, company_name: str, pdf_bytes: bytes, target_year: int, manual_pages: Dict = None) -> Optional[Dict]:
         """
         Get cached extraction results.
         
@@ -130,6 +141,7 @@ class ExtractionCache:
             company_name: Company name
             pdf_bytes: PDF file bytes
             target_year: Target fiscal year
+            manual_pages: Manual page numbers dict (optional)
         
         Returns:
             Cached extraction results or None if not found
@@ -137,9 +149,9 @@ class ExtractionCache:
         try:
             # Generate cache key
             pdf_hash = self._hash_pdf(pdf_bytes)
-            cache_key = self._generate_cache_key(company_name, pdf_hash, target_year)
+            cache_key = self._generate_cache_key(company_name, pdf_hash, target_year, manual_pages)
             
-            # Query cache
+            # Query cache with exact match
             cached = self.cache_collection.find_one({'cache_key': cache_key})
             
             if cached:
@@ -152,21 +164,92 @@ class ExtractionCache:
                     }
                 )
                 
-                print(f"✅ Cache HIT for {company_name} (Year: {target_year})")
+                manual_info = f" (Manual pages: {manual_pages})" if manual_pages else ""
+                print(f"💚 Cache HIT (exact match) for {company_name} (Year: {target_year}){manual_info}")
                 print(f"   Cached on: {cached.get('created_at', 'Unknown')}")
                 print(f"   Access count: {cached.get('access_count', 0) + 1}")
                 
                 return cached.get('extraction_results')
-            else:
-                print(f"❌ Cache MISS for {company_name} (Year: {target_year})")
-                return None
+            
+                                    # FALLBACK 1: If no manual pages specified, try to find ANY cache entry for this PDF (same year)
+            # This allows reusing manually-extracted results when doing automatic extraction
+            if not manual_pages:
+                print(f"🔍 Exact cache miss, searching for any cached extraction of this PDF (same year)...")
+                
+                # Find any cache entry with same PDF hash and year (regardless of manual pages or company name)
+                # CRITICAL: Ignore company_name - same PDF with different filename should match
+                fallback_cached = self.cache_collection.find_one({
+                    'pdf_hash': pdf_hash,
+                    'target_year': target_year
+                })
+                
+                if fallback_cached:
+                    # Update access statistics
+                    self.cache_collection.update_one(
+                        {'cache_key': fallback_cached['cache_key']},
+                        {
+                            '$inc': {'access_count': 1},
+                            '$set': {'last_accessed': datetime.utcnow()}
+                        }
+                    )
+                    
+                    cached_company_name = fallback_cached.get('company_name', 'Unknown')
+                    fallback_manual_pages = fallback_cached.get('manual_pages')
+                    manual_info = f" (from manual pages: {fallback_manual_pages})" if fallback_manual_pages else ""
+                    print(f"💛 Cache HIT (fallback - same year) for {company_name} (Year: {target_year}){manual_info}")
+                    if cached_company_name != company_name:
+                        print(f"   📝 Original filename: {cached_company_name}")
+                    print(f"   Cached on: {fallback_cached.get('created_at', 'Unknown')}")
+                    print(f"   Access count: {fallback_cached.get('access_count', 0) + 1}")
+                    print(f"   ℹ️  Reusing results from previous extraction")
+                    
+                    return fallback_cached.get('extraction_results')
+                
+                                # FALLBACK 2: If still not found, try to find ANY cache entry for this PDF (any year)
+                # This handles cases where the year was entered incorrectly
+                print(f"🔍 Still not found, searching for any cached extraction of this PDF (any year)...")
+                
+                # Find any cache entry with same PDF hash (ignore year, manual pages, and company name)
+                # CRITICAL: Ignore company_name - same PDF with different filename should match
+                fallback_any_year = self.cache_collection.find_one({
+                    'pdf_hash': pdf_hash
+                })
+                
+                if fallback_any_year:
+                    # Update access statistics
+                    self.cache_collection.update_one(
+                        {'cache_key': fallback_any_year['cache_key']},
+                        {
+                            '$inc': {'access_count': 1},
+                            '$set': {'last_accessed': datetime.utcnow()}
+                        }
+                    )
+                    
+                    cached_company_name = fallback_any_year.get('company_name', 'Unknown')
+                    cached_year = fallback_any_year.get('target_year')
+                    fallback_manual_pages = fallback_any_year.get('manual_pages')
+                    manual_info = f" (from manual pages: {fallback_manual_pages})" if fallback_manual_pages else ""
+                    print(f"💙 Cache HIT (fallback - different year) for {company_name}{manual_info}")
+                    if cached_company_name != company_name:
+                        print(f"   📝 Original filename: {cached_company_name}")
+                    print(f"   ⚠️  Year mismatch: requested {target_year}, cached {cached_year}")
+                    print(f"   Cached on: {fallback_any_year.get('created_at', 'Unknown')}")
+                    print(f"   Access count: {fallback_any_year.get('access_count', 0) + 1}")
+                    print(f"   ℹ️  Reusing results from previous extraction (verify year is correct!)")
+                    
+                    return fallback_any_year.get('extraction_results')
+            
+            # No cache found
+            manual_info = f" (Manual pages: {manual_pages})" if manual_pages else ""
+            print(f"❌ Cache MISS for {company_name} (Year: {target_year}){manual_info}")
+            return None
         
         except Exception as e:
-            print(f"⚠️ Error reading from cache: {e}")
+            print(f" Error reading from cache: {e}")
             return None
     
     def set(self, company_name: str, pdf_bytes: bytes, target_year: int, 
-            extraction_results: Dict, metadata: Dict = None):
+            extraction_results: Dict, metadata: Dict = None, manual_pages: Dict = None):
         """
         Store extraction results in cache.
         
@@ -176,26 +259,34 @@ class ExtractionCache:
             target_year: Target fiscal year
             extraction_results: Extraction results to cache
             metadata: Additional metadata (optional)
+            manual_pages: Manual page numbers dict (optional)
         """
         try:
             # Generate cache key
             pdf_hash = self._hash_pdf(pdf_bytes)
-            cache_key = self._generate_cache_key(company_name, pdf_hash, target_year)
+            cache_key = self._generate_cache_key(company_name, pdf_hash, target_year, manual_pages)
             
-            # Prepare cache document
+                        # Get current version (if exists) and increment
+            existing = self.cache_collection.find_one({'cache_key': cache_key})
+            current_version = existing.get('version', 0) if existing else 0
+            new_version = current_version + 1
+            
+                        # Prepare cache document
             cache_doc = {
                 'cache_key': cache_key,
                 'company_name': company_name.strip(),
                 'pdf_hash': pdf_hash,
                 'pdf_size_bytes': len(pdf_bytes),
                 'target_year': target_year,
+                'manual_pages': manual_pages,  # Store manual pages info
                 'extraction_results': extraction_results,
                 'metadata': metadata or {},
-                'created_at': datetime.utcnow(),
+                'created_at': existing.get('created_at', datetime.utcnow()) if existing else datetime.utcnow(),
                 'updated_at': datetime.utcnow(),
                 'last_accessed': datetime.utcnow(),
-                'access_count': 0,
-                'version': '1.0'
+                'access_count': existing.get('access_count', 0) if existing else 0,
+                'version': new_version,
+                'extraction_count': existing.get('extraction_count', 0) + 1 if existing else 1
             }
             
             # Upsert (insert or update)
@@ -205,16 +296,22 @@ class ExtractionCache:
                 upsert=True
             )
             
+            manual_info = f" (Manual pages: {manual_pages})" if manual_pages else ""
             if result.upserted_id:
-                print(f"💾 Cached extraction results for {company_name} (Year: {target_year})")
+                print(f"💾 Cached extraction results for {company_name} (Year: {target_year}){manual_info}")
+                print(f"   Version: {new_version} (NEW)")
             else:
-                print(f"🔄 Updated cache for {company_name} (Year: {target_year})")
+                print(f"🔄 Updated cache for {company_name} (Year: {target_year}){manual_info}")
+                print(f"   Version: {current_version} → {new_version}")
             
             print(f"   Cache key: {cache_key}")
             print(f"   PDF size: {len(pdf_bytes):,} bytes")
+            print(f"   Extraction count: {cache_doc['extraction_count']}")
+            if manual_pages:
+                print(f"   Manual pages: {manual_pages}")
             
         except Exception as e:
-            print(f"⚠️ Error writing to cache: {e}")
+            print(f" Error writing to cache: {e}")
     
     def invalidate(self, company_name: str = None, target_year: int = None, cache_key: str = None):
         """
@@ -248,28 +345,28 @@ class ExtractionCache:
                     query['target_year'] = target_year
             
             if not query:
-                print("⚠️ No invalidation criteria provided")
+                print(" No invalidation criteria provided")
                 return
             
             # Delete matching entries
             result = self.cache_collection.delete_many(query)
             
-            print(f"🗑️ Invalidated {result.deleted_count} cache entry(ies)")
+            print(f" Invalidated {result.deleted_count} cache entry(ies)")
             if company_name:
                 print(f"   Company: {company_name}")
             if target_year:
                 print(f"   Year: {target_year}")
         
         except Exception as e:
-            print(f"⚠️ Error invalidating cache: {e}")
+            print(f" Error invalidating cache: {e}")
     
     def clear_all(self):
         """Clear all cache entries."""
         try:
             result = self.cache_collection.delete_many({})
-            print(f"🗑️ Cleared all cache ({result.deleted_count} entries deleted)")
+            print(f" Cleared all cache ({result.deleted_count} entries deleted)")
         except Exception as e:
-            print(f"⚠️ Error clearing cache: {e}")
+            print(f" Error clearing cache: {e}")
     
     def get_stats(self) -> Dict:
         """
@@ -304,12 +401,16 @@ class ExtractionCache:
                 {'company_name': 1, 'target_year': 1, 'access_count': 1, '_id': 0}
             ).sort('access_count', -1).limit(5))
             
+                # Filter out None values before sorting
+            valid_companies = [c for c in companies if c is not None]
+            valid_years = [y for y in years if y is not None]
+            
             return {
                 'total_cached': total,
-                'unique_companies': len(companies),
-                'unique_years': len(years),
-                'companies': sorted(companies),
-                'years': sorted(years),
+                'unique_companies': len(valid_companies),
+                'unique_years': len(valid_years),
+                'companies': sorted(valid_companies),
+                'years': sorted(valid_years),
                 'total_size_mb': round(total_size / (1024 * 1024), 2),
                 'total_accesses': total_accesses,
                 'most_accessed': most_accessed,
@@ -317,7 +418,7 @@ class ExtractionCache:
             }
         
         except Exception as e:
-            print(f"⚠️ Error getting cache stats: {e}")
+            print(f" Error getting cache stats: {e}")
             return {}
     
     def _calculate_hit_rate(self) -> float:
@@ -379,9 +480,10 @@ class ExtractionCache:
             return list(self.cache_collection.aggregate(pipeline))
         
         except Exception as e:
-            print(f"⚠️ Error listing cached companies: {e}")
+            print(f" Error listing cached companies: {e}")
             return []
     
+            
     def get_cache_entry_details(self, company_name: str, target_year: int) -> Optional[Dict]:
         """
         Get detailed information about a specific cache entry.
@@ -391,7 +493,7 @@ class ExtractionCache:
             target_year: Target year
         
         Returns:
-            Cache entry details or None
+            Cache entry details or None (includes extraction_results to check completeness)
         """
         try:
             entry = self.cache_collection.find_one(
@@ -400,13 +502,23 @@ class ExtractionCache:
                     'target_year': target_year
                 },
                 {
-                    '_id': 0,
-                    'extraction_results': 0  # Exclude large data
+                    '_id': 0
+                    # Include extraction_results to check which statements are cached
                 }
             )
+            
+            # DEBUG: Log what we're returning
+            if entry:
+                logger.debug(f"get_cache_entry_details({company_name}, {target_year}): Found entry")
+                logger.debug(f"  extraction_results type: {type(entry.get('extraction_results'))}")
+                if isinstance(entry.get('extraction_results'), dict):
+                    logger.debug(f"  extraction_results keys: {list(entry.get('extraction_results', {}).keys())}")
+            else:
+                logger.debug(f"get_cache_entry_details({company_name}, {target_year}): No entry found")
             
             return entry
         
         except Exception as e:
-            print(f"⚠️ Error getting cache entry details: {e}")
+            logger.error(f"Error getting cache entry details: {e}", exc_info=True)
+            print(f" Error getting cache entry details: {e}")
             return None

@@ -11,7 +11,7 @@ import threading
 
 _log = logging.getLogger(__name__)
 
-# ── Config cache ─────────────────────────────────────────────────────────────
+#  Config cache 
 
 _config_cache = None
 _config_lock = threading.Lock()
@@ -37,7 +37,7 @@ def clear_config_cache():
         _config_cache = None
 
 
-# ── MongoDB connection pool ──────────────────────────────────────────────────
+#  MongoDB connection pool 
 
 _mongo_client = None
 _mongo_lock = threading.Lock()
@@ -75,7 +75,7 @@ def close_mongo():
             _mongo_client = None
 
 
-# ── LLM client cache ────────────────────────────────────────────────────────
+#  LLM client cache 
 
 _llm_client_cache = {}
 _llm_lock = threading.Lock()

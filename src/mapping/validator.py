@@ -19,8 +19,23 @@ def validate_mappings(mapped_fields: list) -> list:
         bref_ref   = _clean_value(field.get("reference_value", ""))
         llm_ref    = _clean_value(field.get("extracted_reference_value", ""))
         map_conf   = field.get("mapping_confidence", "low")
-
-        if not llm_ref or not bref_ref:
+        mapping_method = field.get("mapping_method", "")
+        
+        # CRITICAL FIX: Only rule1_direct_match (value match) should keep high confidence
+        # Alias matches and blank fields should remain low confidence
+        if mapping_method == "rule1_direct_match":
+            # Direct value match - already validated, keep high confidence
+            validation_status = field.get("validation_status", "validated")
+            final_confidence = field.get("final_confidence", "high")
+        elif mapping_method in ["rule3_alias_match", "blank_reference"]:
+            # Alias match or blank - keep low confidence (needs human review)
+            validation_status = field.get("validation_status", "unverified")
+            final_confidence = "low"
+        elif mapping_method == "calculation":
+            # Calculated fields - keep existing confidence
+            validation_status = field.get("validation_status", "validated")
+            final_confidence = field.get("final_confidence", map_conf)
+        elif not llm_ref or not bref_ref:
             validation_status = "unverified"
             final_confidence  = "low"
         elif _values_match(bref_ref, llm_ref):
@@ -30,7 +45,8 @@ def validate_mappings(mapped_fields: list) -> list:
             validation_status = "mismatch"
             final_confidence  = "low"
 
-        if map_conf == "low":
+        # Only downgrade if original mapping confidence was low and not a direct match
+        if map_conf == "low" and mapping_method != "rule1_direct_match":
             final_confidence = "low"
 
         enriched = {

@@ -91,7 +91,7 @@ def render_pdf_extraction_section(
                             
                             if result and statement_type in result:
                                 results[statement_type] = result[statement_type]
-                                log_placeholder.success(f"✅ Successfully extracted {statement_label}")
+                                log_placeholder.success(f" Successfully extracted {statement_label}")
                             else:
                                 log_placeholder.warning(f"Could not locate **{statement_label}** page — skipped.")
                         
@@ -107,7 +107,7 @@ def render_pdf_extraction_section(
                 st.error("No statements could be extracted. Check the PDF and try again.")
         
         except Exception as e:
-            st.error(f"❌ Extraction failed: {str(e)}")
+            st.error(f" Extraction failed: {str(e)}")
             import traceback
             with st.expander("Error Details"):
                 st.code(traceback.format_exc())

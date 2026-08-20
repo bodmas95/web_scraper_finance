@@ -249,12 +249,12 @@ def render_human_review_ui(fields: list, mapping_key: str, target_year: int):
     ]
 
     if not low_conf_fields:
-        st.success("✅ All fields mapped with high confidence - no review needed!")
+        st.success(" All fields mapped with high confidence - no review needed!")
         return
 
-    st.warning(f"⚠️ {len(low_conf_fields)} field(s) need human review")
+    st.warning(f" {len(low_conf_fields)} field(s) need human review")
 
-    with st.expander("🔍 Review Low Confidence Mappings", expanded=True):
+    with st.expander(" Review Low Confidence Mappings", expanded=True):
         for idx, field in low_conf_fields:
             st.markdown(f"**{field.get('label')}**")
 
@@ -274,12 +274,12 @@ def render_human_review_ui(fields: list, mapping_key: str, target_year: int):
                     format="%.2f"
                 )
 
-            if st.button("✓ Confirm", key=f"{mapping_key}_confirm_{idx}", use_container_width=True, type="primary"):
+            if st.button(" Confirm", key=f"{mapping_key}_confirm_{idx}", use_container_width=True, type="primary"):
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['target_value'] = new_value
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['matched_label'] = st.session_state[f"{mapping_key}_matched_{idx}"]
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['final_confidence'] = 'high'
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['validation_status'] = 'human_verified'
-                st.success(f"✅ Updated {field.get('label')}")
+                st.success(f" Updated {field.get('label')}")
                 st.rerun()
 
             st.caption(f"Reason: {field.get('reason', 'N/A')}")
@@ -332,7 +332,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
 
                     with _btn_col:
                         zoom_btn_key = f"zoom_btn_{key_prefix}_{statement_type}"
-                        if st.button("🔍", key=zoom_btn_key, help="Zoom in", use_container_width=True):
+                        if st.button("", key=zoom_btn_key, help="Zoom in", use_container_width=True):
                             zoom_dialog(
                                 st.session_state.uploaded_pdf_bytes,
                                 _all_pnums,
@@ -482,7 +482,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
     # ==================================================================
     if BREF_MAPPING_AVAILABLE and rows:
         st.markdown("---")
-        st.header("🎯 BREF Mapping")
+        st.header(" BREF Mapping")
 
         st.subheader("Step 1: Configuration")
 
@@ -523,7 +523,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             template_bytes = load_nextera4_template()
             if template_bytes:
                 st.download_button(
-                    "📥 Default Template",
+                    " Default Template",
                     data=template_bytes,
                     file_name=f"Default_Bref_Tempalte.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -531,7 +531,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                     key=f"{key_prefix}_dl_template_{statement_type}"
                 )
             else:
-                st.warning("⚠️ Default Template not found in project root")
+                st.warning(" Default Template not found in project root")
 
         st.markdown("---")
 
@@ -555,8 +555,8 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                     st.warning(f"No BREF field mappings defined for {statement_type}")
                 else:
                     try:
-                        with st.status("🔄 Running New Client Mapping...", expanded=True) as status:
-                            st.write("📋 Loading BREF field definitions...")
+                        with st.status(" Running New Client Mapping...", expanded=True) as status:
+                            st.write(" Loading BREF field definitions...")
                             fields = [
                                 {
                                     "label": label,
@@ -565,12 +565,12 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                 }
                                 for label, aliases in bref_field_dict.items()
                             ]
-                            st.write(f"✅ Compared {len(fields)} BREF fields")
-                            st.info(f"📊 Extracted {len(rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
+                            st.write(f" Compared {len(fields)} BREF fields")
+                            st.info(f" Extracted {len(rows)} rows from PDF. Will attempt to map them to {len(fields)} BREF fields.")
 
-                            st.write("🤖 Mapping fields using AI...")
+                            st.write(" Mapping fields using AI...")
 
-                            with st.expander("📝 Mapping Logs", expanded=True):
+                            with st.expander(" Mapping Logs", expanded=True):
                                 mapping_log_placeholder = st.empty()
                                 mapping_logger = BREFLiveLogger(mapping_log_placeholder)
 
@@ -590,7 +590,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
 
                             high_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'high')
                             low_conf = sum(1 for f in mapped_fields if f.get('mapping_confidence') == 'low')
-                            st.write(f"✅ Mapped {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
+                            st.write(f" Mapped {len(mapped_fields)} fields: {high_conf} high confidence, {low_conf} low confidence")
 
                             mapping_key = f"{key_prefix}_mapping_{statement_type}"
                             st.session_state.bref_mapping_results[mapping_key] = {
@@ -602,16 +602,16 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                 "region": bref_region,
                             }
 
-                            status.update(label="✅ Mapping completed successfully!", state="complete")
+                            status.update(label=" Mapping completed successfully!", state="complete")
                             st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Mapping failed: {e}")
+                        st.error(f" Mapping failed: {e}")
                         import traceback
-                        with st.expander("🐛 Error Details", expanded=True):
+                        with st.expander(" Error Details", expanded=True):
                             st.code(traceback.format_exc(), language="python")
 
         with col2:
-            st.markdown("### ✅ Existing Client Mapping")
+            st.markdown("###  Existing Client Mapping")
             st.markdown("""
             - Requires Excel template
             - Validates against reference year
@@ -634,7 +634,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             )
 
             if bref_file:
-                st.caption(f"✅ {bref_file.name}")
+                st.caption(f" {bref_file.name}")
 
                 if st.button("Start Validated Mapping", use_container_width=True, type="primary", key=f"{key_prefix}_validated_map_{statement_type}"):
                     import tempfile
@@ -646,8 +646,8 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                         tmp_path = tmp.name
 
                     try:
-                        with st.status("🔄 Running validated mapping...", expanded=True) as status:
-                            st.write("📂 Loading BREF template...")
+                        with st.status(" Running validated mapping...", expanded=True) as status:
+                            st.write(" Loading BREF template...")
                             wb = openpyxl.load_workbook(tmp_path)
                             ws = wb.active
 
@@ -656,18 +656,18 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                             target_col = find_year_column(ws, bref_target_year)
 
                             if ref_col:
-                                st.write(f"✅ Found reference year ({ref_year}) in column {ref_col}")
+                                st.write(f" Found reference year ({ref_year}) in column {ref_col}")
                             else:
-                                st.warning(f"⚠️ Reference year ({ref_year}) not found in template")
+                                st.warning(f" Reference year ({ref_year}) not found in template")
 
                             if target_col:
-                                st.write(f"✅ Found target year ({bref_target_year}) in column {target_col}")
+                                st.write(f" Found target year ({bref_target_year}) in column {target_col}")
                             else:
-                                st.warning(f"⚠️ Target year ({bref_target_year}) not found in template")
+                                st.warning(f" Target year ({bref_target_year}) not found in template")
 
                             wb.close()
 
-                            st.write("📋 Loading BREF fields from template...")
+                            st.write(" Loading BREF fields from template...")
                             field_mappings_dict = get_field_mappings(bref_region).get(statement_type, {})
                             fields = load_bref_fields(
                                 tmp_path,
@@ -678,15 +678,15 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                             )
 
                             if not fields:
-                                st.error(f"❌ No BREF field mappings defined for {statement_type}")
-                                status.update(label="❌ Mapping failed", state="error")
+                                st.error(f" No BREF field mappings defined for {statement_type}")
+                                status.update(label=" Mapping failed", state="error")
                             else:
                                 ref_count = sum(1 for f in fields if f['reference_value'] is not None)
-                                st.write(f"✅ Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
+                                st.write(f" Loaded {len(fields)} BREF fields ({ref_count} with reference values)")
 
-                                st.write("🤖 Mapping fields using AI...")
+                                st.write(" Mapping fields using AI...")
 
-                                with st.expander("📝 Mapping Logs", expanded=True):
+                                with st.expander(" Mapping Logs", expanded=True):
                                     mapping_log_placeholder = st.empty()
                                     mapping_logger = BREFLiveLogger(mapping_log_placeholder)
 
@@ -699,11 +699,11 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                             target_year=bref_target_year
                                         )
 
-                                st.write(f"✅ Mapped {len(mapped_fields)} fields")
+                                st.write(f" Mapped {len(mapped_fields)} fields")
 
-                                st.write("✓ Validating mappings...")
+                                st.write(" Validating mappings...")
 
-                                with st.expander("📝 Validation Logs", expanded=True):
+                                with st.expander(" Validation Logs", expanded=True):
                                     validation_log_placeholder = st.empty()
                                     validation_logger = BREFLiveLogger(validation_log_placeholder)
 
@@ -715,9 +715,9 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                 low_conf = sum(1 for f in validated_fields if f.get('final_confidence') == 'low')
                                 validated_count = sum(1 for f in validated_fields if f.get('validation_status') == 'validated')
 
-                                st.write(f"✅ Validation complete: {high_conf} high confidence, {low_conf} low confidence, {validated_count} validated")
+                                st.write(f" Validation complete: {high_conf} high confidence, {low_conf} low confidence, {validated_count} validated")
 
-                                st.write("📊 Generating Excel output...")
+                                st.write(" Generating Excel output...")
                                 excel_bytes = create_clean_output_excel(
                                     validated_fields,
                                     target_year=bref_target_year,
@@ -736,13 +736,13 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                                     "region": bref_region,
                                 }
 
-                                status.update(label="✅ Mapping completed successfully!", state="complete")
+                                status.update(label=" Mapping completed successfully!", state="complete")
                                 st.rerun()
 
                     except Exception as e:
-                        st.error(f"❌ Mapping failed: {e}")
+                        st.error(f" Mapping failed: {e}")
                         import traceback
-                        with st.expander("🐛 Error Details", expanded=True):
+                        with st.expander(" Error Details", expanded=True):
                             st.code(traceback.format_exc(), language="python")
                     finally:
                         import os
@@ -758,9 +758,9 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
             with col_header:
                 st.subheader("Step 3: Results & Review")
             with col_clear:
-                if st.button("🗑️ Clear Results", key=f"{key_prefix}_clear_{statement_type}", use_container_width=True):
+                if st.button(" Clear Results", key=f"{key_prefix}_clear_{statement_type}", use_container_width=True):
                     del st.session_state.bref_mapping_results[mapping_key]
-                    st.success("✅ Results cleared - you can start fresh mapping")
+                    st.success(" Results cleared - you can start fresh mapping")
                     st.rerun()
 
             mapping_results = st.session_state.bref_mapping_results[mapping_key]
@@ -782,7 +782,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
 
             st.markdown("---")
 
-            st.subheader("📋 All Mapped Fields")
+            st.subheader(" All Mapped Fields")
 
             reference_year = bref_target_year - 1
 
@@ -804,13 +804,13 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
 
             st.markdown("---")
 
-            st.subheader("📥 Download")
+            st.subheader(" Download")
 
             col1, col2 = st.columns(2)
 
             with col1:
                 st.download_button(
-                    "📄 Download as JSON",
+                    " Download as JSON",
                     data=pd.DataFrame(fields).to_json(orient="records", indent=2),
                     file_name=f"bref_results_{statement_type}_{bref_target_year}.json",
                     mime="application/json",
@@ -825,7 +825,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
                 output.seek(0)
 
                 st.download_button(
-                    "📊 Download BREF Output (Excel)",
+                    " Download BREF Output (Excel)",
                     data=output.getvalue(),
                     file_name=f"BREF_Output_{statement_type}_{bref_target_year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

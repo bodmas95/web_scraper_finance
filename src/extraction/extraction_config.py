@@ -19,11 +19,22 @@ else:
 # All comparisons are case-insensitive
 # Expanded to include Singapore, IFRS, US GAAP, UK, India, and other international variations
 STATEMENT_HEADINGS = {
-    "income_statement": [
+        "income_statement": [
+        # Macquarie specific - simple lowercase plural
+        "Income statements",
+        "income statements",
+        # Keppel specific - pages that start with revenue (need to be careful - very generic)
+        # Only match if followed by "Other income" or "Other (losses)/gains"
+        # This is handled by checking multiple lines in the scanner
+        # PT Merdeka specific - summary headings
+        "RINGKASAN LAPORAN LABA ATAU RUGI DAN PENGHASILAN KOMPREHENSIF LAIN KONSOLIDASIAN",
+        "SUMMARY OF CONSOLIDATED STATEMENTS OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME",
+        "IKHTISAR KEUANGAN",
+        "FINANCIAL HIGHLIGHTS",
         # Indosat specific - exact text from PDF (bilingual pages)
         "LAPORAN LABA RUGI DAN PENGHASILAN KOMPREHENSIF LAIN KONSOLIDASIAN UNTUK TAHUN-TAHUN YANG BERAKHIR",
         "CONSOLIDATED STATEMENTS OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME FOR THE YEARS ENDED",
-        # Indonesian headings - add most specific first
+                # Indonesian headings - add most specific first
         "LAPORAN LABA RUGI DAN PENGHASILAN KOMPREHENSIF LAIN KONSOLIDASIAN",
         "LAPORAN LABA RUGI DAN PENGHASILAN KOMPREHENSIF LAIN",
         "LAPORAN LABA RUGI KONSOLIDASIAN",
@@ -32,8 +43,10 @@ STATEMENT_HEADINGS = {
         # Generic English
         "CONSOLIDATED STATEMENTS OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME",
         "CONSOLIDATED STATEMENT OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME",
-        "CONSOLIDATED STATEMENTS OF COMPREHENSIVE INCOME",
-        "CONSOLIDATED STATEMENT OF COMPREHENSIVE INCOME",
+        # CRITICAL: Add versions without spaces for PDFs with text extraction issues
+        "STATEMENTS OF COMPREHENSIVE INCOME",
+        "STATEMENT OF COMPREHENSIVE INCOME",
+                "Consolidated Profit or Loss Account",
         # Chinese headings
         "綜合損益表",
         "損益表",
@@ -51,13 +64,12 @@ STATEMENT_HEADINGS = {
         "CONSOLIDATED INCOME STATEMENTS",
         "CONSOLIDATED STATEMENT OF PROFIT OR LOSS",
         "CONSOLIDATED STATEMENTS OF PROFIT OR LOSS",
-        "STATEMENT OF PROFIT OR LOSS",
-        "STATEMENTS OF PROFIT OR LOSS",
+        # NOTE: Non-consolidated statements moved to end of list (lower priority)
+        # This ensures we prefer consolidated statements over summaries
         "CONSOLIDATED PROFIT OR LOSS",
         "PROFIT OR LOSS STATEMENT",
         "CONSOLIDATED STATEMENT OF PROFIT OR LOSS AND OTHER",
         "CONSOLIDATED PROFIT AND LOSS ACCOUNT",
-        "CONSOLIDATED STATEMENT OF TOTAL COMPREHENSIVE INCOME",
         "CONSOLIDATED STATEMENT OF INCOME AND OTHER COMPREHENSIVE INCOME",
         "STATEMENT OF INCOME AND OTHER COMPREHENSIVE INCOME",
         "CONSOLIDATED EARNINGS STATEMENT",
@@ -76,16 +88,6 @@ STATEMENT_HEADINGS = {
         "STATEMENT OF PROFIT AND LOSS",
         "CONSOLIDATED STATEMENT OF PROFIT AND LOSS AND OTHER COMPREHENSIVE INCOME",
         "STATEMENT OF PROFIT AND LOSS AND OTHER COMPREHENSIVE INCOME",
-        "CONSOLIDATED STATEMENT OF RESULTS",
-        "STATEMENT OF RESULTS",
-        "CONSOLIDATED RESULTS OF OPERATIONS",
-        "RESULTS OF OPERATIONS",
-        "CONSOLIDATED STATEMENT OF FINANCIAL PERFORMANCE",
-        "STATEMENT OF FINANCIAL PERFORMANCE",
-        "CONSOLIDATED STATEMENT OF FINANCIAL PERFORMANCE AND OTHER",
-        "STATEMENT OF FINANCIAL PERFORMANCE AND OTHER COMPREHENSIVE INCOME",
-        "CONSOLIDATED RESULTS STATEMENT",
-        "RESULTS STATEMENT",
         "INCOME STATEMENT (PARENT COMPANY)",
         "INCOME STATEMENT (COMPANY ONLY)",
         "INCOME STATEMENT – GROUP",
@@ -121,11 +123,22 @@ STATEMENT_HEADINGS = {
         "CONSOLIDATED STATEMENT OF EARNINGS (LOSSES)",
         "STATEMENT OF EARNINGS (LOSSES)",
         "CONSOLIDATED STATEMENT OF INCOME (LOSS)",
-        "STATEMENT OF INCOME (LOSS)",
-        "STATEMENTS OF VALUE ADDED AND ITS DISTRIBUTION"
+                "STATEMENT OF INCOME (LOSS)",
+        "STATEMENTS OF VALUE ADDED AND ITS DISTRIBUTION",
+        # Non-consolidated statements (lower priority - often summaries)
+        "STATEMENT OF PROFIT OR LOSS",
+        "STATEMENTS OF PROFIT OR LOSS",
     ],
     
-    "balance_sheet": [
+        "balance_sheet": [
+        # Macquarie specific - simple lowercase plural
+        "Balance sheets",
+        "balance sheets",
+        "Statements of financial position",
+        "statements of financial position",
+        # PT Merdeka specific - summary headings
+        "RINGKASAN LAPORAN POSISI KEUANGAN KONSOLIDASIAN",
+        "SUMMARY OF CONSOLIDATED STATEMENTS OF FINANCIAL POSITION",
         # Indosat specific - exact text from PDF
         "LAPORAN POSISI KEUANGAN KONSOLIDASIAN PADA TANGGAL",
         "CONSOLIDATED STATEMENTS OF FINANCIAL POSITION AS AT",
@@ -136,7 +149,7 @@ STATEMENT_HEADINGS = {
         "NERACA",
         # Generic English
         "CONSOLIDATED STATEMENTS OF FINANCIAL POSITION",
-        "CONSOLIDATED STATEMENT OF FINANCIAL POSITION",
+                "CONSOLIDATED STATEMENT OF FINANCIAL POSITION",
         # Chinese headings
         "綜合財務狀況表",
         "資產負債表",
@@ -183,7 +196,15 @@ STATEMENT_HEADINGS = {
         
     ],
     
-    "cash_flow": [
+        "cash_flow": [
+        # Macquarie specific - simple lowercase plural
+        "Cash flow statements",
+        "cash flow statements",
+        "Statements of cash flows",
+        "statements of cash flows",
+        # PT Merdeka specific - summary headings
+        "RINGKASAN LAPORAN ARUS KAS KONSOLIDASIAN",
+        "SUMMARY OF CONSOLIDATED STATEMENT OF CASH FLOWS",
         # Indosat specific - exact text from PDF
         "LAPORAN ARUS KAS KONSOLIDASIAN UNTUK TAHUN-TAHUN YANG BERAKHIR",
         "CONSOLIDATED STATEMENTS OF CASH FLOWS FOR THE YEARS ENDED",
@@ -193,14 +214,13 @@ STATEMENT_HEADINGS = {
         "LAPORAN PERUBAHAN ARUS KAS",
         # Generic English
         "CONSOLIDATED STATEMENTS OF CASH FLOWS",
-        "CONSOLIDATED STATEMENT OF CASH FLOWS",
+                "CONSOLIDATED STATEMENT OF CASH FLOWS",
         # Chinese headings
         "綜合現金流量表",
         "現金流量表",
         "合併現金流量表",
         # English headings
         "CONSOLIDATED STATEMENTS OF CASH FLOWS",
-        "CONSOLIDATED STATEMENT OF CASH FLOWS",
         "CONSOLIDATED STATEMENT OF CASH FLOWS",
         "STATEMENTS OF CASH FLOWS",
         "STATEMENT OF CASH FLOWS",

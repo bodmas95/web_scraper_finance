@@ -119,7 +119,7 @@ def keep_alive_heartbeat(placeholder, stop_event, interval=3):
         elapsed += interval
         if not stop_event.is_set():
             try:
-                placeholder.info(f"🔄 Mapping in progress... ({elapsed}s elapsed)")
+                placeholder.info(f" Mapping in progress... ({elapsed}s elapsed)")
             except NoSessionContext:
                 # Session context lost - this is expected in background threads
                 # The mapping is still running, just can't update the UI
@@ -329,7 +329,7 @@ Respond with valid JSON only:
         confidence = result.get("confidence", "low")
         source = result.get("source", "unknown")
         
-        print(f"\n📋 Company Name Extraction:")
+        print(f"\n Company Name Extraction:")
         print(f"  Name: {company_name}")
         print(f"  Confidence: {confidence}")
         print(f"  Source: {source}")
@@ -337,7 +337,7 @@ Respond with valid JSON only:
         return company_name if company_name else pdf_filename.replace('.pdf', '').replace('_', ' ').strip()
     
     except Exception as e:
-        print(f"⚠️ Company name extraction failed: {e}")
+        print(f" Company name extraction failed: {e}")
         # Fallback to filename
         return pdf_filename.replace('.pdf', '').replace('_', ' ').strip()
 
@@ -449,12 +449,12 @@ def render_human_review_ui(fields: list, mapping_key: str, target_year: int):
     ]
 
     if not low_conf_fields:
-        st.success("✅ All fields mapped with high confidence - no review needed!")
+        st.success(" All fields mapped with high confidence - no review needed!")
         return
 
-    st.warning(f"⚠️ {len(low_conf_fields)} field(s) need human review")
+    st.warning(f" {len(low_conf_fields)} field(s) need human review")
 
-    with st.expander("🔍 Review Low Confidence Mappings", expanded=True):
+    with st.expander(" Review Low Confidence Mappings", expanded=True):
         for idx, field in low_conf_fields:
             st.markdown(f"**{field.get('label')}**")
 
@@ -474,12 +474,12 @@ def render_human_review_ui(fields: list, mapping_key: str, target_year: int):
                     format="%.2f"
                 )
 
-            if st.button("✓ Confirm", key=f"{mapping_key}_confirm_{idx}", use_container_width=True, type="primary"):
+            if st.button(" Confirm", key=f"{mapping_key}_confirm_{idx}", use_container_width=True, type="primary"):
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['target_value'] = new_value
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['matched_label'] = st.session_state[f"{mapping_key}_matched_{idx}"]
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['final_confidence'] = 'high'
                 st.session_state.bref_mapping_results[mapping_key]['fields'][idx]['validation_status'] = 'human_verified'
-                st.success(f"✅ Updated {field.get('label')}")
+                st.success(f" Updated {field.get('label')}")
                 st.rerun()
 
             st.caption(f"Reason: {field.get('reason', 'N/A')}")
@@ -532,7 +532,7 @@ def render_pdf_panel(statement_type: str, result: dict, key_prefix: str = ""):
 
                     with _btn_col:
                         zoom_btn_key = f"zoom_btn_{key_prefix}_{statement_type}"
-                        if st.button("🔍", key=zoom_btn_key, help="Zoom in", use_container_width=True):
+                        if st.button("", key=zoom_btn_key, help="Zoom in", use_container_width=True):
                             zoom_dialog(
                                 st.session_state.uploaded_pdf_bytes,
                                 _all_pnums,
@@ -702,9 +702,9 @@ def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: 
         # Use mapping_key directly to ensure uniqueness
         # Don't add statement_type as it's already in mapping_key (e.g., manual_mapping_cash_flow)
         clear_key = f"clear_{key_prefix}_{mapping_key}".replace('_', '-')
-        if st.button("🗑️ Clear", key=clear_key, use_container_width=True):
+        if st.button(" Clear", key=clear_key, use_container_width=True):
             del st.session_state.bref_mapping_results[mapping_key]
-            st.success("✅ Results cleared")
+            st.success(" Results cleared")
             st.rerun()
 
     mapping_results = st.session_state.bref_mapping_results[mapping_key]
@@ -722,7 +722,7 @@ def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: 
     col4.metric("Mode", mode.upper())
 
     if low_conf > 0:
-        st.warning(f"⚠️ {low_conf} field(s) have low confidence — edit values directly in the table below, then click **Save Changes**.")
+        st.warning(f" {low_conf} field(s) have low confidence — edit values directly in the table below, then click **Save Changes**.")
 
     st.markdown("---")
 
@@ -744,7 +744,7 @@ def _display_mapping_results(mapping_key: str, statement_type: str, key_prefix: 
 
     df = pd.DataFrame(df_data)
 
-    # ── Sanitise every cell to a native Python type (prevents React #185) ──
+    #  Sanitise every cell to a native Python type (prevents React #185) 
     numeric_cols = {value_col, f"{reference_year} (Reference)"}
 
     def _to_clean_float(v):
@@ -868,25 +868,83 @@ def _check_and_show_consolidated_download(key_prefix: str):
     if _has_income and _has_balance and _has_cashflow:
         # All 3 statements are mapped!
         st.markdown("---")
-        st.success("✅ All 3 statements are mapped!")
+        st.success(" All 3 statements are mapped!")
         
         # Get mapping results
         income_results = st.session_state.bref_mapping_results[_income_key]
         balance_results = st.session_state.bref_mapping_results[_balance_key]
         cashflow_results = st.session_state.bref_mapping_results[_cashflow_key]
         
-        # Get company info
+                # Get company info
         company_name = income_results.get('company_name', 'Company')
         target_year = income_results.get('target_year', datetime.now().year)
         
+                        # Extract currency and unit information from extraction results
+        # Try to get from income statement first, then balance sheet, then cash flow
+        currency = None
+        unit_scale = None
+        
+                 # Import logger
+        from src.integration.currency_unit_logger import get_logger
+        logger = get_logger()
+        
+        logger.logger.info("\n=== SUMMARY GENERATION - Currency/Unit Extraction ===")
+        logger.log_summary_extraction({
+            "income": income_results,
+            "balance": balance_results,
+            "cashflow": cashflow_results
+        }, key_prefix=_income_key.split('_mapping_')[0])
+        
+        print(f"\n DEBUG: Extracting currency/unit from extraction results...")
+        for stmt_name, results in [("income", income_results), ("balance", balance_results), ("cashflow", cashflow_results)]:
+            # Try new format first (currency/unit from integration)
+            stmt_currency = results.get('currency')
+            stmt_unit = results.get('unit')
+            
+            # Fallback to old format (year_currencies/unit_scale)
+            year_currencies = results.get('year_currencies', {})
+            stmt_unit_scale = results.get('unit_scale')
+            
+            print(f"  {stmt_name}: currency={stmt_currency}, unit={stmt_unit}, year_currencies={year_currencies}, unit_scale={stmt_unit_scale}")
+            
+            # Try new format first
+            if not currency and stmt_currency:
+                currency = stmt_currency
+                print(f"   Got currency from {stmt_name} (new format): {currency}")
+            elif not currency and year_currencies:
+                # Fallback to old format
+                currency = next(iter(year_currencies.values()), None)
+                print(f"   Got currency from {stmt_name} (old format): {currency}")
+            
+            if not unit_scale and stmt_unit:
+                unit_scale = stmt_unit
+                print(f"   Got unit_scale from {stmt_name} (new format): {unit_scale}")
+            elif not unit_scale and stmt_unit_scale:
+                # Fallback to old format
+                unit_scale = stmt_unit_scale
+                print(f"   Got unit_scale from {stmt_name} (old format): {unit_scale}")
+            
+            if currency and unit_scale:
+                break
+        
+        print(f"\n Final currency/unit: currency={currency}, unit_scale={unit_scale}")
+        logger.log_final_result(currency, unit_scale, source="summary_generation")
+        
+        # If still no currency/unit, show warning
+        if not currency or not unit_scale:
+            print(f" WARNING: Missing currency or unit_scale! This means extraction results don't have this info.")
+            print(f"   Check if xbrl_ui.py is correctly extracting and storing year_currencies and unit_scale.")
+        
         # Create consolidated Excel (4 sheets for Summary Generator)
-        # Use the new format with just Field Code | 2023 | 2024 columns
+        # Use the new format with Field Code | Year (Currency Unit) columns
         consolidated_bref_excel = create_consolidated_bref_excel_for_summary(
             income_fields=income_results['fields'],
             balance_fields=balance_results['fields'],
             cashflow_fields=cashflow_results['fields'],
             target_year=target_year,
-            company_name=company_name
+            company_name=company_name,
+            currency=currency,
+            unit_scale=unit_scale
         )
         
         col_download, col_generate = st.columns(2)
@@ -894,7 +952,7 @@ def _check_and_show_consolidated_download(key_prefix: str):
         # DOWNLOAD BREF BUTTON
         with col_download:
             st.download_button(
-                "📥 Download All BREF Mappings (Excel)",
+                " Download All BREF Mappings (Excel)",
                 data=consolidated_bref_excel,
                 file_name=f"BREF_All_Statements_{company_name}_{target_year}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -902,15 +960,30 @@ def _check_and_show_consolidated_download(key_prefix: str):
                 type="secondary",
                 key=f"{key_prefix}_download_all_bref_consolidated_v2"
             )
-            st.caption("📊 4 Sheets: Input - Income Statement | Input - Assets | Input - Liabilities | Input - Cash flow")
+            st.caption(" 4 Sheets: Input - Income Statement | Input - Assets | Input - Liabilities | Input - Cash flow")
         
-        # RUN SUMMARY GENERATOR BUTTON
+                # RUN SUMMARY GENERATOR BUTTON
         with col_generate:
-            if st.button("🎯 Run Summary Generator", use_container_width=True, type="primary", key=f"{key_prefix}_run_summary_generator"):
+            if st.button(" Run Summary Generator", use_container_width=True, type="primary", key=f"{key_prefix}_run_summary_generator"):
                 from src.integration.summary_integration import generate_summary_from_fields
 
                 region = income_results.get('region', 'APAC')
-                currency = "HK$m" if region == "APAC" else "USD"
+                
+                                # Build currency string from extracted currency and unit
+                # Format: "EUR thousands" or "USD millions" or "HK$m" (fallback)
+                if currency and unit_scale:
+                    # Use extracted currency and unit
+                    currency_param = f"{currency} {unit_scale}"
+                else:
+                    # Fallback to region-based default
+                    if region == "APAC":
+                        currency_param = "HK$m"
+                    elif region == "EMEA":
+                        currency_param = "EUR millions"
+                    else:  # US or unknown
+                        currency_param = "USD millions"
+                
+                print(f"\n SUMMARY GENERATION: Using currency parameter: '{currency_param}'")
     
                 with st.spinner("Generating summaries for all 3 statements..."):
                     result = generate_summary_from_fields(
@@ -920,23 +993,23 @@ def _check_and_show_consolidated_download(key_prefix: str):
                         target_year=target_year,
                         company_name=company_name,
                         region=region,
-                        currency=currency
+                        currency=currency_param
                     )
                     
                     if result.get('error'):
-                        st.error(f"❌ Error: {result['error']}")
+                        st.error(f" Error: {result['error']}")
                     else:
-                        st.success("✅ All summaries generated successfully!")
+                        st.success(" All summaries generated successfully!")
                         st.session_state[f"{key_prefix}_summary_output"] = result['complete_file']
                         st.rerun()
             
-            st.caption("🎯 Generate 3 summary sheets and create 7-sheet file")
+            st.caption(" Generate 3 summary sheets and create 7-sheet file")
         
         # SHOW SUMMARY RESULTS IF AVAILABLE
         summary_output_key = f"{key_prefix}_summary_output"
         if summary_output_key in st.session_state:
             st.markdown("---")
-            st.success("✅ Summary generation complete!")
+            st.success(" Summary generation complete!")
             
             # Display summary tables in tabs
             _display_summary_tables(st.session_state[summary_output_key], key_prefix)
@@ -948,7 +1021,7 @@ def _check_and_show_consolidated_download(key_prefix: str):
                         # DOWNLOAD COMPLETE FILE BUTTON
             with col_download:
                 st.download_button(
-                    "📥 Download Complete File (7 Sheets)",
+                    " Download Complete File (7 Sheets)",
                     data=st.session_state[summary_output_key],
                     file_name=f"Complete_Summary_{company_name}_{target_year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -959,17 +1032,17 @@ def _check_and_show_consolidated_download(key_prefix: str):
             
             # BREF FORMATTER BUTTON
             st.markdown("---")
-            st.subheader("🎨 BREF Formatter")
+            st.subheader(" BREF Formatter")
             st.info("Format the 4 input sheets with merged headers (12/31/YYYY + 12 mois + Values/Var columns)")
             
             col_format, col_download_formatted = st.columns(2)
             
             with col_format:
-                if st.button("🎨 Format BREF Excel", use_container_width=True, type="secondary", key=f"{key_prefix}_format_bref"):
+                if st.button(" Format BREF Excel", use_container_width=True, type="secondary", key=f"{key_prefix}_format_bref"):
                     with st.spinner("Formatting BREF Excel..."):
                         formatted_excel = format_bref_excel(st.session_state[summary_output_key])
                         st.session_state[f"{key_prefix}_formatted_output"] = formatted_excel
-                        st.success("✅ BREF Excel formatted successfully!")
+                        st.success(" BREF Excel formatted successfully!")
                         st.rerun()
             
             # Show download button for formatted file if available
@@ -977,7 +1050,7 @@ def _check_and_show_consolidated_download(key_prefix: str):
             if formatted_output_key in st.session_state:
                 with col_download_formatted:
                     st.download_button(
-                        "📥 Download Formatted BREF (7 Sheets)",
+                        " Download Formatted BREF (7 Sheets)",
                         data=st.session_state[formatted_output_key],
                         file_name=f"Formatted_BREF_{company_name}_{target_year}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -988,24 +1061,24 @@ def _check_and_show_consolidated_download(key_prefix: str):
                 
                                 # Display formatted preview with exact styling
                 st.markdown("---")
-                st.success("✅ Formatted BREF Excel ready!")
-                st.info("""📊 **Formatted Features:**
-                - ✅ Merged year headers (12/31/YYYY)
-                - ✅ Period labels (12 mois)
-                - ✅ Values and Var columns
-                - ✅ Automatic variance calculation
-                - ✅ Professional styling with borders""")
+                st.success(" Formatted BREF Excel ready!")
+                st.info(""" **Formatted Features:**
+                -  Merged year headers (12/31/YYYY)
+                -  Period labels (12 mois)
+                -  Values and Var columns
+                -  Automatic variance calculation
+                -  Professional styling with borders""")
                 
                 # Display formatted tables in tabs
                 _display_formatted_bref_tables(st.session_state[formatted_output_key], key_prefix)
             
             # CLEAR SUMMARY BUTTON
             with col_clear:
-                if st.button("🗑️ Clear Summary", key=f"{key_prefix}_clear_summary", use_container_width=True):
+                if st.button(" Clear Summary", key=f"{key_prefix}_clear_summary", use_container_width=True):
                     del st.session_state[summary_output_key]
                     st.rerun()
             
-            st.info("""📊 **7 Sheets:**
+            st.info(""" **7 Sheets:**
             - Input - Income Statement
             - Input - Assets
             - Input - Liabilities
@@ -1013,6 +1086,44 @@ def _check_and_show_consolidated_download(key_prefix: str):
             - Summary - Income Statement
             - Summary - Balance Sheet
             - Summary - Cash Flow""")
+            
+            # ==================================================================
+            # FINANCIAL ANALYSIS — Agentic AI
+            # Only visible after summary generation.
+            # Rendered here (after summary table) instead of at the end of main()
+            # ==================================================================
+            st.markdown("---")
+            try:
+                # Add FA directory to sys.path
+                import sys
+                import os
+                _fa_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "FA")
+                if _fa_dir not in sys.path:
+                    sys.path.insert(0, _fa_dir)
+                
+                from FA.app import main as _fa_main
+                
+                # Pass pipeline context to FA via session state
+                st.session_state._fa_company_name = company_name
+                st.session_state._fa_pipeline_summaries = {
+                    f"{key_prefix}_summary_output": st.session_state.get(summary_output_key)
+                }
+                
+                # Temporarily disable set_page_config
+                _orig_spc = st.set_page_config
+                st.set_page_config = lambda **kw: None
+                try:
+                    _fa_main()
+                finally:
+                    st.set_page_config = _orig_spc
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as e:
+                if 'Rerun' in type(e).__name__ or 'Stop' in type(e).__name__:
+                    raise
+                st.error(f"Financial Analysis module error: {e}")
+                import traceback
+                st.error(f"Traceback: {traceback.format_exc()}")
 
 def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
     """
@@ -1043,20 +1154,20 @@ def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
                 available_sheets[key] = sheet_name
         
         if not available_sheets:
-            st.warning("⚠️ No summary sheets found in the file")
+            st.warning(" No summary sheets found in the file")
             return
         
         # Create tabs
         tab_names = []
         tab_keys = []
         if 'income' in available_sheets:
-            tab_names.append("📊 Income Statement")
+            tab_names.append(" Income Statement")
             tab_keys.append('income')
         if 'balance' in available_sheets:
-            tab_names.append("📋 Balance Sheet")
+            tab_names.append(" Balance Sheet")
             tab_keys.append('balance')
         if 'cashflow' in available_sheets:
-            tab_names.append("💧 Cash Flow")
+            tab_names.append(" Cash Flow")
             tab_keys.append('cashflow')
         
         tabs = st.tabs(tab_names)
@@ -1076,11 +1187,105 @@ def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
                     st.info("No data in this sheet")
                     continue
                 
-                # Convert to DataFrame
+                                # Convert to DataFrame
                 df = pd.DataFrame(data[1:], columns=data[0])  # First row is header
 
                 # Sanitize column names (openpyxl can return None for empty headers)
                 df.columns = [str(c) if c is not None else f"col_{i}" for i, c in enumerate(df.columns)]
+                
+                # Extract currency and unit from first year column header if available
+                # Headers might be like "2024 (EUR millions)" or just "2024"
+                currency_unit_info = ""
+                if len(df.columns) > 1:  # At least Metric + 1 year column
+                    first_year_col = df.columns[1]  # Skip 'Metric' column
+                    # Check if column has currency/unit in parentheses
+                    if '(' in str(first_year_col) and ')' in str(first_year_col):
+                        # Extract the part in parentheses
+                        import re
+                        match = re.search(r'\(([^)]+)\)', str(first_year_col))
+                        if match:
+                            currency_unit_info = match.group(1)
+                
+                                                                                # If no currency/unit found in headers, try to get from session state
+                if not currency_unit_info:
+                    # Import logger
+                    from src.integration.currency_unit_logger import get_logger
+                    logger = get_logger()
+                    
+                    logger.logger.info(f"\n=== UI DISPLAY - Currency/Unit Extraction for {sheet_name} ===")
+                    logger.log_display_attempt(key_prefix, list(st.session_state.bref_mapping_results.keys()))
+                    
+                    # Map sheet names to statement types
+                    sheet_to_statement = {
+                        'Summary - Income Statement': 'income_statement',
+                        'Summary - Balance Sheet': 'balance_sheet',
+                        'Summary - Cash Flow': 'cash_flow'
+                    }
+                    
+                    # Get the statement type for this sheet
+                    statement_type = sheet_to_statement.get(sheet_name)
+                    
+                    if statement_type:
+                        # Build the correct key for this statement
+                        statement_key = f"{key_prefix}_mapping_{statement_type}"
+                        
+                        logger.logger.info(f"  Looking for key: {statement_key}")
+                        
+                        # Check if this specific statement's mapping exists
+                        if statement_key in st.session_state.bref_mapping_results:
+                            result = st.session_state.bref_mapping_results[statement_key]
+                            
+                            logger.logger.info(f"  Checking key: {statement_key}")
+                            
+                            # Try new format first (currency/unit from integration)
+                            currency = result.get('currency')
+                            unit_scale = result.get('unit')
+                            
+                            logger.logger.info(f"    New format - currency: '{currency}', unit: '{unit_scale}'")
+                            
+                            # Fallback to old format (year_currencies/unit_scale)
+                            if not currency or not unit_scale:
+                                year_currencies = result.get('year_currencies', {})
+                                old_unit_scale = result.get('unit_scale')
+                                
+                                logger.logger.info(f"    Old format - year_currencies: {year_currencies}, unit_scale: '{old_unit_scale}'")
+                                
+                                if year_currencies:
+                                    currency = next(iter(year_currencies.values()), None)
+                                if old_unit_scale:
+                                    unit_scale = old_unit_scale
+                            
+                            if currency and unit_scale:
+                                currency_unit_info = f"{currency} {unit_scale}"
+                                logger.logger.info(f"    Final: '{currency_unit_info}'")
+                        else:
+                            logger.logger.info(f"  Key not found: {statement_key}")
+                    
+                    if currency_unit_info:
+                        logger.log_final_result(currency, unit_scale, source="ui_display")
+                
+                # If still no currency/unit found, use region-based fallback
+                if not currency_unit_info:
+                    # Try to determine region from key_prefix or mapping results
+                    region = None
+                    if statement_key in st.session_state.bref_mapping_results:
+                        region = st.session_state.bref_mapping_results[statement_key].get('region')
+                    
+                    # Fallback based on region
+                    if region == 'EMEA':
+                        currency_unit_info = "Values in € millions"
+                    elif region == 'US':
+                        currency_unit_info = "Values in USD millions"
+                    elif region == 'APAC':
+                        currency_unit_info = "Values in HK$ millions"
+                    else:
+                        # If region unknown, check key_prefix for hints
+                        if 'xbrl' in key_prefix.lower() or 'emea' in key_prefix.lower():
+                            currency_unit_info = "Values in € millions"
+                        elif 'edgar' in key_prefix.lower() or 'us' in key_prefix.lower():
+                            currency_unit_info = "Values in USD millions"
+                        else:
+                            currency_unit_info = "Values in original currency"
 
                 # Sanitize text columns to native str (prevents React #185)
                 for col in df.columns:
@@ -1092,6 +1297,16 @@ def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
                             .apply(lambda v: str(v) if v is not None else '')
                         )
 
+                                # Show currency/unit information
+                st.caption(f" {currency_unit_info}")
+                
+                # Define percentage metrics (should be displayed with % symbol)
+                percentage_metrics = [
+                    'Gross Margin (%)', 'Revenues growth', 'EBITDA margin', 'EBIT margin',
+                    'Capex  (% CA)', 'EBITDA cash conversion', 'Capex Covearage ( Op.CF)',
+                    'Gross Gearing(Gross Debt/Equity)', 'Net Gearing (Net Debt/Equity)'
+                ]
+                
                 # Convert numeric columns to proper numeric type and round to 2 decimals
                 numeric_cols = []
                 for col in df.columns:
@@ -1101,9 +1316,20 @@ def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
                             numeric_cols.append(col)
                         except:
                             pass
+                
+                # Convert percentage values to display format (multiply by 100 for display)
+                # The Excel file stores percentages as decimals (0.0136 for 1.36%)
+                # We need to multiply by 100 to display as 1.36%
+                for idx, row in df.iterrows():
+                    metric_name = row.get('Metric', '')
+                    if metric_name in percentage_metrics:
+                        for col in numeric_cols:
+                            if pd.notna(df.at[idx, col]):
+                                # Multiply by 100 to convert from decimal to percentage
+                                df.at[idx, col] = df.at[idx, col] * 100
 
-                # Apply styling (Styler + column_config conflict causes React #185)
-                styled_df = _style_summary_dataframe(df, tab_key, numeric_cols)
+                # Apply styling (keep numeric values, format in display)
+                styled_df = _style_summary_dataframe(df, tab_key, numeric_cols, percentage_metrics)
 
                 st.dataframe(
                     styled_df,
@@ -1130,12 +1356,12 @@ def _display_summary_tables(excel_bytes: bytes, key_prefix: str):
         wb.close()
         
     except Exception as e:
-        st.error(f"❌ Error displaying summary tables: {e}")
+        st.error(f" Error displaying summary tables: {e}")
         import traceback
-        with st.expander("🐛 Error Details"):
+        with st.expander(" Error Details"):
             st.code(traceback.format_exc(), language="python")
 			
-def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols: list = None):
+def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols: list = None, percentage_metrics: list = None):
     """
     Apply styling to summary dataframe based on metric type.
     
@@ -1143,10 +1369,13 @@ def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols
         df: Summary dataframe
         statement_type: 'income', 'balance', or 'cashflow'
         numeric_cols: List of numeric column names
+        percentage_metrics: List of metrics that should be formatted as percentages
     
     Returns:
         Styled dataframe
     """
+    if percentage_metrics is None:
+        percentage_metrics = []
     # Define key metrics that should have purple background and bold font
     key_metrics = {
         'income': [
@@ -1232,9 +1461,28 @@ def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols
             'padding': '8px'
         }, subset=['Derivation'])
     
-    # Format numeric columns to 2 decimal places
-    if numeric_cols:
-        styled = styled.format({col: '{:.2f}' for col in numeric_cols}, na_rep='')
+    # Format numeric columns
+    # Create a formatter function for each cell based on its metric type
+    if numeric_cols and 'Metric' in df.columns:
+        # Create a copy of df for formatting to avoid modifying original
+        for col in numeric_cols:
+            # Format each cell based on its row's metric
+            for idx in df.index:
+                metric_name = df.at[idx, 'Metric']
+                val = df.at[idx, col]
+                
+                if pd.isna(val) or val == '':
+                    continue
+                    
+                try:
+                    if metric_name in percentage_metrics:
+                        # Format as percentage: "1.4%"
+                        styled = styled.format({col: '{:.1f}%'}, subset=pd.IndexSlice[idx, col])
+                    else:
+                        # Format with thousands separator: "1,234.00"
+                        styled = styled.format({col: '{:,.2f}'}, subset=pd.IndexSlice[idx, col])
+                except:
+                    pass
 
     # Style header
     styled = styled.set_table_styles([
@@ -1252,14 +1500,32 @@ def _style_summary_dataframe(df: pd.DataFrame, statement_type: str, numeric_cols
     return styled
 
 
-def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fields: list, cashflow_fields: list, target_year: int, company_name: str = "Company") -> bytes:
+def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fields: list, cashflow_fields: list, target_year: int, company_name: str = "Company", currency: str = None, unit_scale: str = None) -> bytes:
     """
     Create a 4-sheet Excel file formatted for Summary Generator input.
     Format: Simple 3-column layout (Field Code | Ref Year | Target Year)
+    
+    Args:
+        income_fields: Income statement fields
+        balance_fields: Balance sheet fields
+        cashflow_fields: Cash flow fields
+        target_year: Target year
+        company_name: Company name
+        currency: Currency code (e.g., "EUR", "USD") - optional
+        unit_scale: Unit scale (e.g., "millions", "thousands") - optional
     """
     import openpyxl
     
     ref_year = target_year - 1
+    
+    # Create currency/unit suffix if provided
+    currency_unit_suffix = ""
+    if currency and unit_scale:
+        currency_unit_suffix = f" ({currency} {unit_scale})"
+    elif currency:
+        currency_unit_suffix = f" ({currency})"
+    elif unit_scale:
+        currency_unit_suffix = f" ({unit_scale})"
     
     # Define Assets and Liabilities field codes
     assets_codes = {
@@ -1284,12 +1550,12 @@ def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fiel
     if 'Sheet' in wb.sheetnames:
         del wb['Sheet']
     
-    # Sheet 1: Input - Income Statement
+        # Sheet 1: Input - Income Statement
     if income_fields:
         ws = wb.create_sheet("Input - Income Statement", 0)
         ws['A1'] = None
-        ws['B1'] = str(ref_year)
-        ws['C1'] = str(target_year)
+        ws['B1'] = str(ref_year) + currency_unit_suffix
+        ws['C1'] = str(target_year) + currency_unit_suffix
         
         row_idx = 2
         for field in income_fields:
@@ -1304,12 +1570,12 @@ def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fiel
         
         ws.sheet_state = 'visible'
     
-    # Sheet 2: Input - Assets
+        # Sheet 2: Input - Assets
     if balance_fields:
         ws = wb.create_sheet("Input - Assets")
         ws['A1'] = None
-        ws['B1'] = str(ref_year)
-        ws['C1'] = str(target_year)
+        ws['B1'] = str(ref_year) + currency_unit_suffix
+        ws['C1'] = str(target_year) + currency_unit_suffix
         
         row_idx = 2
         for field in balance_fields:
@@ -1327,12 +1593,12 @@ def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fiel
         
         ws.sheet_state = 'visible'
     
-    # Sheet 3: Input - Liabilities
+        # Sheet 3: Input - Liabilities
     if balance_fields:
         ws = wb.create_sheet("Input - Liabilities")
         ws['A1'] = None
-        ws['B1'] = str(ref_year)
-        ws['C1'] = str(target_year)
+        ws['B1'] = str(ref_year) + currency_unit_suffix
+        ws['C1'] = str(target_year) + currency_unit_suffix
         
         row_idx = 2
         for field in balance_fields:
@@ -1350,12 +1616,12 @@ def create_consolidated_bref_excel_for_summary(income_fields: list, balance_fiel
         
         ws.sheet_state = 'visible'
     
-    # Sheet 4: Input - Cash flow
+        # Sheet 4: Input - Cash flow
     if cashflow_fields:
         ws = wb.create_sheet("Input - Cash flow")
         ws['A1'] = None
-        ws['B1'] = str(ref_year)
-        ws['C1'] = str(target_year)
+        ws['B1'] = str(ref_year) + currency_unit_suffix
+        ws['C1'] = str(target_year) + currency_unit_suffix
         
         row_idx = 2
         for field in cashflow_fields:
@@ -1444,7 +1710,7 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
             except:
                 header_row.append(None)
         
-        print(f"\n🔍 DEBUG: Sheet '{sheet_name}'")
+        print(f"\n DEBUG: Sheet '{sheet_name}'")
         print(f"  Source header row: {header_row}")
         
         # Find year columns dynamically (skip first column which is Field Code)
@@ -1464,10 +1730,10 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
                         print(f"  Found year {year} at source column {col_idx}")
         
         if not year_columns:
-            print(f"  ⚠️ WARNING: No year columns found in '{sheet_name}' - skipping formatting")
+            print(f"   WARNING: No year columns found in '{sheet_name}' - skipping formatting")
             continue  # Skip if no year columns found
         
-        print(f"  ✅ Will format {len(year_columns)} year columns")
+        print(f"   Will format {len(year_columns)} year columns")
         
                                         # In the NEW sheet, we'll create 3 header rows from scratch
         # Row 1: Date headers (12/31/YYYY)
@@ -1559,7 +1825,7 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
                         # Copy data from source sheet (starting from row 2 in source = row 4 in dest)
         # Source row 1 = header (Field Code, 2023, 2024)
         # Source row 2+ = data
-        print(f"  📋 Copying {source_ws.max_row - 1} data rows from source...")
+        print(f"   Copying {source_ws.max_row - 1} data rows from source...")
         
         for source_row_idx in range(2, source_ws.max_row + 1):
             dest_row_idx = source_row_idx + 2  # Offset by 2 (for our 3 header rows)
@@ -1580,7 +1846,7 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
                     dest_ws.cell(row=dest_row_idx, column=dest_col_idx, value=None)
         
         # Calculate variance (Var) for each row - DYNAMIC for any number of years
-        print(f"  📊 Calculating variance for {dest_ws.max_row - 3} data rows...")
+        print(f"   Calculating variance for {dest_ws.max_row - 3} data rows...")
         
         for row_idx in range(4, dest_ws.max_row + 1):
             prev_value = None
@@ -1610,7 +1876,7 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
                 
                 prev_value = current_value
         
-        print(f"  ✅ Variance calculation complete")
+        print(f"   Variance calculation complete")
         
                                 # Set column widths dynamically based on number of year columns
         dest_ws.column_dimensions['A'].width = 50  # Field Code column
@@ -1624,7 +1890,7 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
                 # Notes column width
         dest_ws.column_dimensions[get_column_letter(last_col)].width = 20
         
-        print(f"  📏 Column widths set for {len(year_columns)} year columns")
+        print(f"   Column widths set for {len(year_columns)} year columns")
         
                         # Add borders to all cells
         thin_border = Border(
@@ -1662,19 +1928,19 @@ def format_bref_excel(excel_bytes: bytes) -> bytes:
                 dest_ws.column_dimensions[col_letter].width = col_dim.width
             
             dest_ws.sheet_state = 'visible'
-            print(f"  ✅ Copied summary sheet: {sheet_name}")
+            print(f"   Copied summary sheet: {sheet_name}")
     
     # Close source workbook
     source_wb.close()
     
     # Save formatted workbook
-    print(f"\n✅ Formatting complete! Saving workbook...")
+    print(f"\n Formatting complete! Saving workbook...")
     output = io.BytesIO()
     dest_wb.save(output)
     output.seek(0)
     dest_wb.close()
     
-    print(f"✅ Formatted Excel file ready ({len(dest_wb.worksheets)} sheets)")
+    print(f" Formatted Excel file ready ({len(dest_wb.worksheets)} sheets)")
     return output.getvalue()
 
 
@@ -1697,7 +1963,7 @@ def _display_formatted_bref_tables(excel_bytes: bytes, key_prefix: str):
         available_sheets = [s for s in input_sheets if s in wb.sheetnames]
         
         if available_sheets:
-            st.markdown("### 📋 Formatted BREF Tables")
+            st.markdown("###  Formatted BREF Tables")
             tabs = st.tabs([s.replace("Input - ", "") for s in available_sheets])
             
             for tab, sheet_name in zip(tabs, available_sheets):
@@ -1783,7 +2049,7 @@ def _display_formatted_bref_tables(excel_bytes: bytes, key_prefix: str):
                     header_row = list(data[2])
                     
                     # Debug: Check data structure
-                    print(f"\n🔍 DEBUG: Sheet '{sheet_name}'")
+                    print(f"\n DEBUG: Sheet '{sheet_name}'")
                     print(f"  Header row (row 3): {header_row}")
                     print(f"  Number of columns in header: {len(header_row)}")
                     print(f"  Number of columns in data row 4: {len(data[3]) if len(data) > 3 else 0}")
@@ -1824,7 +2090,7 @@ def _display_formatted_bref_tables(excel_bytes: bytes, key_prefix: str):
                     try:
                         df = pd.DataFrame(data[3:], columns=unique_headers)
                     except Exception as e:
-                        print(f"  ❌ Error creating DataFrame: {e}")
+                        print(f"   Error creating DataFrame: {e}")
                         st.error(f"Error creating table: {e}")
                         continue
                     
@@ -1943,4 +2209,4 @@ def _display_formatted_bref_tables(excel_bytes: bytes, key_prefix: str):
         
         wb.close()
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f" Error: {e}")

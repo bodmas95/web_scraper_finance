@@ -52,7 +52,7 @@ def get_cached_reports(stock_id: str) -> Optional[List[Dict]]:
                 return None
         
         reports = cache_doc.get("reports", [])
-        print(f"✅ Retrieved {len(reports)} cached reports for stock {stock_id}")
+        print(f" Retrieved {len(reports)} cached reports for stock {stock_id}")
         return reports
         
     except Exception as e:
@@ -95,7 +95,7 @@ def cache_reports(stock_id: str, reports: List[Dict]) -> bool:
             upsert=True
         )
         
-        print(f"✅ Cached {len(reports)} reports for stock {stock_id}")
+        print(f" Cached {len(reports)} reports for stock {stock_id}")
         return True
         
     except Exception as e:
@@ -125,10 +125,10 @@ def clear_cache(stock_id: Optional[str] = None) -> bool:
         
         if stock_id:
             result = collection.delete_one({"stock_id": stock_id})
-            print(f"✅ Cleared cache for stock {stock_id}")
+            print(f" Cleared cache for stock {stock_id}")
         else:
             result = collection.delete_many({})
-            print(f"✅ Cleared all cached reports ({result.deleted_count} documents)")
+            print(f" Cleared all cached reports ({result.deleted_count} documents)")
         
         return True
         

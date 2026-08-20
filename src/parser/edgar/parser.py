@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from src.edgar_proxy_wrapper import setup_edgar_with_proxy
+setup_edgar_with_proxy()
 
 class EdgarParser:
     @staticmethod
@@ -68,17 +70,17 @@ class EdgarParser:
                     # Log what we found
                     if parsed_data["financials"]["balance_sheet"] is not None:
                         row_count = len(parsed_data["financials"]["balance_sheet"])
-                        print(f"✓ Balance sheet loaded: {row_count} rows")
+                        print(f" Balance sheet loaded: {row_count} rows")
                     if parsed_data["financials"]["income_statement"] is not None:
                         row_count = len(parsed_data["financials"]["income_statement"])
-                        print(f"✓ Income statement loaded: {row_count} rows")
+                        print(f" Income statement loaded: {row_count} rows")
                     if parsed_data["financials"]["cash_flow_statement"] is not None:
                         row_count = len(parsed_data["financials"]["cash_flow_statement"])
-                        print(f"✓ Cash flow statement loaded: {row_count} rows")
+                        print(f" Cash flow statement loaded: {row_count} rows")
                 else:
-                    print("⚠ No company data found in financials block")
+                    print(" No company data found in financials block")
             else:
-                print("⚠ No financials block found in data")
+                print(" No financials block found in data")
             
             return parsed_data
         except Exception as e:

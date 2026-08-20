@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import ssl
+import requests
 from typing import Optional, Dict, Any
 
 # Maia API Configuration
@@ -71,14 +72,26 @@ class MaiaAPIClient:
             except:
                 pass
         
-        # Create httpx client with proper proxy configuration
-        # IMPORTANT: Always use verify=False for internal .intranet domains
-        # CRITICAL: Use mounts={{}} to completely disable proxy
-        if proxy_url:
+        # CRITICAL FIX: For .intranet domains, use requests library instead of httpx
+        # httpx has issues with system-level proxies that cannot be bypassed
+        # requests library with session.trust_env=False works better
+        if ".intranet" in MAIA_API_ENDPOINT and not use_proxy:
+            logging.info("Maia API using requests library (bypassing httpx proxy issues)")
+            # Use requests library with explicit no-proxy session
+            self.use_requests = True
+            self.session = requests.Session()
+            self.session.trust_env = False  # Don't read proxy from environment
+            self.session.verify = False  # Disable SSL verification
+            self.session.proxies = {}  # Explicitly no proxy
+            self.timeout = 30.0
+            self.client = None  # Not using httpx
+        elif proxy_url:
             logging.info(f"Maia API using proxy: {proxy_url}")
+            self.use_requests = False
             self.client = httpx.Client(verify=False, proxy=proxy_url, timeout=30.0)
         else:
             logging.info("Maia API using direct connection (no proxy)")
+            self.use_requests = False
             # Use mounts={{}} to completely bypass proxy (like we do for Gemma)
             self.client = httpx.Client(verify=False, mounts={}, timeout=30.0)
         
@@ -93,11 +106,23 @@ class MaiaAPIClient:
             if json_data:
                 logging.debug(f"Request payload: {json.dumps(json_data, indent=2)[:500]}")
             
-            response = self.client.request(method, url, headers=headers, json=json_data, 
-                                          data=data, timeout=timeout)
+            # CRITICAL: Use requests library for .intranet domains to bypass proxy
+            if self.use_requests:
+                logging.debug("Using requests library (trust_env=False, proxies={})")
+                response = self.session.request(
+                    method, url, 
+                    headers=headers, 
+                    json=json_data, 
+                    data=data, 
+                    timeout=timeout or self.timeout
+                )
+            else:
+                response = self.client.request(method, url, headers=headers, json=json_data, 
+                                              data=data, timeout=timeout)
+            
             response.raise_for_status()
             return response.json()
-        except httpx.HTTPStatusError as e:
+        except (httpx.HTTPStatusError, requests.HTTPError) as e:
             # Try to parse JSON error, but handle cases where response is not JSON (e.g., proxy errors)
             try:
                 error_detail = e.response.json()
@@ -107,7 +132,7 @@ class MaiaAPIClient:
                 logging.error(f"Maia API request failed: {e.response.status_code}, Response: {e.response.text[:500]}")
                 logging.error(f"Request payload was: {json.dumps(json_data, indent=2) if json_data else 'None'}")
             raise Exception(f"Maia API error: {e.response.status_code} - Check request payload and credentials")
-        except httpx.ConnectError as e:
+        except (httpx.ConnectError, requests.ConnectionError) as e:
             logging.error(f"Maia API connection error: {str(e)}")
             raise Exception(f"Cannot connect to Maia API. Check proxy settings: {str(e)}")
         except Exception as e:

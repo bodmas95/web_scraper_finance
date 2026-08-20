@@ -78,10 +78,11 @@ MIN_TABLE_ROWS = 5
 
 # Maps the statement_type selector value to the corresponding BREF Excel sheet.
 # Add entries here when new statement types are supported.
+# Note: Sheet names must match exactly with the Excel template
 STATEMENT_SHEET_MAP = {
     "income_statement": "Input - Income Statement",
-    "balance_sheet": "Input - Balance Sheet",
-    "cash_flow": "Input - Cash Flow Statement",
+    "balance_sheet": "Input - Assets",  # KLN template uses 'Input - Assets' for balance sheet
+    "cash_flow": "Input - Cash flow",  # Note: lowercase 'flow' in KLN template
 }
 
 # ---------------------------------------------------------------------------
@@ -98,7 +99,7 @@ COL_REF_VALUE = 3   # C — Reference year value (2023 for target_year=2024)
 COL_OUTPUT = 4      # D — Extracted target year value (2024) - written by this tool
 COL_CONFIDENCE = 5  # E — Mapping confidence score - written by this tool
 
-DATA_START_ROW = 5  # Data starts at row 5 (rows 1-4 are headers)
+DATA_START_ROW = 4  # Data starts at row 4 (rows 1-3 are headers)
 
 # ---------------------------------------------------------------------------
 # PREVIOUS CONFIG (for reference - BREF_Template_NextEra_2024.xlsx)

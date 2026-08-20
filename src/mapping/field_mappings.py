@@ -82,6 +82,7 @@ INCOME_STATEMENT_FIELDS = {
         "Costs and expenses",
         "Total costs and expenses",
         "COGS",
+        "Service Maintenance Expense"
     ],
         "calculation": None,
         "is_calculated": False,
@@ -108,8 +109,8 @@ INCOME_STATEMENT_FIELDS = {
         "Corporate Expenses",
         "Commercial Expenses",
     ],
-        "calculation": None,
-        "is_calculated": False,
+        "calculation": "I48+I49+I53",
+        "is_calculated": True,
         "indent_level": 0
     },
 
@@ -123,6 +124,7 @@ INCOME_STATEMENT_FIELDS = {
         "General & Administrative Expenses (SG&A Expenses)",
         "Corporate Expenses",
         "Overhead Costs",
+        "General and Administrative"
     ],
         "calculation": None,
         "is_calculated": False,
@@ -610,6 +612,14 @@ INCOME_STATEMENT_FIELDS = {
         "indent_level": 0
     },
 
+      "I23 | Income attributable to Non-controlling interests": 
+    {
+        "aliases": [],
+        "calculation": None,
+        "is_calculated": False,
+        "indent_level": 0
+    }
+
 }
 
 
@@ -649,14 +659,14 @@ BALANCE_SHEET_FIELDS = {
 
     # CALCULATED FIELD - Commented out (formula: see calculation field)
     "B18 | Net Cash and cash equivalents (incl. marketable securities & excl. overdrafts)": {
-            "aliases": [],
+            "aliases": ["Net cash and bank deposits (excluding overdrafts)", "Cash and bank deposits (excluding overdrafts)", "Cash and cash equivalents (excluding bank overdrafts)", "Cash and cash equivalents", "Cash and bank balances", "Cash at bank and in hand", "Cash and short‑term deposits", "Cash and term deposits (short‑term)", "Cash and bank accounts", "Cash on hand and at bank", "Bank deposits (current, unrestricted)", "Cash balance (excluding overdrafts)", "Cash and restricted cash (if grouped)", "Cash equivalents (money market funds, etc.)"],
             "calculation": "B150+B148+B17+B149",
             "is_calculated": True,
         "indent_level": 0
         },
 
     "B46 | Available-for-sale (AFS)": {
-        "aliases": [],
+        "aliases": ["Assets held for sale", "Assets classified as held for sale", "Non‑current assets held for sale", "Disposal group assets held for sale", "Assets of disposal groups classified as held for sale", "Assets of disposal group", "Held‑for‑sale assets", "Assets held‑for‑sale / available‑for‑sale", "Assets available for sale (legacy phrasing)", "Available‑for‑sale assets (non‑current)", "Assets held for sale and discontinued operations", "Assets associated with discontinued operations (held for sale)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -744,7 +754,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B98 | Other current operating assets": {
-        "aliases": [],
+        "aliases": ["Other current operating assets", "Other current assets (operating)", "Other current non‑financial assets", "Current operating assets – other", "Miscellaneous current operating assets", "Sundry current operating assets", "Other current receivables (operating)", "Other current non‑trade receivables", "Prepayments and other current assets", "Prepaid expenses (current) and other current assets", "Prepaid operating expenses (current)", "Other current operating receivables", "Other current operating prepayments", "Other current assets – non‑financial", "Other current assets (excluding cash and financial)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -765,7 +775,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B41 | Current financial assets (incl. Derivatives) - Net": {
-        "aliases": [],
+        "aliases": ["Current financial assets", "Short‑term financial assets", "Financial assets – current", "Financial assets – short‑term", "Current investments", "Short‑term investments", "Marketable securities – current", "Trading securities – current", "Financial instruments – current assets", "Derivative financial assets – current", "Derivative assets – current", "Hedging instruments – assets (current)", "Current loans and receivables (financial)", "Short‑term loans and receivables (financial)", "Current financial assets at fair value", "Current financial assets held for trading", "Current financial investments"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -807,14 +817,14 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B43 | o/w Provisions for current financial assets": {
-        "aliases": [],
+        "aliases": ["Provisions for current financial assets", "Provision for impairment of current financial assets", "Provision for expected credit losses – current financial assets", "Allowance for impairment of current financial assets", "Allowance for losses on current financial assets", "Loss allowance – current financial assets", "Provision for doubtful financial assets (current)", "Provision for impairment – current investments", "Provision for impairment – current loans and receivables", "Provision for impairment – current marketable securities", "Provision for impairment of short‑term financial assets", "Impairment reserve for current financial assets"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 1
     },
 
     "B40 | Deferred and refundable incomes taxes": {
-        "aliases": [],
+        "aliases": ["Current tax asset to recover", "Current income tax receivable", "Income tax receivable – current", "Current tax receivables", "Tax receivables – current", "Taxes recoverable – current", "Recoverable income taxes – current", "Corporate income tax receivable (current)", "Current tax assets", "Current tax assets – income tax", "Current tax refunds receivable", "Income tax recoverable (current)", "Tax credit receivable (current, income tax)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -829,7 +839,7 @@ BALANCE_SHEET_FIELDS = {
         },
 
     "B4 | Fixed assets": {
-        "aliases": [],
+        "aliases": ["Property, plant and equipment", "PPE", "Tangible assets", "Tangible fixed assets", "Fixed assets – tangible", "Land, buildings, plant and equipment", "Plant and equipment", "Buildings and machinery", "Property and equipment", "Property, plant and machinery", "Net property, plant and equipment", "Property, plant and equipment, net", "Net tangible assets (if used specifically for PPE)", "Non‑current tangible assets", "Operating fixed assets", "Industrial fixed assets", "Right‑of‑use assets", "Right of use assets", "Right‑of‑use asset", "Right of use asset", "Lease right‑of‑use assets", "Lease assets – right‑of‑use", "Leased right‑of‑use assets", "Assets under lease (right‑of‑use)", "ROU assets", "ROU asset", "Use‑of‑asset rights (lease)", "Right‑of‑use property, plant and equipment", "Right‑of‑use PPE", "Right‑of‑use buildings", "Right‑of‑use land and buildings", "Right‑of‑use vehicles", "Right‑of‑use equipment", "Right‑of‑use assets – non‑current", "Lease assets recognized under IFRS 16", "Lease assets recognized under ASC 842"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -886,7 +896,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B22 | Investment properties, net": {
-        "aliases": [],
+        "aliases": ["Investment properties", "Investment property", "Properties held for investment", "Real estate investments", "Property investments", "Properties held to earn rentals", "Properties held for capital appreciation", "Real estate held for investment", "Investment real estate", "Non‑current investment properties", "Investment properties, net", "Investment property, net book value"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -907,7 +917,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B26 | o/w new investment properties": {
-        "aliases": [],
+        "aliases": ["Investment property"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 1
@@ -921,7 +931,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B3 | Other assets and Intangible - Net": {
-        "aliases": [],
+        "aliases": ["Other intangible assets, net", "Intangible assets (excluding goodwill)", "Intangible assets, net", "Net intangible assets", "Intangible assets – other", "Other intangibles, net book value", "Intangible fixed assets (excluding goodwill)", "Intangible assets – software, licenses, patents, trademarks", "Software and other intangible assets", "Licences, patents, trademarks and similar rights", "Capitalised development costs (intangible assets)", "Intangible operating assets (excluding goodwill)", "Intangible non‑current assets (other)", "Other intangible non‑current assets"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -956,7 +966,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B48 | Employee benefits": {
-        "aliases": [],
+        "aliases": ["Employee benefits (assets)", "Employee benefit assets", "Net defined benefit asset", "Surplus of defined benefit plan", "Pension plan assets (net)", "Retirement benefit assets", "Asset for employee benefits", "Employee benefit plan surplus", "Reimbursement rights under employee benefit plans", "Non‑current employee benefit assets", "Long‑term employee benefit assets"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -964,7 +974,7 @@ BALANCE_SHEET_FIELDS = {
 
     "B47 | Non current financial assets (incl derivatives & hedging financial instruments)": 
     {
-        "aliases": ['Other Financial Assets', 'Derivative Assets'],
+        "aliases": ["Other Financial Assets", "Derivative Assets","Non‑current financial assets", "Long‑term financial assets", "Financial assets – non‑current", "Financial assets – long‑term", "Non‑current investments", "Long‑term investments", "Non‑current loans and receivables (financial)", "Long‑term loans and receivables", "Non‑current marketable securities", "Long‑term marketable securities", "Non‑current financial investments", "Derivative financial assets – non‑current", "Derivative assets – non‑current", "Hedging instruments – assets (non‑current)", "Financial instruments – non‑current assets", "Financial assets at fair value (non‑current)", "Available‑for‑sale financial assets – non‑current (legacy term)", "Held‑to‑maturity investments – non‑current", "Other non‑current financial assets"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -985,7 +995,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "B9 | Investments in subsidiaries or non-controlled affiliates": {
-        "aliases": [],
+        "aliases": ["Equity affiliates (net)", "Investments in equity affiliates (net)", "Investments in associates (net)", "Investments in joint ventures (net)", "Investments in associates and joint ventures (net)", "Investments in equity‑accounted investees (net)", "Equity‑accounted investments (net)", "Non‑consolidated investments (equity method)", "Non‑consolidated affiliates – investments and loans (net)", "Investments in related companies (equity affiliates)", "Investments in associated companies (net)", "Investments in jointly controlled entities (net)", "Loans to equity affiliates (net)", "Loans to associates and joint ventures (net)", "Investments and loans to affiliates (net)", "Affiliated companies – investments and loans (net)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -993,14 +1003,14 @@ BALANCE_SHEET_FIELDS = {
 
     "B10 | Other assets or investments": 
     {
-        "aliases": ['Investments', 'Other non-current assets','Other noncurrent assets, net of allowance of $9 and $77, respectively'],
+        "aliases": ["Investments", "Other non-current assets","Other noncurrent assets", "net of allowance of $9 and $77, respectively","Other non‑current assets", "Non‑current assets – other", "Other long‑term assets", "Long‑term assets – other", "Miscellaneous non‑current assets", "Sundry non‑current assets", "Other non‑current operating assets", "Other non‑current receivables", "Other long‑term receivables", "Other long‑term prepayments", "Other long‑term deposits and guarantees (assets)", "Other non‑current deferred charges", "Other non‑current assets (net)", "Non‑current sundry assets"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "B45 | Non current deferred & refundable income taxes": {
-        "aliases": [],
+        "aliases": ["Deferred tax assets and tax receivables", "Deferred tax assets and income tax receivables", "Deferred tax assets and recoverable taxes", "Deferred income tax assets and tax receivables", "Deferred tax assets and taxes recoverable", "Deferred tax assets", "Deferred income tax assets", "Tax receivables", "Income tax receivables", "Recoverable income taxes", "Recoverable tax assets", "Tax assets – deferred and current receivables", "Deferred tax and tax receivables", "Deferred tax assets and other tax assets", "Deferred tax assets and tax credits", "Deferred tax assets and recoverable VAT/GST (if grouped)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1021,10 +1031,10 @@ BALANCE_SHEET_FIELDS = {
             "is_calculated": True,
         "indent_level": 0
         },
-
+#### Liabiilities Section US ######
     "L22 | Short-term debt < 1 yr , including current maturities of LT debt": 
     {
-        "aliases": ['Financial Debt', 'Bank debt', 'Bonds', 'Lease Liabilities'],
+        "aliases": ["Financial Debt", "Bank debt", "Bonds", "Lease Liabilities","Short‑term borrowings", "Short‑term debt", "Commercial paper", "Current borrowings", "Current financial liabilities – borrowings", "Bank overdrafts and short‑term borrowings", "Bank overdrafts (if not treated as cash)", "Short‑term bank loans", "Short‑term bank borrowings", "Current portion of long‑term debt", "Current portion of long‑term borrowings", "Current maturities of long‑term debt", "Current maturities of long‑term borrowings", "Current portion of loans payable", "Current portion of bank loans", "Current portion of bonds payable", "Current portion of notes payable", "Current installment of long‑term loans", "Current portion of debentures", "Current portion of term loans", "Short‑term portion of interest‑bearing debt", "Debt due within one year", "Borrowings due within 12 months", "Loans due within one year", "Current financial borrowings", "Current interest‑bearing liabilities", "Current financial obligations – borrowings", "Short‑term interest‑bearing loans and borrowings", "Bank overdraft", "Bank overdrafts", "Overdrafts with banks", "Bank overdraft facility used", "Overdrawn bank accounts", "Cash at bank – overdrawn", "Bank current account overdraft", "Overdrawn current accounts", "Short‑term bank overdraft", "Bank overdraft – current liability", "Overdrafts and short‑term borrowings (if combined)", "Bank overdraft balances (liabilities)", "Bank overdraft and similar facilities", "Current portion of long‑term debt", "Current portion of long‑term borrowings", "Current maturities of long‑term debt", "Current maturities of long‑term borrowings", "Current portion of loans payable (long‑term loans)", "Current portion of bank loans (long‑term)", "Current portion of bonds payable (long‑term bonds)", "Current portion of debentures (long‑term debentures)", "Current portion of notes payable (long‑term notes)", "Current portion of term loans", "Long‑term debt due within one year", "Long‑term borrowings due within one year", "Installments of long‑term debt due in the next year", "Next‑year maturities of long‑term loans", "Short‑term portion of long‑term borrowings", "Short‑term portion of long‑term debt", "Finance lease liabilities – current", "Capital lease obligations – current", "Capital lease liabilities – current", "Lease liabilities – current (finance leases)", "Current portion of finance lease liabilities", "Current portion of capital lease obligations", "Current portion of lease liabilities (finance/capital)", "Short‑term finance lease liabilities", "Short‑term capital lease obligations", "Current lease obligations (finance/capital)", "Lease payments due within one year – principal (finance leases)", "Current portion of lease debt (finance leases)", "Finance lease debt – current", "Capital lease debt – current", "Discounted bills (current)", "Discounted trade bills", "Discounted bills of exchange", "Discounted promissory notes", "Bills discounted with banks", "Bills of exchange discounted", "Discounted receivables (with recourse)", "Factored receivables with recourse (if labelled as discounted bills)", "Discounted trade notes", "Discounted customer bills", "Discounted bills payable (if treated as borrowing)", "Short‑term borrowings – discounted bills", "Bills discounting facility", "Trade bill discounting", "Plain vanilla bonds (current)", "Bonds payable – current portion", "Bonds – current portion", "Straight bonds (current portion)", "Non‑convertible bonds – current portion", "Non‑derivative bonds – current portion", "Standard bonds (current portion)", "Plain vanilla notes (current)", "Plain vanilla debentures (current)", "Current portion of bonds", "Current portion of debentures", "Current portion of notes payable (bond‑type)", "Short‑term bonds payable", "Short‑term debentures", "Short‑term notes (bond‑type)", "Bonds due within one year", "Debentures due within one year", "Notes due within one year (fixed‑rate / plain vanilla)", "Hybrid borrowings (current)", "Hybrid debt (current)", "Hybrid instruments (current liabilities)", "Convertible bonds (current portion)", "Convertible debt (current portion)", "Convertible notes (current portion)", "Convertible loan notes (current portion)", "Convertible securities (current liability portion)", "Convertible debentures (current portion)", "Hybrid capital instruments (current liabilities)", "Perpetual and other hybrid instruments (current portion, if classified as debt)", "Current portion of convertible bonds", "Current portion of convertible debt", "Current portion of hybrid borrowings", "Short‑term convertible debt", "Short‑term convertible bonds", "Short‑term hybrid debt instruments", "Subordinated debt (current)", "Subordinated borrowings (current)", "Subordinated loans (current)", "Subordinated liabilities (current)", "Short‑term subordinated debt", "Short‑term subordinated borrowings", "Subordinated notes (current)", "Subordinated bonds (current portion)", "Subordinated loan notes (current)", "Junior debt (current)", "Junior subordinated debt (current)", "Debt subordinated to other creditors (current)", "Subordinated financial liabilities – current", "Subordinated interest‑bearing liabilities – current"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1088,14 +1098,14 @@ BALANCE_SHEET_FIELDS = {
 
     "L75 | Accrued and other current liabilities": 
     {
-        "aliases": ['Accrued expenses', 'Other current liabilities', 'Derivative Liabilities', 'loans from shareholders/related entities'],
+        "aliases": ['Accrued expenses', 'Other current liabilities', 'Derivative Liabilities', 'loans from shareholders/related entities',"Accrued and other current liabilities", "Other current liabilities and accruals", "Accrued liabilities", "Accrued expenses", "Accrued charges", "Accrued operating expenses", "Other current liabilities", "Miscellaneous current liabilities", "Sundry current liabilities", "Other payables and accrued expenses (if not strictly trade)", "Accruals and deferred income (current)", "Accrued payroll and related liabilities", "Accrued employee benefits (current portion)", "Accrued interest (current, non‑debt classification)", "Accrued taxes (non‑income tax, e.g., VAT, GST)", "Accrued utilities, rent, etc.", "Accrued costs and other current liabilities", "Other accrued liabilities", "Other short‑term liabilities", "Current accrued and other liabilities", "Current accrued liabilities"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "L72 | Provisions for current liabilities":  {
-        "aliases": [],
+        "aliases": ["Provisions for current liabilities", "Current provisions", "Short‑term provisions", "Provisions (current portion)", "Current portion of provisions", "Provisions for warranties (current)", "Provision for warranty obligations – current", "Provisions for restructuring (current portion)", "Restructuring provision – current", "Provisions for legal claims (current portion)", "Legal provision – current", "Provisions for onerous contracts (current portion)", "Onerous contract provision – current", "Provision for environmental liabilities (current portion)", "Provision for employee benefits (current portion)", "Current provisions and contingent liabilities (when grouped)", "Provisions for risks and charges – current", "Short‑term provisions for risks and charges", "Other current provisions"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1117,14 +1127,14 @@ BALANCE_SHEET_FIELDS = {
 
     "L21 | Trade Accounts payable / Creditors": 
     {
-        "aliases": ['Trade Creditors', 'Accounts Payables','Accounts payable'],
+        "aliases": ['Trade Creditors', 'Accounts Payables','Accounts payable',"Trade accounts payable", "Trade payables", "Accounts payable – trade", "Trade creditors", "Sundry creditors (trade)", "Suppliers' payables", "Payables to suppliers", "Trade and other payables (trade portion)", "Bills payable (trade)", "Notes payable to suppliers", "Trade accounts and notes payable", "Trade accounts payable and accrued trade expenses", "Trade payables and accrued expenses (where clearly trade‑related)", "Commercial payables", "Trade liabilities"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "L116 | Other payables / creditors": {
-        "aliases": [],
+        "aliases": ["Other payables", "Non‑trade payables", "Sundry creditors (non‑trade)", "Other creditors", "Other current payables", "Miscellaneous payables", "Payables to employees (non‑wage accruals)", "Payables to related parties (non‑trade)", "Payables to group companies (non‑trade)", "Payables to directors/shareholders (non‑trade)", "Payables for taxes (excluding income tax if separately disclosed)", "VAT/GST payables (when grouped in other payables)", "Social security and pension payables", "Statutory dues payable", "Other liabilities – current (non‑trade)", "Other operating payables (non‑trade)", "Other short‑term payables", "Other current obligations (non‑trade)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1145,7 +1155,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "L70 | Current income tax liabilities (tax payable + deferrred tax)": {
-        "aliases": [],
+        "aliases": ["Current income tax liabilities", "Income taxes payable (current)", "Income tax payable", "Corporate income tax payable", "Current tax liabilities", "Current income tax payables", "Current tax payable", "Taxes on income payable (current)", "Provision for income tax (current)", "Taxation payable (income tax – current)", "Income tax due within one year", "Short‑term income tax liabilities", "Current liabilities – income tax", "Current income tax obligations"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1166,7 +1176,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "L26 | Others financial liabilities & FV of financial instruments": {
-        "aliases": [],
+        "aliases": ["Other financial liabilities (current)", "Other current financial liabilities", "Other financial liabilities – short‑term", "Financial liabilities at fair value (current)", "Financial instruments at fair value (liabilities, current)", "Derivative financial liabilities (current)", "Derivative instruments – liabilities (current)", "Derivative liabilities – current", "Fair value of financial instruments (liabilities, current)", "Fair value of derivatives – current liabilities", "Financial liabilities measured at fair value (current)", "Other current financial obligations", "Other current interest‑bearing financial liabilities (non‑borrowings)", "Current liabilities – hedging instruments", "Liabilities arising from hedging instruments (current)", "Liabilities from financial guarantees (current)", "Contingent consideration (current, financial liability)", "Other current financial instruments (liabilities)", "Other short‑term financial liabilities", "Miscellaneous current financial liabilities"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1187,7 +1197,7 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "L69 | Liabilities classified as held for sale": {
-        "aliases": [],
+        "aliases": ["Liabilities classified as held for sale", "Liabilities of disposal groups classified as held for sale", "Liabilities associated with assets held for sale", "Liabilities of assets held for sale", "Liabilities related to disposal group held for sale", "Liabilities held for sale", "Held‑for‑sale liabilities", "Liabilities of discontinued operations (held for sale)", "Liabilities associated with discontinued operations (held for sale)", "Liabilities of disposal group", "Disposal group liabilities – held for sale", "Non‑current liabilities classified as held for sale (if specified)", "Current liabilities classified as held for sale (if specified)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1203,7 +1213,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L15 | Long-term debt, less current maturities": 
     {
-        "aliases": ['Bank Debt', 'Bonds', 'Lease Liabilities'],
+        "aliases": ["Bank Debt", "Bonds", "Lease Liabilities","Long‑term borrowings", "Long‑term debt", "Non‑current borrowings", "Non‑current financial liabilities – borrowings", "Non‑current interest‑bearing liabilities", "Long‑term loans", "Long‑term bank loans", "Long‑term bank borrowings", "Long‑term loans payable", "Long‑term notes payable", "Long‑term bonds payable", "Bonds payable (non‑current)", "Debentures (non‑current)", "Loan notes (non‑current)", "Term loans (non‑current portion)", "Non‑current portion of borrowings (excluding current maturities)", "Non‑current portion of loans payable", "Non‑current portion of bank loans", "Non‑current portion of bonds / debentures", "Interest‑bearing borrowings – non‑current", "Debt due after one year", "Borrowings due after 12 months", "Loans due after one year", "Long‑term interest‑bearing debt", "Long‑term financial obligations", "Long‑term financing liabilities", "Finance lease liabilities – non‑current", "Capital lease obligations – non‑current", "Capital lease liabilities – non‑current", "Lease liabilities – non‑current (finance/capital)", "Long‑term finance lease liabilities", "Long‑term capital lease obligations", "Non‑current portion of finance lease liabilities", "Non‑current portion of capital lease obligations", "Non‑current portion of lease liabilities (finance/capital)", "Lease obligations due after one year – finance leases", "Long‑term lease debt (finance leases)", "Finance lease debt – non‑current", "Capital lease debt – non‑current", "Plain vanilla bonds (non‑current)", "Bonds payable – non‑current", "Bonds – non‑current", "Straight bonds (non‑current)", "Non‑convertible bonds (non‑current)", "Non‑derivative bonds (non‑current)", "Standard bonds (non‑current)", "Plain vanilla debentures (non‑current)", "Plain vanilla notes (non‑current)", "Long‑term bonds payable", "Long‑term debentures", "Long‑term notes payable (bond‑type)", "Bonds due after one year", "Debentures due after one year", "Notes due after one year (fixed‑rate, plain vanilla)", "Medium‑term notes (non‑current portion)", "Senior unsecured bonds (non‑current)", "Hybrid borrowings (non‑current)", "Hybrid debt (non‑current)", "Hybrid financial instruments (non‑current liabilities)", "Hybrid capital instruments (non‑current liabilities)", "Convertible bonds (non‑current)", "Convertible debt (non‑current)", "Convertible notes (non‑current)", "Convertible loan notes (non‑current)", "Convertible debentures (non‑current)", "Convertible securities (liability component, non‑current)", "Long‑term convertible bonds", "Long‑term convertible debt", "Long‑term hybrid borrowings", "Long‑term hybrid capital instruments (classified as debt)", "Perpetual notes (liability‑classified hybrids)", "Perpetual bonds (hybrid liabilities)", "Mezzanine debt instruments (if labelled hybrid borrowings)", "Subordinated debt (non‑current)", "Subordinated borrowings (non‑current)", "Subordinated loans (non‑current)", "Subordinated liabilities (non‑current)", "Long‑term subordinated debt", "Long‑term subordinated borrowings", "Subordinated notes (non‑current)", "Subordinated bonds (non‑current)", "Subordinated loan notes (non‑current)", "Junior debt (non‑current)", "Junior subordinated debt (non‑current)", "Perpetual subordinated debt (if classified as liability)", "Debt subordinated to other creditors (non‑current)", "Subordinated financial liabilities – non‑current", "Subordinated interest‑bearing liabilities – non‑current"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1266,21 +1276,21 @@ BALANCE_SHEET_FIELDS = {
     },
 
     "L16 | Deferred income tax liabilities and non-current tax liabilities": {
-        "aliases": [],
+        "aliases": ["Deferred income tax liabilities", "Deferred tax liabilities", "Deferred taxation liabilities", "Deferred income taxes (liabilities)", "Deferred income tax – non‑current", "Non‑current tax liabilities", "Non‑current income tax liabilities", "Long‑term tax liabilities", "Long‑term income tax liabilities", "Deferred tax – liabilities (non‑current)", "Deferred tax liabilities and non‑current tax liabilities", "Deferred income taxes and long‑term tax liabilities", "Deferred tax obligations", "Future income tax liabilities", "Provision for deferred tax (liabilities)", "Deferred taxation – non‑current liabilities"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "L59 | Employees' postretirement benefits obligation û Pension and Health Care": {
-        "aliases": [],
+        "aliases": ["Provisions for pensions and employee benefits", "Pension provisions", "Provision for pensions", "Pension liabilities", "Retirement benefit obligations", "Post‑employment benefit obligations", "Defined benefit obligation (DBO)", "Defined benefit pension liabilities", "Employee benefit obligations – non‑current", "Non‑current employee benefit obligations", "Long‑term employee benefit liabilities", "Long‑term employee benefit provisions", "Provisions for employee benefits – non‑current", "Provision for post‑employment benefits", "Provision for retirement benefits", "Provision for gratuity (non‑current portion)", "Provision for long‑service awards (non‑current)", "Provision for other long‑term employee benefits", "Pension and other employee benefit obligations", "Pension and other long‑term employee benefit provisions"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "L17 | Other LT provisions for liabilities & charges": {
-        "aliases": [],
+        "aliases": ["Other non‑current provisions", "Other long‑term provisions", "Non‑current provisions (other)", "Long‑term provisions (other)", "Provisions for risks and charges – non‑current", "Provisions for risks and charges – long‑term", "Provisions for restructuring (non‑current portion)", "Restructuring provision – non‑current", "Provisions for legal claims (non‑current portion)", "Legal provisions – non‑current", "Provisions for environmental liabilities (non‑current)", "Environmental provision – non‑current", "Provisions for onerous contracts (non‑current)", "Onerous contract provisions – non‑current", "Provisions for guarantees (non‑current)", "Guarantee provisions – non‑current", "Other long‑term risk provisions", "Other provisions for contingencies – non‑current", "Other provisions – long‑term"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1288,7 +1298,7 @@ BALANCE_SHEET_FIELDS = {
 
     "L18 | Other LT liabilities": 
     {
-        "aliases": ['Other non-current liabilities', 'Derivative Liabilities', 'Other Financial Liabilities', 'Loans from shareholders/related parties','Other noncurrent liabilities'],
+        "aliases": ["Other non-current liabilities", "Derivative Liabilities", "Other Financial Liabilities", "Loans from shareholders/related parties','Other noncurrent liabilities","Other non‑current liabilities", "Other long‑term liabilities", "Non‑current liabilities – other", "Long‑term liabilities – other", "Miscellaneous non‑current liabilities", "Miscellaneous long‑term liabilities", "Other non‑current financial liabilities (non‑borrowings)", "Other long‑term financial liabilities", "Non‑current deferred income", "Deferred income – non‑current", "Long‑term deferred revenue", "Long‑term contract liabilities", "Non‑current lease liabilities (if not separately presented)", "Long‑term lease obligations (if grouped)", "Non‑current liabilities to related parties (non‑trade)", "Long‑term payables to related parties", "Long‑term liabilities – government grants (deferred)", "Long‑term liabilities – contingent consideration", "Other non‑current obligations", "Other long‑term obligations"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1574,7 +1584,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF35bis | Gross interests (cash)": 
     {
-        "aliases": ['Cash interest paid'],
+        "aliases": ["Cash interest paid","Gross interest (cash)", "Gross interests (cash)", "Interest (cash basis)", "Interest (cash)", "Interest paid and received (gross)", "Interest paid (cash)", "Interest received (cash)", "Interest expense (cash paid)", "Interest income (cash received)", "Cash interest expense", "Cash interest income", "Cash interest flows", "Finance costs (cash)", "Finance income (cash)", "Cash finance costs", "Cash finance income", "Interest on borrowings paid (cash)", "Interest on loans paid (cash)", "Interest on bonds paid (cash)", "Interest on debt paid (cash)", "Interest on bank loans paid (cash)", "Interest received on deposits (cash)", "Interest received on investments (cash)", "Interest received on loans granted (cash)", "Net interest (cash basis)", "Interest and similar charges (cash)", "Interest and similar income (cash)", "Cash flows from interest (gross)", "Cash interest paid and received"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1597,21 +1607,21 @@ CASH_FLOW_FIELDS = {
         },
 
     "ACF39 | Decrease (increase) in inventories": {
-        "aliases": [],
+        "aliases": ["(Increase) / decrease in inventory", "(Increase) / decrease in stock", "Change in inventories", "Movement in goods and materials", "Change in raw materials, work in progress and finished goods"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "ACF40 | Decrease (increase) in trade receivables": {
-        "aliases": [],
+        "aliases": ["(Increase) / decrease in trade receivables", "(Increase) / decrease in accounts receivable", "Movement in debtors", "Change in customers receivables", "Change in trade and other receivables", "(Increase) / decrease in bills receivable"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "ACF41 | Increase (decrease) in trade payables": {
-        "aliases": [],
+        "aliases": ["(Increase) / decrease in trade payables", "Change in accounts payable", "Movement in creditors", "Change in suppliers", "Change in trade and other payables", "(Increase) / decrease in bills payable"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1619,7 +1629,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF42 | Changes in other assets and liabilities": 
     {
-        "aliases": ['Change in deferred taxes/liabilities', 'other changes'],
+        "aliases": ["Change in deferred taxes/liabilities", "other changes","Change in other receivables", "Change in non‑trade receivables", "Change in prepayments", "Change in advances", "Change in tax receivables (income tax, VAT, GST)", "Change in sundry debtors (non‑trade)","Change in other payables", "Change in accrued liabilities", "Change in accruals", "Change in non‑trade creditors", "Change in tax payables (income tax, VAT, GST)", "Change in employee benefit payables", "Change in sundry creditors"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1627,7 +1637,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF43 | Others": 
     {
-        "aliases": ['Cash taxes', 'cash tax payments'],
+        "aliases": ["Cash taxes", "cash tax payments","Income tax paid", "Corporate tax paid", "Taxes on income paid", "Taxation paid", "Payment of income taxes", "Net income tax paid (including refunds)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1650,7 +1660,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF44 | (Purchases) sales of property, plant and equipment": 
     {
-        "aliases": ['Additions to tangible/intangible assets', 'Capital Expenditure'],
+        "aliases": ["Additions to tangible/intangible assets", "Capital Expenditure","Purchases and sales of property, plant and equipment", "Purchases and disposals of property, plant and equipment", "Purchases/(sales) of property, plant and equipment", "Acquisitions and disposals of property, plant and equipment", "Additions and disposals of property, plant and equipment", "Purchase and sale of fixed assets", "Purchases and sales of fixed assets", "Purchase/(sale) of fixed assets", "Acquisition and disposal of fixed assets", "Capital expenditure and disposals of PPE", "Investments in property, plant and equipment", "Investments in and sales of fixed assets", "Purchase/(disposal) of tangible fixed assets", "Movements in property, plant and equipment (purchases and disposals)", "Movements in fixed assets (purchases and sales)", "Capital work‑in‑progress (CWIP)", "Construction in progress (CIP)", "Assets under construction", "Work in progress – capital projects", "Projects under development", "Purchase of fixed assets", "Acquisition of property, plant and equipment", "Capital expenditure for PPE", "Additions to fixed assets", "Purchase of tangible fixed assets", "Acquisition of intangible assets", "Capitalization of development costs", "Purchase of software", "Purchase of licenses", "Purchase of patents, trademarks", "Investments in intangible assets", "Acquisition of investment property", "Purchase of rental property", "Purchase of real estate held for investment", "Investments in real estate"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1658,7 +1668,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF45 | Proceeds from sales of property, plant and equipment": 
     {
-        "aliases": ['Asset Sales', 'Sales of PPE', 'Divestment'],
+        "aliases": ["Asset Sales", "Sales of PPE", "Divestment","Proceeds from sale of property, plant and equipment", "Proceeds from sales of property, plant and equipment", "Proceeds from disposal of property, plant and equipment", "Cash proceeds from sale of property, plant and equipment", "Cash received from sale of property, plant and equipment", "Cash received from disposal of property, plant and equipment", "Sale of property, plant and equipment (proceeds)", "Sale of property, plant and equipment (cash inflow)", "Disposal of property, plant and equipment (proceeds)", "Disposal of property, plant and equipment (cash inflow)", "Proceeds from sale of fixed assets", "Proceeds from disposal of fixed assets", "Cash received on sale of fixed assets", "Cash received on disposal of fixed assets", "Proceeds from sale of tangible fixed assets", "Proceeds from disposal of tangible fixed assets", "Proceeds from sale of PPE", "PPE disposals – cash received", "Proceeds from asset disposals (PPE)", "Proceeds from sale of property and equipment", "Sale of fixed assets", "Disposal of property, plant and equipment", "Proceeds from sale of tangible assets", "Proceeds from disposal of PPE", "Sale of investment property", "Disposal of investment property", "Proceeds from sale of real estate investments", "Sale of intangible assets", "Disposal of intangible assets", "Proceeds from sale of software / licenses", "Proceeds from disposal of intangibles"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1666,7 +1676,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF46 | +/- Others": 
     {
-        "aliases": ['Gain/loss from sales in subsidiaries', 'other assets', 'investments etc.'],
+        "aliases": ['Gain/loss from sales in subsidiaries', 'other assets', 'investments etc.',"Other investing cash flows", "Other cash flows from investing activities", "Other cash movements from investing activities", "Other investing activities", "Other investment‑related cash flows", "Miscellaneous investing cash flows", "Miscellaneous investing activities", "Other investment cash movements", "Other investing inflows/(outflows)", "Other investing items", "Other investing transactions", "Other cash flows – investing section", "Other investing cash inflows/(outflows)", "Other investing operations", "Other investment operations", "Proceeds from sale of investments", "Redemption of investments", "Sale of marketable securities", "Proceeds from disposal of equity investments", "Proceeds from disposal of debt securities", "Purchase of investments", "Acquisition of equity investments", "Acquisition of debt securities", "Purchase of marketable securities", "Purchase of long‑term investments", "Purchase of short‑term investments", "Investment in bonds", "Purchase of financial assets"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1690,7 +1700,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF15 | Acquisitions": 
     {
-        "aliases": ['Acquisition of subsidiaries', 'Purchase of stake/shares in Subsidiaries/Other Entities'],
+        "aliases": ["Acquisition of subsidiaries", "Purchase of stake/shares in Subsidiaries/Other Entities","Acquisitions", "Acquisition of subsidiaries", "Acquisition of subsidiary", "Acquisition of businesses", "Acquisition of business units", "Acquisition of operations", "Business combinations – cash consideration", "Purchase of subsidiaries", "Purchase of subsidiary undertakings", "Purchase of business operations", "Investment in subsidiaries (cash paid)", "Investment in associates and joint ventures (cash paid)", "Acquisition of affiliates", "Acquisition of equity interests in subsidiaries/affiliates", "Cash paid for acquisitions", "Cash consideration for acquisitions", "Cash paid for business combinations", "Acquisitions (net of cash acquired)", "Net cash outflow on acquisition of subsidiaries", "Net cash outflow on acquisition of businesses"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1698,7 +1708,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF16 | Disposals": 
     {
-        "aliases": ['Divestment of stake/shares in Subsidiaries/Other Entities'],
+        "aliases": ["Divestment of stake/shares in Subsidiaries/Other Entities","Disposals", "Disposal of subsidiaries", "Disposal of subsidiary", "Disposal of businesses", "Disposal of business units", "Disposal of operations", "Sale of subsidiaries", "Sale of subsidiary undertakings", "Sale of business operations", "Disposal of affiliates", "Disposal of equity interests in subsidiaries/affiliates", "Cash received from disposals", "Cash proceeds from disposals", "Cash received from sale of subsidiaries", "Cash received from sale of businesses", "Proceeds from disposal of subsidiaries", "Proceeds from disposal of businesses", "Net cash inflow on disposal of subsidiaries", "Net cash inflow on disposal of businesses", "Disposals (net of cash disposed)", "Proceeds from disposal of controlled entities", "Divestment proceeds"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1714,7 +1724,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF47 | Dividends paid to non-controlling interests": 
     {
-        "aliases": ['Dividend paid to minorities'],
+        "aliases": ["Dividend paid to minorities","Dividends paid to non‑controlling interests", "Dividends paid to non‑controlling shareholders", "Dividends paid to minority interests", "Dividends paid to minority shareholders", "Cash dividends paid to non‑controlling interests", "Cash dividends paid to minority interests", "Dividend payments to non‑controlling interests", "Dividend payments to minority shareholders", "Distribution to non‑controlling interests", "Distribution to minority interests", "Cash distributions to non‑controlling interests", "Cash distributions to minority shareholders", "Dividends to non‑controlling interests", "Dividends to minority interests"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1722,14 +1732,14 @@ CASH_FLOW_FIELDS = {
 
     "ACF48 | Dividends paid to owners of the parent company": 
     {
-        "aliases": ['Equity Dividends', 'Payments of divident to equity shareholders'],
+        "aliases": ["Equity Dividends", "Payments of divident to equity shareholders","Dividends paid to owners of the parent company", "Dividends paid to owners of the parent", "Dividends paid to shareholders of the parent", "Dividends paid to equity holders of the parent", "Dividends paid to ordinary shareholders", "Dividends paid to common shareholders", "Dividends paid to preference shareholders", "Cash dividends paid to shareholders", "Cash dividends paid to owners of the parent", "Cash dividends paid to equity holders", "Dividend payments to shareholders", "Dividend payments to owners of the parent", "Dividends paid (to shareholders)", "Dividends paid (to owners)", "Cash distributions to shareholders", "Cash distributions to equity holders", "Cash distributions to owners of the parent", "Equity dividends paid", "Dividends to shareholders of the company"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
     },
 
     "ACF49 | + Dividends from affiliates": {
-        "aliases": [],
+        "aliases": ["Dividends from affiliates", "Dividends received from affiliates", "Dividends received from associated companies", "Dividends received from associates", "Dividends received from joint ventures", "Dividends received from subsidiaries", "Dividends from associates and joint ventures", "Dividends from equity‑accounted investees", "Dividend income from affiliates", "Dividend income from associates", "Dividend income from joint ventures", "Dividend income from investments in affiliates", "Cash dividends received from affiliates", "Cash dividends received from associates", "Cash dividends received from joint ventures", "Dividends from investments in associates/JV", "Dividends from investments in subsidiaries (when labelled as affiliates)", "Dividends received from related parties (affiliates)", "Dividend income received", "Dividends from subsidiaries / associates", "Dividends on investments received"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1745,7 +1755,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF50 | Capital inc. (dec.) - owners of the parent company": 
     {
-        "aliases": ['Issuance of common/preferred shares', 'Equity issuance'],
+        "aliases": ["Issuance of common/preferred shares", "Equity issuance","Capital increase/(decrease) – owners of the parent company", "Capital increase/(decrease) – owners of the parent", "Capital increases and reductions – shareholders of the parent", "Share capital increase/(decrease) – parent", "Share capital transactions – owners of the parent", "Changes in share capital – owners of the parent", "Changes in equity – owners of the parent (capital transactions)", "Issue and redemption of share capital – owners of the parent", "Issue and cancellation of shares – owners of the parent", "Equity contributions from owners of the parent", "Equity withdrawals by owners of the parent", "Capital contributions from shareholders of the parent", "Capital repayments to shareholders of the parent", "Proceeds from / repayment of equity capital – owners of the parent", "Proceeds from issue / buyback of shares – parent company", "Share buyback and issuance – parent company", "Movements in share capital – parent company (cash)", "Capital transactions with owners of the parent", "Transactions with owners of the parent in their capacity as owners (cash)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1753,7 +1763,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF51 | Capital inc. (dec.) - non-controlling interests": 
     {
-        "aliases": ['Purchase of minority shares', 'Inc/dec in minority shareholding'],
+        "aliases": ["Purchase of minority shares", "Inc/dec in minority shareholding","Capital increase/(decrease) – non‑controlling interests", "Capital increases and reductions – non‑controlling interests", "Capital increase/(decrease) – minority interests", "Share capital transactions – non‑controlling interests", "Changes in share capital – non‑controlling interests", "Changes in equity – non‑controlling interests (capital transactions)", "Equity contributions from non‑controlling interests", "Equity contributions from minority interests", "Capital contributions from minority shareholders", "Capital injections by non‑controlling shareholders", "Capital repayments to non‑controlling shareholders", "Capital repayments to minority interests", "Proceeds from capital contributions – non‑controlling interests", "Payments for capital reductions – non‑controlling interests", "Transactions with non‑controlling interests (equity, cash)", "Ownership changes with non‑controlling interests (cash component)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1769,7 +1779,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF17 | Proceeds from the issuance of debt": 
     {
-        "aliases": ['Proceeds from bank debt/bonds', 'lease liabilities other debt'],
+        "aliases": ["Proceeds from bank debt/bonds", "lease liabilities other debt","Proceeds from the issuance of debt", "Proceeds from issuance of debt", "Proceeds from issue of debt", "Proceeds from issuance of bonds", "Proceeds from issuance of debentures", "Proceeds from issuance of notes", "Proceeds from issuance of loan notes", "Proceeds from new borrowings", "Proceeds from long‑term borrowings", "Proceeds from short‑term borrowings", "Increase in borrowings (cash inflow)", "New loans raised", "New bank loans raised", "Cash received from new debt", "Cash proceeds from issuance of debt", "Cash proceeds from issue of debt securities", "Cash inflows from borrowings", "Proceeds from bank loans", "Proceeds from long‑term loans", "Proceeds from short‑term loans", "Proceeds from financing loans"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1777,7 +1787,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF18 | Repayment of detbs": 
     {
-        "aliases": ['Repayments of bank debt/bonds', 'lease liabilities other debt'],
+        "aliases": ["Repayments of bank debt/bonds", "lease liabilities other debt","Repayment of debts", "Repayments of debts", "Repayment of debt", "Repayment of borrowings", "Repayments of borrowings", "Repayment of loans", "Loan repayments", "Repayment of bank loans", "Repayment of bank borrowings", "Repayment of long‑term borrowings", "Repayment of short‑term borrowings", "Redemption of bonds", "Redemption of debentures", "Redemption of notes", "Redemption of loan notes", "Cash outflows for debt repayment", "Cash used to repay borrowings", "Cash used for loan repayments", "Reduction in borrowings (cash outflow)"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1785,7 +1795,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF52 | Loan granted to subsidiaries/JV": 
     {
-        "aliases": ['Loans from parent compny/shareholders/subsidiaries'],
+        "aliases": ["Loans from parent compny/shareholders/subsidiaries","Loan granted to subsidiaries/JV", "Loans granted to subsidiaries and joint ventures", "Loans granted to subsidiaries", "Loans granted to joint ventures", "Loans to subsidiaries", "Loans to joint ventures", "Loans to group companies", "Loans to affiliated companies", "Loans to related parties (subsidiaries/JV)", "Intercompany loans granted", "Intercompany financing – loans granted", "Cash advances to subsidiaries/JV", "Cash advances to group entities", "Lending to subsidiaries/JV", "Loans and advances to subsidiaries/JV", "Loan outflows to subsidiaries/JV", "Cash outflows for loans to subsidiaries/JV"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1793,7 +1803,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF53 | Loan repaid from subsidiaries/JV": 
     {
-        "aliases": ['Loans to parent compny/shareholders/subsidiaries'],
+        "aliases": ["Loans to parent compny/shareholders/subsidiaries","Loan repaid from subsidiaries/JV", "Loans repaid by subsidiaries and joint ventures", "Loans repaid by subsidiaries", "Loans repaid by joint ventures", "Repayment of loans from subsidiaries/JV", "Repayment of loans by subsidiaries/JV", "Cash received from loan repayments by subsidiaries/JV", "Cash received from subsidiaries/JV – loan repayment", "Intercompany loans repaid", "Intercompany financing – loans repaid", "Loan repayments from group companies", "Loan repayments from affiliated companies", "Loan repayments from related parties (subsidiaries/JV)", "Loans and advances recovered from subsidiaries/JV", "Cash inflows from loans repaid by subsidiaries/JV"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1809,7 +1819,7 @@ CASH_FLOW_FIELDS = {
 
     "ACF10 | +/- Others (Currencyà)": 
     {
-        "aliases": ['FX changes', 'currency'],
+        "aliases": ["FX changes", "currency","Others (currency)", "Other (currency effects)", "Other (foreign exchange)", "Other currency translation effects", "Other FX translation effects", "Other foreign exchange differences on cash", "Other currency differences on cash and cash equivalents", "Other FX impact on cash", "Other exchange rate effects on cash", "Effect of currency translation on cash (other)", "Miscellaneous currency effects", "Miscellaneous foreign exchange effects", "Other non‑cash currency adjustments", "Other foreign exchange adjustments on cash flows", "Other translation differences on cash and cash equivalents", "Other exchange differences on cash", "Other items (including currency effects)", "Other reconciliation items (currency)", "Other adjustments – currency / FX"],
         "calculation": None,
         "is_calculated": False,
         "indent_level": 0
@@ -1860,7 +1870,7 @@ CASH_FLOW_FIELDS = {
 # ---------------------------------------------------------------------------
 
 APAC_INCOME_STATEMENT_FIELDS = {
-    "Q1 | Sales (Revenue)": {
+        "Q1 | Sales (Revenue)": {
         "aliases": [
             "Revenue",
             "Revenue from operations",
@@ -1870,7 +1880,9 @@ APAC_INCOME_STATEMENT_FIELDS = {
             "Turnover",
             "Net Sales",
             "Gross sales",
-            "Operating Income"
+            "Operating Income",
+            "Sales revenue",
+            "Sales"
         ],
         "calculation": None,
         "is_calculated": False,
@@ -1902,7 +1914,7 @@ APAC_INCOME_STATEMENT_FIELDS = {
     },
     
     
-    "Q5 | Cost of sales": {
+        "Q5 | Cost of sales": {
         "aliases": [
             "Cost of Sales",
             "Cost of Revenue",
@@ -1912,6 +1924,8 @@ APAC_INCOME_STATEMENT_FIELDS = {
             "Manufacturing Costs",
             "Fuel",
             "Power",
+            "Service Maintenance Expense",
+            "Cost of sales"
         ],
         "calculation": None,
         "is_calculated": False,
@@ -1928,18 +1942,9 @@ APAC_INCOME_STATEMENT_FIELDS = {
     
 
     "Q6 | SG&A Expense": {
-        "aliases": [
-            "Selling",
-            "General and Administrative Expenses",
-            "Operating Expenses",
-            "General and Administrative Expenses (G&A)",
-            "Selling Expenses",
-            "Marketing and Administrative Expenses",
-            "Corporate Expenses",
-            "Commercial Expenses",
-        ],
-        "calculation": None,
-        "is_calculated": False,
+        "aliases": [],  # No direct aliases - this is a calculated field
+        "calculation": "Q48+Q49+Q50",
+        "is_calculated": True,
         "indent_level": 0
     },
 
@@ -1947,6 +1952,7 @@ APAC_INCOME_STATEMENT_FIELDS = {
         "aliases": [
             "General and Administrative Expenses (G&A Expenses)",
             "Administrative Costs",
+            "Administration and other expenses"
             "Operating Expenses",
             "Selling",
             "General & Administrative Expenses (SG&A Expenses)",
@@ -1998,6 +2004,7 @@ APAC_INCOME_STATEMENT_FIELDS = {
             "New Product Development Costs",
             "Technology Development Expenses",
             "Exploration and Development Cost",
+            "Service Expense",
         ],
         "calculation": None,
         "is_calculated": False,
@@ -2044,7 +2051,7 @@ APAC_INCOME_STATEMENT_FIELDS = {
         "aliases": [],
         "calculation": None,
         "is_calculated": False,
-        "indent_level": 1
+        "indent_level": 0
     },
 
     "Q97 | Net charges to provisions and impairment losses": {
@@ -2400,6 +2407,8 @@ APAC_INCOME_STATEMENT_FIELDS = {
     "Q35 | Income tax": {
         "aliases": [
             "Income Tax Expense/(Benefit)",
+            "Income tax expense",
+            "Income Tax Expense",
             "Current Tax Expense/(Benefit)",
             "Deferred Tax Expense/(Benefit)",
             "Provision for Taxes on Income",
@@ -2483,7 +2492,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U10 | Other Intangible assets Net": {
-    "aliases": [],
+    "aliases": ["Other intangible assets, net", "Intangible assets (excluding goodwill)", "Intangible assets, net", "Net intangible assets", "Intangible assets – other", "Other intangibles, net book value", "Intangible fixed assets (excluding goodwill)", "Intangible assets – software, licenses, patents, trademarks", "Software and other intangible assets", "Licences, patents, trademarks and similar rights", "Capitalised development costs (intangible assets)", "Intangible operating assets (excluding goodwill)", "Intangible non‑current assets (other)", "Other intangible non‑current assets"],
     "calculation": "U11+U12+U13+U14",
     "is_calculated": True,
         "indent_level": 0
@@ -2515,7 +2524,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
     "U2 | Tangible assets: Property, plant and equipment": {
-    "aliases": ["No other alias"],
+    "aliases": ["Property, plant and equipment", "PPE", "Tangible assets", "Tangible fixed assets", "Fixed assets – tangible", "Land, buildings, plant and equipment", "Plant and equipment", "Buildings and machinery", "Property and equipment", "Property, plant and machinery", "Net property, plant and equipment", "Property, plant and equipment, net", "Net tangible assets (if used specifically for PPE)", "Non‑current tangible assets", "Operating fixed assets", "Industrial fixed assets", "Right‑of‑use assets", "Right of use assets", "Right‑of‑use asset", "Right of use asset", "Lease right‑of‑use assets", "Lease assets – right‑of‑use", "Leased right‑of‑use assets", "Assets under lease (right‑of‑use)", "ROU assets", "ROU asset", "Use‑of‑asset rights (lease)", "Right‑of‑use property, plant and equipment", "Right‑of‑use PPE", "Right‑of‑use buildings", "Right‑of‑use land and buildings", "Right‑of‑use vehicles", "Right‑of‑use equipment", "Right‑of‑use assets – non‑current", "Lease assets recognized under IFRS 16", "Lease assets recognized under ASC 842"],
     "calculation": "U4+U3+U5+U115+U116+U201",
     "is_calculated": True,
         "indent_level": 0
@@ -2563,7 +2572,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U6 | Investment properties": {
-    "aliases": [],
+    "aliases": ["Investment properties", "Investment property", "Properties held for investment", "Real estate investments", "Property investments", "Properties held to earn rentals", "Properties held for capital appreciation", "Real estate held for investment", "Investment real estate", "Non‑current investment properties", "Investment properties, net", "Investment property, net book value"],
     "calculation": "U7+U8+U9",
     "is_calculated": True,
         "indent_level": 0
@@ -2583,48 +2592,48 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
     "U9 | o/w new investment properties": {
-    "aliases": [],
+    "aliases": ["Exploration and evaluation assets"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
     
   "U18 | Employee benefits": {
-    "aliases": [],
+    "aliases": ["Employee benefits (assets)", "Employee benefit assets", "Net defined benefit asset", "Surplus of defined benefit plan", "Pension plan assets (net)", "Retirement benefit assets", "Asset for employee benefits", "Employee benefit plan surplus", "Reimbursement rights under employee benefit plans", "Non‑current employee benefit assets", "Long‑term employee benefit assets"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
 
   "U17 | Non current financial assets (incl derivatives & hedging financial instruments)": {
-    "aliases": ["Other Financial Assets", "Derivative Assets"],
+    "aliases": ["Other Financial Assets", "Derivative Assets","Non‑current financial assets", "Long‑term financial assets", "Financial assets – non‑current", "Financial assets – long‑term", "Non‑current investments", "Long‑term investments", "Non‑current loans and receivables (financial)", "Long‑term loans and receivables", "Non‑current marketable securities", "Long‑term marketable securities", "Non‑current financial investments", "Derivative financial assets – non‑current", "Derivative assets – non‑current", "Hedging instruments – assets (non‑current)", "Financial instruments – non‑current assets", "Financial assets at fair value (non‑current)", "Available‑for‑sale financial assets – non‑current (legacy term)", "Held‑to‑maturity investments – non‑current", "Other non‑current financial assets"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
 
     "U19 | o/w provisions for fixed financial assets": {
-    "aliases": [],
+    "aliases": ["Financial investments"],
     "calculation": None,
     "is_calculated": False,
     "indent_level": 1
   },
 
   "U20 | Equity affiliates: non-consolidated investments and loans (Net)": {
-    "aliases": ["Interest in net assets of joint ventures","Investments in subsidiaries or non-controlled affiliates"],
+    "aliases": ["Interest in net assets of joint ventures","Investments in subsidiaries or non-controlled affiliates","Equity affiliates (net)", "Investments in equity affiliates (net)", "Investments in associates (net)", "Investments in joint ventures (net)", "Investments in associates and joint ventures (net)", "Investments in equity‑accounted investees (net)", "Equity‑accounted investments (net)", "Non‑consolidated investments (equity method)", "Non‑consolidated affiliates – investments and loans (net)", "Investments in related companies (equity affiliates)", "Investments in associated companies (net)", "Investments in jointly controlled entities (net)", "Loans to equity affiliates (net)", "Loans to associates and joint ventures (net)", "Investments and loans to affiliates (net)", "Affiliated companies – investments and loans (net)"],
     "calculation": None,
     "is_calculated": False,
     "indent_level": 0
   },
 
   "U88 | Other non-current assets": {
-    "aliases": ["Investments", "Other non-current assets"],
+    "aliases": ["Investments", "Other non-current assets","Other non‑current assets", "Non‑current assets – other", "Other long‑term assets", "Long‑term assets – other", "Miscellaneous non‑current assets", "Sundry non‑current assets", "Other non‑current operating assets", "Other non‑current receivables", "Other long‑term receivables", "Other long‑term prepayments", "Other long‑term deposits and guarantees (assets)", "Other non‑current deferred charges", "Other non‑current assets (net)", "Non‑current sundry assets"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U21 | Deferred tax assets and tax receivables /recoverable": {
-    "aliases": [],
+    "aliases": ["Claim for tax returns and prepaid taxes","Deferred tax assets and tax receivables", "Deferred tax assets and income tax receivables", "Deferred tax assets and recoverable taxes", "Deferred income tax assets and tax receivables", "Deferred tax assets and taxes recoverable", "Deferred tax assets", "Deferred income tax assets", "Tax receivables", "Income tax receivables", "Recoverable income taxes", "Recoverable tax assets", "Tax assets – deferred and current receivables", "Deferred tax and tax receivables", "Deferred tax assets and other tax assets", "Deferred tax assets and tax credits", "Deferred tax assets and recoverable VAT/GST (if grouped)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -2710,7 +2719,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U98 | Other current operating assets": {
-    "aliases": [],
+    "aliases": ["Other current operating assets", "Other current assets (operating)", "Other current non‑financial assets", "Current operating assets – other", "Miscellaneous current operating assets", "Sundry current operating assets", "Other current receivables (operating)", "Other current non‑trade receivables", "Prepayments and other current assets", "Prepaid expenses (current) and other current assets", "Prepaid operating expenses (current)", "Other current operating receivables", "Other current operating prepayments", "Other current assets – non‑financial", "Other current assets (excluding cash and financial)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -2724,7 +2733,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U36 | Current financial assets": {
-    "aliases": [],
+    "aliases": ["Current financial assets", "Short‑term financial assets", "Financial assets – current", "Financial assets – short‑term", "Current investments", "Short‑term investments", "Marketable securities – current", "Trading securities – current", "Financial instruments – current assets", "Derivative financial assets – current", "Derivative assets – current", "Hedging instruments – assets (current)", "Current loans and receivables (financial)", "Short‑term loans and receivables (financial)", "Current financial assets at fair value", "Current financial assets held for trading", "Current financial investments"],
     "calculation": "U103+U104+U37+U106+U107+U108",
     "is_calculated": True,
         "indent_level": 0
@@ -2773,21 +2782,21 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U35 | Current tax asset to recover (receivable)": {
-    "aliases": [],
+    "aliases": ["Current tax asset to recover", "Current income tax receivable", "Income tax receivable – current", "Current tax receivables", "Tax receivables – current", "Taxes recoverable – current", "Recoverable income taxes – current", "Corporate income tax receivable (current)", "Current tax assets", "Current tax assets – income tax", "Current tax refunds receivable", "Income tax recoverable (current)", "Tax credit receivable (current, income tax)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
 
    "U38 | Provisions for current financial assets": {
-    "aliases": [],
+    "aliases": ["Provisions for current financial assets", "Provision for impairment of current financial assets", "Provision for expected credit losses – current financial assets", "Allowance for impairment of current financial assets", "Allowance for losses on current financial assets", "Loss allowance – current financial assets", "Provision for doubtful financial assets (current)", "Provision for impairment – current investments", "Provision for impairment – current loans and receivables", "Provision for impairment – current marketable securities", "Provision for impairment of short‑term financial assets", "Impairment reserve for current financial assets"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
 
   "U39 | Net Cash and bank deposits (excluding overdrafts)": {
-    "aliases": ["Cash & Cash Equivalents", "Cash & Short Term Investments"],
+    "aliases": ["Cash & Cash Equivalents", "Cash & Short Term Investments","Net cash and bank deposits (excluding overdrafts)", "Cash and bank deposits (excluding overdrafts)", "Cash and cash equivalents (excluding bank overdrafts)", "Cash and cash equivalents", "Cash and bank balances", "Cash at bank and in hand", "Cash and short‑term deposits", "Cash and term deposits (short‑term)", "Cash and bank accounts", "Cash on hand and at bank", "Bank deposits (current, unrestricted)", "Cash balance (excluding overdrafts)", "Cash and restricted cash (if grouped)", "Cash equivalents (money market funds, etc.)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -2815,7 +2824,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U23 | Assets held-for-sale / available-for-sale": {
-    "aliases": [],
+    "aliases": ["Assets held for sale", "Assets classified as held for sale", "Non‑current assets held for sale", "Disposal group assets held for sale", "Assets of disposal groups classified as held for sale", "Assets of disposal group", "Held‑for‑sale assets", "Assets held‑for‑sale / available‑for‑sale", "Assets available for sale (legacy phrasing)", "Available‑for‑sale assets (non‑current)", "Assets held for sale and discontinued operations", "Assets associated with discontinued operations (held for sale)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -2834,6 +2843,7 @@ APAC_BALANCE_SHEET_FIELDS = {
     "is_calculated": True,
         "indent_level": 0
   },
+
 ##### Liabiilities Section ###########
 
   "U44 | Share capital": {
@@ -2925,7 +2935,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U53 | Borrowings / debt >1 yr (excluding current maturities of LT debt)": {
-    "aliases": ["Bank Debt", "Bonds", "Lease Liabilities"],
+    "aliases": ["Bank Debt", "Bonds", "Lease Liabilities","Long‑term borrowings", "Long‑term debt", "Non‑current borrowings", "Non‑current financial liabilities – borrowings", "Non‑current interest‑bearing liabilities", "Long‑term loans", "Long‑term bank loans", "Long‑term bank borrowings", "Long‑term loans payable", "Long‑term notes payable", "Long‑term bonds payable", "Bonds payable (non‑current)", "Debentures (non‑current)", "Loan notes (non‑current)", "Term loans (non‑current portion)", "Non‑current portion of borrowings (excluding current maturities)", "Non‑current portion of loans payable", "Non‑current portion of bank loans", "Non‑current portion of bonds / debentures", "Interest‑bearing borrowings – non‑current", "Debt due after one year", "Borrowings due after 12 months", "Loans due after one year", "Long‑term interest‑bearing debt", "Long‑term financial obligations", "Long‑term financing liabilities", "Finance lease liabilities – non‑current", "Capital lease obligations – non‑current", "Capital lease liabilities – non‑current", "Lease liabilities – non‑current (finance/capital)", "Long‑term finance lease liabilities", "Long‑term capital lease obligations", "Non‑current portion of finance lease liabilities", "Non‑current portion of capital lease obligations", "Non‑current portion of lease liabilities (finance/capital)", "Lease obligations due after one year – finance leases", "Long‑term lease debt (finance leases)", "Finance lease debt – non‑current", "Capital lease debt – non‑current", "Plain vanilla bonds (non‑current)", "Bonds payable – non‑current", "Bonds – non‑current", "Straight bonds (non‑current)", "Non‑convertible bonds (non‑current)", "Non‑derivative bonds (non‑current)", "Standard bonds (non‑current)", "Plain vanilla debentures (non‑current)", "Plain vanilla notes (non‑current)", "Long‑term bonds payable", "Long‑term debentures", "Long‑term notes payable (bond‑type)", "Bonds due after one year", "Debentures due after one year", "Notes due after one year (fixed‑rate, plain vanilla)", "Medium‑term notes (non‑current portion)", "Senior unsecured bonds (non‑current)", "Hybrid borrowings (non‑current)", "Hybrid debt (non‑current)", "Hybrid financial instruments (non‑current liabilities)", "Hybrid capital instruments (non‑current liabilities)", "Convertible bonds (non‑current)", "Convertible debt (non‑current)", "Convertible notes (non‑current)", "Convertible loan notes (non‑current)", "Convertible debentures (non‑current)", "Convertible securities (liability component, non‑current)", "Long‑term convertible bonds", "Long‑term convertible debt", "Long‑term hybrid borrowings", "Long‑term hybrid capital instruments (classified as debt)", "Perpetual notes (liability‑classified hybrids)", "Perpetual bonds (hybrid liabilities)", "Mezzanine debt instruments (if labelled hybrid borrowings)", "Subordinated debt (non‑current)", "Subordinated borrowings (non‑current)", "Subordinated loans (non‑current)", "Subordinated liabilities (non‑current)", "Long‑term subordinated debt", "Long‑term subordinated borrowings", "Subordinated notes (non‑current)", "Subordinated bonds (non‑current)", "Subordinated loan notes (non‑current)", "Junior debt (non‑current)", "Junior subordinated debt (non‑current)", "Perpetual subordinated debt (if classified as liability)", "Debt subordinated to other creditors (non‑current)", "Subordinated financial liabilities – non‑current", "Subordinated interest‑bearing liabilities – non‑current"],
     "calculation": "U53+U182",
     "is_calculated": True,
         "indent_level": 0
@@ -2973,25 +2983,25 @@ APAC_BALANCE_SHEET_FIELDS = {
         "indent_level": 0
   },
     "U58 | Deferred income tax liabilities and non-current tax liabilities": {
-    "aliases": [],
+    "aliases": ["Deferred income tax liabilities", "Deferred tax liabilities", "Deferred taxation liabilities", "Deferred income taxes (liabilities)", "Deferred income tax – non‑current", "Non‑current tax liabilities", "Non‑current income tax liabilities", "Long‑term tax liabilities", "Long‑term income tax liabilities", "Deferred tax – liabilities (non‑current)", "Deferred tax liabilities and non‑current tax liabilities", "Deferred income taxes and long‑term tax liabilities", "Deferred tax obligations", "Future income tax liabilities", "Provision for deferred tax (liabilities)", "Deferred taxation – non‑current liabilities"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U59 | Provisions for pensions and employee benefits": {
-    "aliases": [],
+    "aliases": ["Provisions for pensions and employee benefits", "Pension provisions", "Provision for pensions", "Pension liabilities", "Retirement benefit obligations", "Post‑employment benefit obligations", "Defined benefit obligation (DBO)", "Defined benefit pension liabilities", "Employee benefit obligations – non‑current", "Non‑current employee benefit obligations", "Long‑term employee benefit liabilities", "Long‑term employee benefit provisions", "Provisions for employee benefits – non‑current", "Provision for post‑employment benefits", "Provision for retirement benefits", "Provision for gratuity (non‑current portion)", "Provision for long‑service awards (non‑current)", "Provision for other long‑term employee benefits", "Pension and other employee benefit obligations", "Pension and other long‑term employee benefit provisions"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U175 | Other non-current provisions": {
-    "aliases": [],
+    "aliases": ["Other non‑current provisions", "Other long‑term provisions", "Non‑current provisions (other)", "Long‑term provisions (other)", "Provisions for risks and charges – non‑current", "Provisions for risks and charges – long‑term", "Provisions for restructuring (non‑current portion)", "Restructuring provision – non‑current", "Provisions for legal claims (non‑current portion)", "Legal provisions – non‑current", "Provisions for environmental liabilities (non‑current)", "Environmental provision – non‑current", "Provisions for onerous contracts (non‑current)", "Onerous contract provisions – non‑current", "Provisions for guarantees (non‑current)", "Guarantee provisions – non‑current", "Other long‑term risk provisions", "Other provisions for contingencies – non‑current", "Other provisions – long‑term"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U60 | Other non-current liabilities": {
-    "aliases": ["Other non-current liabilities", "Derivative Liabilities", "Other Financial Liabilities", "Loans from shareholders/related parties"],
+    "aliases": ["Other non-current liabilities", "Derivative Liabilities", "Other Financial Liabilities", "Loans from shareholders/related parties","Other non‑current liabilities", "Other long‑term liabilities", "Non‑current liabilities – other", "Long‑term liabilities – other", "Miscellaneous non‑current liabilities", "Miscellaneous long‑term liabilities", "Other non‑current financial liabilities (non‑borrowings)", "Other long‑term financial liabilities", "Non‑current deferred income", "Deferred income – non‑current", "Long‑term deferred revenue", "Long‑term contract liabilities", "Non‑current lease liabilities (if not separately presented)", "Long‑term lease obligations (if grouped)", "Non‑current liabilities to related parties (non‑trade)", "Long‑term payables to related parties", "Long‑term liabilities – government grants (deferred)", "Long‑term liabilities – contingent consideration", "Other non‑current obligations", "Other long‑term obligations"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3019,7 +3029,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
    "U63 | Borrowings / debt < 1 yr (including current maturities of LT debt)": {
-    "aliases": ["Financial Debt", "Bank debt", "Bonds", "Lease Liabilities"],
+    "aliases": ["Financial Debt", "Bank debt", "Bonds", "Lease Liabilities","Short‑term borrowings", "Short‑term debt", "Commercial paper", "Current borrowings", "Current financial liabilities – borrowings", "Bank overdrafts and short‑term borrowings", "Bank overdrafts (if not treated as cash)", "Short‑term bank loans", "Short‑term bank borrowings", "Current portion of long‑term debt", "Current portion of long‑term borrowings", "Current maturities of long‑term debt", "Current maturities of long‑term borrowings", "Current portion of loans payable", "Current portion of bank loans", "Current portion of bonds payable", "Current portion of notes payable", "Current installment of long‑term loans", "Current portion of debentures", "Current portion of term loans", "Short‑term portion of interest‑bearing debt", "Debt due within one year", "Borrowings due within 12 months", "Loans due within one year", "Current financial borrowings", "Current interest‑bearing liabilities", "Current financial obligations – borrowings", "Short‑term interest‑bearing loans and borrowings", "Bank overdraft", "Bank overdrafts", "Overdrafts with banks", "Bank overdraft facility used", "Overdrawn bank accounts", "Cash at bank – overdrawn", "Bank current account overdraft", "Overdrawn current accounts", "Short‑term bank overdraft", "Bank overdraft – current liability", "Overdrafts and short‑term borrowings (if combined)", "Bank overdraft balances (liabilities)", "Bank overdraft and similar facilities", "Current portion of long‑term debt", "Current portion of long‑term borrowings", "Current maturities of long‑term debt", "Current maturities of long‑term borrowings", "Current portion of loans payable (long‑term loans)", "Current portion of bank loans (long‑term)", "Current portion of bonds payable (long‑term bonds)", "Current portion of debentures (long‑term debentures)", "Current portion of notes payable (long‑term notes)", "Current portion of term loans", "Long‑term debt due within one year", "Long‑term borrowings due within one year", "Installments of long‑term debt due in the next year", "Next‑year maturities of long‑term loans", "Short‑term portion of long‑term borrowings", "Short‑term portion of long‑term debt", "Finance lease liabilities – current", "Capital lease obligations – current", "Capital lease liabilities – current", "Lease liabilities – current (finance leases)", "Current portion of finance lease liabilities", "Current portion of capital lease obligations", "Current portion of lease liabilities (finance/capital)", "Short‑term finance lease liabilities", "Short‑term capital lease obligations", "Current lease obligations (finance/capital)", "Lease payments due within one year – principal (finance leases)", "Current portion of lease debt (finance leases)", "Finance lease debt – current", "Capital lease debt – current", "Discounted bills (current)", "Discounted trade bills", "Discounted bills of exchange", "Discounted promissory notes", "Bills discounted with banks", "Bills of exchange discounted", "Discounted receivables (with recourse)", "Factored receivables with recourse (if labelled as discounted bills)", "Discounted trade notes", "Discounted customer bills", "Discounted bills payable (if treated as borrowing)", "Short‑term borrowings – discounted bills", "Bills discounting facility", "Trade bill discounting", "Plain vanilla bonds (current)", "Bonds payable – current portion", "Bonds – current portion", "Straight bonds (current portion)", "Non‑convertible bonds – current portion", "Non‑derivative bonds – current portion", "Standard bonds (current portion)", "Plain vanilla notes (current)", "Plain vanilla debentures (current)", "Current portion of bonds", "Current portion of debentures", "Current portion of notes payable (bond‑type)", "Short‑term bonds payable", "Short‑term debentures", "Short‑term notes (bond‑type)", "Bonds due within one year", "Debentures due within one year", "Notes due within one year (fixed‑rate / plain vanilla)", "Hybrid borrowings (current)", "Hybrid debt (current)", "Hybrid instruments (current liabilities)", "Convertible bonds (current portion)", "Convertible debt (current portion)", "Convertible notes (current portion)", "Convertible loan notes (current portion)", "Convertible securities (current liability portion)", "Convertible debentures (current portion)", "Hybrid capital instruments (current liabilities)", "Perpetual and other hybrid instruments (current portion, if classified as debt)", "Current portion of convertible bonds", "Current portion of convertible debt", "Current portion of hybrid borrowings", "Short‑term convertible debt", "Short‑term convertible bonds", "Short‑term hybrid debt instruments", "Subordinated debt (current)", "Subordinated borrowings (current)", "Subordinated loans (current)", "Subordinated liabilities (current)", "Short‑term subordinated debt", "Short‑term subordinated borrowings", "Subordinated notes (current)", "Subordinated bonds (current portion)", "Subordinated loan notes (current)", "Junior debt (current)", "Junior subordinated debt (current)", "Debt subordinated to other creditors (current)", "Subordinated financial liabilities – current", "Subordinated interest‑bearing liabilities – current"],
     "calculation": "U63+U183",
     "is_calculated": True,
         "indent_level": 0
@@ -3082,20 +3092,20 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
     "U176 | Advances & downpayments": {
-    "aliases": [],
+    "aliases": ["Advances and downpayments", "Customer advances", "Advances from customers", "Advance payments from customers", "Downpayments from customers", "Down payments received", "Advance receipts from customers", "Deferred revenue (when labeled as advances)", "Unearned revenue (customer advances)", "Contract liabilities – advances", "Advances received for orders", "Advances received for goods and services", "Prepayments received from customers", "Advances from dealers/distributors", "Advance from related parties (if operating)", "Other advances received", "Trade advances received", "Advances and deposits received", "Security deposits received (short‑term, operating)", "Short‑term advances from customers", "Short‑term downpayments from customers"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
 
  "U75 | Accrued and other current liabilities": {
-    "aliases": ["Accrued expenses", "Other current liabilities", "Derivative Liabilities", "loans from shareholders/related entities"],
+    "aliases": ["Accrued expenses", "Other current liabilities", "Derivative Liabilities", "loans from shareholders/related entities","Accrued and other current liabilities", "Other current liabilities and accruals", "Accrued liabilities", "Accrued expenses", "Accrued charges", "Accrued operating expenses", "Other current liabilities", "Miscellaneous current liabilities", "Sundry current liabilities", "Other payables and accrued expenses (if not strictly trade)", "Accruals and deferred income (current)", "Accrued payroll and related liabilities", "Accrued employee benefits (current portion)", "Accrued interest (current, non‑debt classification)", "Accrued taxes (non‑income tax, e.g., VAT, GST)", "Accrued utilities, rent, etc.", "Accrued costs and other current liabilities", "Other accrued liabilities", "Other short‑term liabilities", "Current accrued and other liabilities", "Current accrued liabilities"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U72 | Provisions for current liabilities": {
-    "aliases": [],
+    "aliases": ["Provisions for current liabilities", "Current provisions", "Short‑term provisions", "Provisions (current portion)", "Current portion of provisions", "Provisions for warranties (current)", "Provision for warranty obligations – current", "Provisions for restructuring (current portion)", "Restructuring provision – current", "Provisions for legal claims (current portion)", "Legal provision – current", "Provisions for onerous contracts (current portion)", "Onerous contract provision – current", "Provision for environmental liabilities (current portion)", "Provision for employee benefits (current portion)", "Current provisions and contingent liabilities (when grouped)", "Provisions for risks and charges – current", "Short‑term provisions for risks and charges", "Other current provisions"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3113,26 +3123,26 @@ APAC_BALANCE_SHEET_FIELDS = {
         "indent_level": 1
   },
   "U71 | Trade Accounts payable": {
-    "aliases": ["Trade Creditors", "Accounts Payables"],
+    "aliases": ["Trade Creditors", "Accounts Payables","Trade accounts payable", "Trade payables", "Accounts payable – trade", "Trade creditors", "Sundry creditors (trade)", "Suppliers' payables", "Payables to suppliers", "Trade and other payables (trade portion)", "Bills payable (trade)", "Notes payable to suppliers", "Trade accounts and notes payable", "Trade accounts payable and accrued trade expenses", "Trade payables and accrued expenses (where clearly trade‑related)", "Commercial payables", "Trade liabilities"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U180 | Other payables": {
-    "aliases": [],
+    "aliases": ["Other payables", "Non‑trade payables", "Sundry creditors (non‑trade)", "Other creditors", "Other current payables", "Miscellaneous payables", "Payables to employees (non‑wage accruals)", "Payables to related parties (non‑trade)", "Payables to group companies (non‑trade)", "Payables to directors/shareholders (non‑trade)", "Payables for taxes (excluding income tax if separately disclosed)", "VAT/GST payables (when grouped in other payables)", "Social security and pension payables", "Statutory dues payable", "Other liabilities – current (non‑trade)", "Other operating payables (non‑trade)", "Other short‑term payables", "Other current obligations (non‑trade)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
 
   "U70 | Current income tax liabilities": {
-    "aliases": [],
+    "aliases": ["Current income tax liabilities", "Income taxes payable (current)", "Income tax payable", "Corporate income tax payable", "Current tax liabilities", "Current income tax payables", "Current tax payable", "Taxes on income payable (current)", "Provision for income tax (current)", "Taxation payable (income tax – current)", "Income tax due within one year", "Short‑term income tax liabilities", "Current liabilities – income tax", "Current income tax obligations"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
   },
   "U177 | Others financial liabilities & FV of financial instruments": {
-    "aliases": [],
+    "aliases": ["Other financial liabilities (current)", "Other current financial liabilities", "Other financial liabilities – short‑term", "Financial liabilities at fair value (current)", "Financial instruments at fair value (liabilities, current)", "Derivative financial liabilities (current)", "Derivative instruments – liabilities (current)", "Derivative liabilities – current", "Fair value of financial instruments (liabilities, current)", "Fair value of derivatives – current liabilities", "Financial liabilities measured at fair value (current)", "Other current financial obligations", "Other current interest‑bearing financial liabilities (non‑borrowings)", "Current liabilities – hedging instruments", "Liabilities arising from hedging instruments (current)", "Liabilities from financial guarantees (current)", "Contingent consideration (current, financial liability)", "Other current financial instruments (liabilities)", "Other short‑term financial liabilities", "Miscellaneous current financial liabilities"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3153,7 +3163,7 @@ APAC_BALANCE_SHEET_FIELDS = {
   },
 
   "U69 | Liabilities classified as held for sale": {
-    "aliases": [],
+    "aliases": ["Liabilities classified as held for sale", "Liabilities of disposal groups classified as held for sale", "Liabilities associated with assets held for sale", "Liabilities of assets held for sale", "Liabilities related to disposal group held for sale", "Liabilities held for sale", "Held‑for‑sale liabilities", "Liabilities of discontinued operations (held for sale)", "Liabilities associated with discontinued operations (held for sale)", "Liabilities of disposal group", "Disposal group liabilities – held for sale", "Non‑current liabilities classified as held for sale (if specified)", "Current liabilities classified as held for sale (if specified)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3342,7 +3352,7 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF53bis | - Gross interests (cash)": {
-    "aliases": ["Cash interest paid"],
+    "aliases": ["Cash interest paid","Gross interest (cash)", "Gross interests (cash)", "Interest (cash basis)", "Interest (cash)", "Interest paid and received (gross)", "Interest paid (cash)", "Interest received (cash)", "Interest expense (cash paid)", "Interest income (cash received)", "Cash interest expense", "Cash interest income", "Cash interest flows", "Finance costs (cash)", "Finance income (cash)", "Cash finance costs", "Cash finance income", "Interest on borrowings paid (cash)", "Interest on loans paid (cash)", "Interest on bonds paid (cash)", "Interest on debt paid (cash)", "Interest on bank loans paid (cash)", "Interest received on deposits (cash)", "Interest received on investments (cash)", "Interest received on loans granted (cash)", "Net interest (cash basis)", "Interest and similar charges (cash)", "Interest and similar income (cash)", "Cash flows from interest (gross)", "Cash interest paid and received"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
@@ -3368,31 +3378,31 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF45 | Decrease (increase) in inventories": {
-    "aliases": ["No other Alias"],
+    "aliases": ["(Increase) / decrease in inventory", "(Increase) / decrease in stock", "Change in inventories", "Movement in goods and materials", "Change in raw materials, work in progress and finished goods"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF46 | Decrease (increase) in trade receivables": {
-    "aliases": ["No other Alias"],
+    "aliases": ["(Increase) / decrease in trade receivables", "(Increase) / decrease in accounts receivable", "Movement in debtors", "Change in customers receivables", "Change in trade and other receivables", "(Increase) / decrease in bills receivable"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF47 | Increase (decrease) in trade payables": {
-    "aliases": ["No other Alias"],
+    "aliases": ["(Increase) / decrease in trade payables", "Change in accounts payable", "Movement in creditors", "Change in suppliers", "Change in trade and other payables", "(Increase) / decrease in bills payable"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF48 | Changes in other assets and liabilities": {
-    "aliases": ["Change in deferred taxes/liabilities", "other changes"],
+    "aliases": ["Change in deferred taxes/liabilities", "other changes","Change in other receivables", "Change in non‑trade receivables", "Change in prepayments", "Change in advances", "Change in tax receivables (income tax, VAT, GST)", "Change in sundry debtors (non‑trade)","Change in other payables", "Change in accrued liabilities", "Change in accruals", "Change in non‑trade creditors", "Change in tax payables (income tax, VAT, GST)", "Change in employee benefit payables", "Change in sundry creditors"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF49 | Others": {
-    "aliases": ["Cash taxes", "cash tax payments"],
+    "aliases": ["Cash taxes", "cash tax payments","Income tax paid", "Corporate tax paid", "Taxes on income paid", "Taxation paid", "Payment of income taxes", "Net income tax paid (including refunds)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
@@ -3410,19 +3420,19 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF34 | (Purchases) sales of property, plant and equipment": {
-    "aliases": ["Additions to tangible/intangible assets", "Capital Expenditure"],
+    "aliases": ["Additions to tangible/intangible assets", "Capital Expenditure","Purchases and sales of property, plant and equipment", "Purchases and disposals of property, plant and equipment", "Purchases/(sales) of property, plant and equipment", "Acquisitions and disposals of property, plant and equipment", "Additions and disposals of property, plant and equipment", "Purchase and sale of fixed assets", "Purchases and sales of fixed assets", "Purchase/(sale) of fixed assets", "Acquisition and disposal of fixed assets", "Capital expenditure and disposals of PPE", "Investments in property, plant and equipment", "Investments in and sales of fixed assets", "Purchase/(disposal) of tangible fixed assets", "Movements in property, plant and equipment (purchases and disposals)", "Movements in fixed assets (purchases and sales)", "Capital work‑in‑progress (CWIP)", "Construction in progress (CIP)", "Assets under construction", "Work in progress – capital projects", "Projects under development", "Purchase of fixed assets", "Acquisition of property, plant and equipment", "Capital expenditure for PPE", "Additions to fixed assets", "Purchase of tangible fixed assets", "Acquisition of intangible assets", "Capitalization of development costs", "Purchase of software", "Purchase of licenses", "Purchase of patents, trademarks", "Investments in intangible assets", "Acquisition of investment property", "Purchase of rental property", "Purchase of real estate held for investment", "Investments in real estate"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF35 | Proceeds from sales of property, plant and equipment": {
-    "aliases": ["Asset Sales", "Sales of PPE", "Divestment"],
+    "aliases": ["Asset Sales", "Sales of PPE", "Divestment","Proceeds from sale of property, plant and equipment", "Proceeds from sales of property, plant and equipment", "Proceeds from disposal of property, plant and equipment", "Cash proceeds from sale of property, plant and equipment", "Cash received from sale of property, plant and equipment", "Cash received from disposal of property, plant and equipment", "Sale of property, plant and equipment (proceeds)", "Sale of property, plant and equipment (cash inflow)", "Disposal of property, plant and equipment (proceeds)", "Disposal of property, plant and equipment (cash inflow)", "Proceeds from sale of fixed assets", "Proceeds from disposal of fixed assets", "Cash received on sale of fixed assets", "Cash received on disposal of fixed assets", "Proceeds from sale of tangible fixed assets", "Proceeds from disposal of tangible fixed assets", "Proceeds from sale of PPE", "PPE disposals – cash received", "Proceeds from asset disposals (PPE)", "Proceeds from sale of property and equipment", "Sale of fixed assets", "Disposal of property, plant and equipment", "Proceeds from sale of tangible assets", "Proceeds from disposal of PPE", "Sale of investment property", "Disposal of investment property", "Proceeds from sale of real estate investments", "Sale of intangible assets", "Disposal of intangible assets", "Proceeds from sale of software / licenses", "Proceeds from disposal of intangibles"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF36 | +/- Others": {
-    "aliases": ["Gain/loss from sales in subsidiaries", "other assets", "investments etc."],
+    "aliases": ["Gain/loss from sales in subsidiaries", "other assets", "investments etc.","Other investing cash flows", "Other cash flows from investing activities", "Other cash movements from investing activities", "Other investing activities", "Other investment‑related cash flows", "Miscellaneous investing cash flows", "Miscellaneous investing activities", "Other investment cash movements", "Other investing inflows/(outflows)", "Other investing items", "Other investing transactions", "Other cash flows – investing section", "Other investing cash inflows/(outflows)", "Other investing operations", "Other investment operations", "Proceeds from sale of investments", "Redemption of investments", "Sale of marketable securities", "Proceeds from disposal of equity investments", "Proceeds from disposal of debt securities", "Purchase of investments", "Acquisition of equity investments", "Acquisition of debt securities", "Purchase of marketable securities", "Purchase of long‑term investments", "Purchase of short‑term investments", "Investment in bonds", "Purchase of financial assets"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
@@ -3440,13 +3450,13 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF17 | Acquisitions": {
-    "aliases": ["Acquisition of subsidiaries", "Purchase of stake/shares in Subsidiaries/Other Entities"],
+    "aliases": ["Acquisition of subsidiaries", "Purchase of stake/shares in Subsidiaries/Other Entities","Acquisitions", "Acquisition of subsidiaries", "Acquisition of subsidiary", "Acquisition of businesses", "Acquisition of business units", "Acquisition of operations", "Business combinations – cash consideration", "Purchase of subsidiaries", "Purchase of subsidiary undertakings", "Purchase of business operations", "Investment in subsidiaries (cash paid)", "Investment in associates and joint ventures (cash paid)", "Acquisition of affiliates", "Acquisition of equity interests in subsidiaries/affiliates", "Cash paid for acquisitions", "Cash consideration for acquisitions", "Cash paid for business combinations", "Acquisitions (net of cash acquired)", "Net cash outflow on acquisition of subsidiaries", "Net cash outflow on acquisition of businesses"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF18 | Disposals": {
-    "aliases": ["Divestment of stake/shares in Subsidiaries/Other Entities"],
+    "aliases": ["Divestment of stake/shares in Subsidiaries/Other Entities","Disposals", "Disposal of subsidiaries", "Disposal of subsidiary", "Disposal of businesses", "Disposal of business units", "Disposal of operations", "Sale of subsidiaries", "Sale of subsidiary undertakings", "Sale of business operations", "Disposal of affiliates", "Disposal of equity interests in subsidiaries/affiliates", "Cash received from disposals", "Cash proceeds from disposals", "Cash received from sale of subsidiaries", "Cash received from sale of businesses", "Proceeds from disposal of subsidiaries", "Proceeds from disposal of businesses", "Net cash inflow on disposal of subsidiaries", "Net cash inflow on disposal of businesses", "Disposals (net of cash disposed)", "Proceeds from disposal of controlled entities", "Divestment proceeds"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
@@ -3458,19 +3468,19 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF37 | Dividends paid to non-controlling interests": {
-    "aliases": ["Dividend paid to minorities"],
+    "aliases": ["Dividend paid to minorities","Dividends paid to non‑controlling interests", "Dividends paid to non‑controlling shareholders", "Dividends paid to minority interests", "Dividends paid to minority shareholders", "Cash dividends paid to non‑controlling interests", "Cash dividends paid to minority interests", "Dividend payments to non‑controlling interests", "Dividend payments to minority shareholders", "Distribution to non‑controlling interests", "Distribution to minority interests", "Cash distributions to non‑controlling interests", "Cash distributions to minority shareholders", "Dividends to non‑controlling interests", "Dividends to minority interests"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF38 | Dividends paid to owners of the parent company": {
-    "aliases": ["Equity Dividends", "Payments of divident to equity shareholders"],
+    "aliases": ["Equity Dividends", "Payments of divident to equity shareholders","Dividends paid to owners of the parent company", "Dividends paid to owners of the parent", "Dividends paid to shareholders of the parent", "Dividends paid to equity holders of the parent", "Dividends paid to ordinary shareholders", "Dividends paid to common shareholders", "Dividends paid to preference shareholders", "Cash dividends paid to shareholders", "Cash dividends paid to owners of the parent", "Cash dividends paid to equity holders", "Dividend payments to shareholders", "Dividend payments to owners of the parent", "Dividends paid (to shareholders)", "Dividends paid (to owners)", "Cash distributions to shareholders", "Cash distributions to equity holders", "Cash distributions to owners of the parent", "Equity dividends paid", "Dividends to shareholders of the company"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1   
   },
   "ICF55 | + Dividends from affiliates": {
-    "aliases": [],
+    "aliases": ["Dividends from affiliates", "Dividends received from affiliates", "Dividends received from associated companies", "Dividends received from associates", "Dividends received from joint ventures", "Dividends received from subsidiaries", "Dividends from associates and joint ventures", "Dividends from equity‑accounted investees", "Dividend income from affiliates", "Dividend income from associates", "Dividend income from joint ventures", "Dividend income from investments in affiliates", "Cash dividends received from affiliates", "Cash dividends received from associates", "Cash dividends received from joint ventures", "Dividends from investments in associates/JV", "Dividends from investments in subsidiaries (when labelled as affiliates)", "Dividends received from related parties (affiliates)", "Dividend income received", "Dividends from subsidiaries / associates", "Dividends on investments received"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3482,13 +3492,13 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF39 | Capital inc. (dec.) - owners of the parent company": {
-    "aliases": ["Issuance of common/preferred shares", "Equity issuance"],
+    "aliases": ["Issuance of common/preferred shares", "Equity issuance","Capital increase/(decrease) – owners of the parent company", "Capital increase/(decrease) – owners of the parent", "Capital increases and reductions – shareholders of the parent", "Share capital increase/(decrease) – parent", "Share capital transactions – owners of the parent", "Changes in share capital – owners of the parent", "Changes in equity – owners of the parent (capital transactions)", "Issue and redemption of share capital – owners of the parent", "Issue and cancellation of shares – owners of the parent", "Equity contributions from owners of the parent", "Equity withdrawals by owners of the parent", "Capital contributions from shareholders of the parent", "Capital repayments to shareholders of the parent", "Proceeds from / repayment of equity capital – owners of the parent", "Proceeds from issue / buyback of shares – parent company", "Share buyback and issuance – parent company", "Movements in share capital – parent company (cash)", "Capital transactions with owners of the parent", "Transactions with owners of the parent in their capacity as owners (cash)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF40 | Capital inc. (dec.) - non-controlling interests": {
-    "aliases": ["Purchase of minority shares", "Inc/dec in minority shareholding"],
+    "aliases": ["Purchase of minority shares", "Inc/dec in minority shareholding","Capital increase/(decrease) – non‑controlling interests", "Capital increases and reductions – non‑controlling interests", "Capital increase/(decrease) – minority interests", "Share capital transactions – non‑controlling interests", "Changes in share capital – non‑controlling interests", "Changes in equity – non‑controlling interests (capital transactions)", "Equity contributions from non‑controlling interests", "Equity contributions from minority interests", "Capital contributions from minority shareholders", "Capital injections by non‑controlling shareholders", "Capital repayments to non‑controlling shareholders", "Capital repayments to minority interests", "Proceeds from capital contributions – non‑controlling interests", "Payments for capital reductions – non‑controlling interests", "Transactions with non‑controlling interests (equity, cash)", "Ownership changes with non‑controlling interests (cash component)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
@@ -3500,13 +3510,13 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF19 | Proceeds from the issuance of debt": {
-    "aliases": ["Proceeds from bank debt/bonds", "lease liabilities other debt"],
+    "aliases": ["Proceeds from bank debt/bonds", "lease liabilities other debt","Proceeds from the issuance of debt", "Proceeds from issuance of debt", "Proceeds from issue of debt", "Proceeds from issuance of bonds", "Proceeds from issuance of debentures", "Proceeds from issuance of notes", "Proceeds from issuance of loan notes", "Proceeds from new borrowings", "Proceeds from long‑term borrowings", "Proceeds from short‑term borrowings", "Increase in borrowings (cash inflow)", "New loans raised", "New bank loans raised", "Cash received from new debt", "Cash proceeds from issuance of debt", "Cash proceeds from issue of debt securities", "Cash inflows from borrowings", "Proceeds from bank loans", "Proceeds from long‑term loans", "Proceeds from short‑term loans", "Proceeds from financing loans"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF20 | Repayment of detbs": {
-    "aliases": ["Repayments of bank debt/bonds", "lease liabilities other debt"],
+    "aliases": ["Repayments of bank debt/bonds", "lease liabilities other debt","Repayment of debts", "Repayments of debts", "Repayment of debt", "Repayment of borrowings", "Repayments of borrowings", "Repayment of loans", "Loan repayments", "Repayment of bank loans", "Repayment of bank borrowings", "Repayment of long‑term borrowings", "Repayment of short‑term borrowings", "Redemption of bonds", "Redemption of debentures", "Redemption of notes", "Redemption of loan notes", "Cash outflows for debt repayment", "Cash used to repay borrowings", "Cash used for loan repayments", "Reduction in borrowings (cash outflow)"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3520,13 +3530,13 @@ APAC_CASH_FLOW_FIELDS = {
   },
 
   "ICF41 | Loan granted to subsidiaries/JV": {
-    "aliases": ["Loans from parent compny/shareholders/subsidiaries"],
+    "aliases": ["Loans from parent compny/shareholders/subsidiaries","Loan granted to subsidiaries/JV", "Loans granted to subsidiaries and joint ventures", "Loans granted to subsidiaries", "Loans granted to joint ventures", "Loans to subsidiaries", "Loans to joint ventures", "Loans to group companies", "Loans to affiliated companies", "Loans to related parties (subsidiaries/JV)", "Intercompany loans granted", "Intercompany financing – loans granted", "Cash advances to subsidiaries/JV", "Cash advances to group entities", "Lending to subsidiaries/JV", "Loans and advances to subsidiaries/JV", "Loan outflows to subsidiaries/JV", "Cash outflows for loans to subsidiaries/JV"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
   },
   "ICF42 | (Loan repaid from subsidiaries/JV)": {
-    "aliases": ["Loans to parent compny/shareholders/subsidiaries"],
+    "aliases": ["Loans to parent compny/shareholders/subsidiaries","Loan repaid from subsidiaries/JV", "Loans repaid by subsidiaries and joint ventures", "Loans repaid by subsidiaries", "Loans repaid by joint ventures", "Repayment of loans from subsidiaries/JV", "Repayment of loans by subsidiaries/JV", "Cash received from loan repayments by subsidiaries/JV", "Cash received from subsidiaries/JV – loan repayment", "Intercompany loans repaid", "Intercompany financing – loans repaid", "Loan repayments from group companies", "Loan repayments from affiliated companies", "Loan repayments from related parties (subsidiaries/JV)", "Loans and advances recovered from subsidiaries/JV", "Cash inflows from loans repaid by subsidiaries/JV"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 1
@@ -3538,7 +3548,7 @@ APAC_CASH_FLOW_FIELDS = {
         "indent_level": 0
   },
   "ICF10 | +/- Others (Currency…)": {
-    "aliases": ["FX changes", "currency"],
+    "aliases": ["FX changes", "currency","Others (currency)", "Other (currency effects)", "Other (foreign exchange)", "Other currency translation effects", "Other FX translation effects", "Other foreign exchange differences on cash", "Other currency differences on cash and cash equivalents", "Other FX impact on cash", "Other exchange rate effects on cash", "Effect of currency translation on cash (other)", "Miscellaneous currency effects", "Miscellaneous foreign exchange effects", "Other non‑cash currency adjustments", "Other foreign exchange adjustments on cash flows", "Other translation differences on cash and cash equivalents", "Other exchange differences on cash", "Other items (including currency effects)", "Other reconciliation items (currency)", "Other adjustments – currency / FX"],
     "calculation": None,
     "is_calculated": False,
         "indent_level": 0
@@ -3612,3 +3622,90 @@ def get_field_mappings(region: str = "US") -> dict:
     if region in ("APAC", "EMEA"):
         return FIELD_MAPPINGS_APAC  # EMEA uses same codes as APAC
     return FIELD_MAPPINGS
+
+
+def get_calculated_with_fallback(region: str = "US", statement_type: str = "income_statement") -> list:
+    """Return list of calculated fields that can fallback to direct matching.
+    
+    These are calculated fields (like SG&A) that might also appear directly in the annual report.
+    If they appear directly, we should match them instead of calculating from sub-fields.
+    
+    Args:
+        region: Region code - "US", "APAC", or "EMEA"
+        statement_type: Statement type
+        
+    Returns:
+        List of field labels that can fallback to direct matching
+    """
+    # US region fallback fields
+    US_FALLBACK = {
+        "income_statement": [
+            "I4 | SG&A Expense",  # Can be matched directly if sub-fields (I48, I49, I53) don't exist
+            "I35 | Provision for income taxes (benefit)",  # Can be matched directly if sub-fields don't exist
+            
+        ],
+        "balance_sheet": [
+                "B33 | Other debtors",
+                "B14 | Inventories (net)",
+                "B98 | Other current operating assets",
+                "B41 | Current financial assets (incl. Derivatives) - Net",
+                "B6 | Net fixed assets (property, plants and equipment, Net)",
+                "B22 | Investment properties, net",
+                "B3 | Other assets and Intangible - Net",
+                "B47 | Non current financial assets (incl derivatives & hedging financial instruments)",
+                "L22 | Short-term debt < 1 yr , including current maturities of LT debt",
+                "L72 | Provisions for current liabilities",
+                "L15 | Long-term debt, less current maturities",
+                "L4 | Additional paid-in capital",
+                "ACF19 | Net income"
+            ],
+        "cash_flow": [
+                "ACF36 | Cash-flow before cash interests and change in WC",
+                "ACF29 | EBITDA (published)",
+                "ACF36bis | Cash-flow before cash interests and change in WC",
+                "ACF04 | CAPEX",
+                "ACF06 | +/- Acquisitions net of disposals"
+
+        ]
+    }
+    
+    # APAC/EMEA region fallback fields
+    APAC_FALLBACK = {
+        "income_statement": [
+            "Q6 | SG&A Expense",  # Can be matched directly if sub-fields (Q48, Q49, Q50) don't exist
+            "Q28 | Interest costs (gross)",  # Can be matched directly
+        ],
+        "balance_sheet": [
+            "U10 | Other Intangible assets Net",
+            "U2 | Tangible assets: Property, plant and equipment",
+            "U6 | Investment properties",
+            "U17 | Non current financial assets (incl derivatives & hedging financial instruments)",
+            "U24 | Inventories (net)",
+            "U31 | Other receivables",
+            "U98 | Other current operating assets",
+            "U36 | Current financial assets",
+            "U39 | Net Cash and bank deposits (excluding overdrafts)",
+            "U45 | Share premium",
+            "U181 | Reserves",
+            "U53init | o/w Borrowings / debt >1 yr (excluding current maturities of LT debt) pre-IFRS16",
+            "U60 | Other non-current liabilities",
+            "U63init | o/w Borrowings / debt < 1 yr (including current maturities of LT debt) pre-IFRS16",
+            "U72 | Provisions for current liabilities",
+        ],
+        "cash_flow": [
+                "ICF14 | Net income",
+                "ICF52 | Cash-flow before cash interests and change in WCR",
+                "ICF15ifrs16 | EBITDA (published) IFRS",
+                "ICF02 | +/- Change in WCR",
+                "ICF04 | CAPEX"                
+        ]
+    }
+    
+    # Select the appropriate fallback list based on region
+    if region in ("APAC", "EMEA"):
+        fallback_dict = APAC_FALLBACK
+    else:
+        fallback_dict = US_FALLBACK
+    
+    # Return the list for the specified statement type
+    return fallback_dict.get(statement_type, [])

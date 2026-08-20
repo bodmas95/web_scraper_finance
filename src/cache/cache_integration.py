@@ -16,20 +16,33 @@ if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
 log_file = os.path.join(log_dir, f"cache_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler()
-    ]
-)
+
+# Configure logging - only to file, not to console
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# File handler with UTF-8 encoding
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+
+# Don't propagate to root logger (prevents console output)
+logger.propagate = False
 
 logger.info("="*80)
 logger.info("CACHE INTEGRATION MODULE LOADED")
 logger.info(f"Debug log file: {log_file}")
 logger.info("="*80)
+
+
+def initialize_all_caches():
+    """
+    Initialize all caches (extraction and BREF mapping) in session state.
+    Call this once at app startup.
+    """
+    initialize_extraction_cache()
+    initialize_bref_mapping_cache()
 
 
 def initialize_extraction_cache():
@@ -53,18 +66,18 @@ def initialize_extraction_cache():
             logger.info(f"Got MongoDB client: {mongo_client}")
             
             st.session_state.extraction_cache = ExtractionCache(mongo_client)
-            logger.info("✅ Extraction cache initialized successfully")
+            logger.info(" Extraction cache initialized successfully")
             
-            print("✅ Extraction cache initialized successfully")
-            print(f"📝 Debug log: {log_file}")
+            print(" Extraction cache initialized successfully")
+            print(f" Debug log: {log_file}")
             
         except Exception as e:
-            logger.error(f"❌ Failed to initialize extraction cache: {e}", exc_info=True)
-            print(f"⚠️ Warning: Could not initialize extraction cache: {e}")
-            print(f"📝 Check debug log: {log_file}")
+            logger.error(f" Failed to initialize extraction cache: {e}", exc_info=True)
+            print(f" Warning: Could not initialize extraction cache: {e}")
+            print(f" Check debug log: {log_file}")
             
             # Show error in UI
-            st.sidebar.error(f"⚠️ Cache initialization failed")
+            st.sidebar.error(f" Cache initialization failed")
             st.sidebar.caption(f"Error: {str(e)}")
             st.sidebar.caption(f"Extraction will proceed without caching")
             
@@ -74,12 +87,51 @@ def initialize_extraction_cache():
         logger.info("Cache already initialized in session state")
 
 
+def initialize_bref_mapping_cache():
+    """
+    Initialize BREF mapping cache in session state.
+    Call this once at app startup.
+    """
+    logger.info("Initializing BREF mapping cache...")
+    
+    if 'bref_mapping_cache' not in st.session_state:
+        try:
+            logger.info("BREF mapping cache not in session state, creating new instance...")
+            
+            from src.cache import get_mongo_client
+            logger.info("Imported get_mongo_client")
+            
+            from src.cache.bref_mapping_cache import BREFMappingCache
+            logger.info("Imported BREFMappingCache")
+            
+            mongo_client = get_mongo_client()
+            logger.info(f"Got MongoDB client: {mongo_client}")
+            
+            st.session_state.bref_mapping_cache = BREFMappingCache(mongo_client)
+            logger.info("BREF mapping cache initialized successfully")
+            
+            print("BREF mapping cache initialized successfully")
+            print(f"Debug log: {log_file}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize BREF mapping cache: {e}", exc_info=True)
+            print(f"Warning: Could not initialize BREF mapping cache: {e}")
+            print(f"Check debug log: {log_file}")
+            
+            st.session_state.bref_mapping_cache = None
+            st.session_state.bref_mapping_cache_error = str(e)
+    else:
+        logger.info("BREF mapping cache already initialized in session state")
+
+
 def extract_with_cache(
     pdf_bytes: bytes,
     company_name: str,
     target_year: int,
     selected_types: List[str],
     extraction_function,
+    force_refresh: bool = False,
+    manual_pages: Dict = None,
     **extraction_kwargs
 ) -> Dict:
     """
@@ -115,6 +167,7 @@ def extract_with_cache(
     logger.info(f"Year: {target_year}")
     logger.info(f"Statement types: {selected_types}")
     logger.info(f"PDF size: {len(pdf_bytes):,} bytes")
+    logger.info(f"Manual pages: {manual_pages}")
     logger.info("="*80)
     
     # Initialize cache if not already done
@@ -132,29 +185,38 @@ def extract_with_cache(
         
         # Show prominent warning to user
         st.warning(
-            "⚠️ **Cache Not Available**\n\n"
+            " **Cache Not Available**\n\n"
             "Extraction will proceed without caching. This means:\n"
             "- Extraction will take 8-10 minutes\n"
             "- Results will NOT be cached for future use\n"
             "- Repeated extractions will take the same time\n\n"
             f"Reason: {st.session_state.get('cache_error', 'Unknown error')}"
         )
-        st.caption(f"📝 Debug log: {log_file}")
+        st.caption(f" Debug log: {log_file}")
         
         return extraction_function(**extraction_kwargs)
     
-    # Step 1: Try to get from cache
-    logger.info("Attempting to get from cache...")
+        # Step 1: Try to get from cache (unless force_refresh is True)
+    cached_results = None
     
-    try:
-        cached_results = cache.get(company_name, pdf_bytes, target_year)
-        logger.info(f"Cache lookup result: {'HIT' if cached_results else 'MISS'}")
-    except Exception as e:
-        logger.error(f"Error during cache lookup: {e}", exc_info=True)
-        cached_results = None
+    if force_refresh:
+        logger.info("Force refresh enabled - skipping cache lookup")
+        # Don't show UI message here - will show during extraction
+    else:
+        logger.info("Attempting to get from cache...")
+        
+        try:
+            cached_results = cache.get(company_name, pdf_bytes, target_year, manual_pages)
+            logger.info(f"Cache lookup result: {'HIT' if cached_results else 'MISS'}")
+        except Exception as e:
+            logger.error(f"Error during cache lookup: {e}", exc_info=True)
+            cached_results = None
     
     if cached_results:
         logger.info(f"Cache HIT! Found {len(cached_results)} statements")
+        logger.info(f"Cached statement types: {list(cached_results.keys())}")
+        logger.info(f"Requested statement types: {selected_types}")
+        
         # Cache HIT - filter for requested statement types
         filtered_results = {
             stmt_type: cached_results.get(stmt_type)
@@ -162,30 +224,120 @@ def extract_with_cache(
             if stmt_type in cached_results
         }
         
-        if filtered_results:
-            logger.info(f"Returning {len(filtered_results)} filtered results from cache")
-            st.success(f"✅ Loaded from cache! (Saved ~8-10 minutes)")
-            st.info(f"📊 Cached statements: {', '.join(filtered_results.keys())}")
-            st.caption(f"📝 Debug log: {log_file}")
+        # Check if we have ALL requested statements or only SOME
+        missing_statements = [stmt for stmt in selected_types if stmt not in filtered_results]
+        
+        logger.info(f"Filtered results: {list(filtered_results.keys()) if filtered_results else 'EMPTY'}")
+        logger.info(f"Missing statements: {missing_statements}")
+        
+        if filtered_results and not missing_statements:
+            # FULL CACHE HIT - all requested statements are cached
+            logger.info(f"FULL CACHE HIT - Returning {len(filtered_results)} cached results")
+            st.success(f" Loaded from cache! (Saved ~8-10 minutes)")
+            st.info(f" Cached statements: {', '.join(filtered_results.keys())}")
+            st.caption(f" Debug log: {log_file}")
             
-            # Return in the same format as extraction_function
+            # CRITICAL: Return immediately - do NOT continue to extraction
+            logger.info("RETURNING CACHED RESULTS - SKIPPING EXTRACTION")
             return {
                 "results": filtered_results,
                 "manual_needed": [],
                 "errors": {},
                 "logs": {stmt: "Loaded from cache" for stmt in filtered_results.keys()}
             }
+        elif filtered_results and missing_statements:
+            # PARTIAL CACHE HIT - some statements cached, some missing
+            logger.warning(f"PARTIAL CACHE HIT! Cached: {list(filtered_results.keys())}, Missing: {missing_statements}")
+            st.info(f" Partial cache hit: {', '.join(filtered_results.keys())} loaded from cache")
+            st.warning(f"⚠️ Missing statements: {', '.join(missing_statements)} - extracting now...")
+            
+            # Extract only the missing statements
+            logger.info(f"Extracting only missing statements: {missing_statements}")
+            
+            # Update extraction_kwargs to only extract missing statements
+            extraction_kwargs_copy = extraction_kwargs.copy()
+            extraction_kwargs_copy['statement_types'] = missing_statements
+            
+            # Extract missing statements
+            logger.info("CALLING EXTRACTION FUNCTION FOR MISSING STATEMENTS...")
+            try:
+                extraction_result = extraction_function(**extraction_kwargs_copy)
+                logger.info(f"Extraction completed. Result keys: {list(extraction_result.keys()) if extraction_result else 'None'}")
+            except Exception as e:
+                logger.error(f"Extraction failed: {e}", exc_info=True)
+                # Return cached results even if extraction of missing statements failed
+                st.error(f"❌ Failed to extract missing statements: {e}")
+                st.info(f" Returning {len(filtered_results)} cached statements")
+                return {
+                    "results": filtered_results,
+                    "manual_needed": missing_statements,
+                    "errors": {stmt: str(e) for stmt in missing_statements},
+                    "logs": {stmt: "Loaded from cache" for stmt in filtered_results.keys()}
+                }
+            
+            # Merge cached results with newly extracted results
+            if extraction_result and extraction_result.get("results"):
+                merged_results = {**filtered_results, **extraction_result["results"]}
+                logger.info(f"Merged results: {list(merged_results.keys())}")
+                
+                # Cache the complete merged results
+                try:
+                    cache.set(
+                        company_name=company_name,
+                        pdf_bytes=pdf_bytes,
+                        target_year=target_year,
+                        extraction_results=merged_results,
+                        metadata={
+                            'extraction_time': datetime.utcnow().isoformat(),
+                            'pdf_size': len(pdf_bytes),
+                            'num_statements': len(merged_results),
+                            'statement_types': list(merged_results.keys()),
+                            'partial_cache_hit': True
+                        },
+                        manual_pages=manual_pages
+                    )
+                    logger.info("✅ Merged results cached successfully")
+                except Exception as e:
+                    logger.error(f"Failed to cache merged results: {e}", exc_info=True)
+                
+                # Return merged results
+                return {
+                    "results": merged_results,
+                    "manual_needed": extraction_result.get("manual_needed", []),
+                    "errors": extraction_result.get("errors", {}),
+                    "logs": {
+                        **{stmt: "Loaded from cache" for stmt in filtered_results.keys()},
+                        **extraction_result.get("logs", {})
+                    }
+                }
+            else:
+                # Extraction of missing statements failed - return cached results only
+                logger.warning("Extraction of missing statements returned empty results")
+                return {
+                    "results": filtered_results,
+                    "manual_needed": missing_statements,
+                    "errors": {},
+                    "logs": {stmt: "Loaded from cache" for stmt in filtered_results.keys()}
+                }
+        else:
+            # Cache has results but not for requested statement types
+            logger.warning(f"Cache HIT but no matching statement types! Cached: {list(cached_results.keys())}, Requested: {selected_types}")
+            st.warning(f"⚠️ Cache found but doesn't contain requested statements. Extracting fresh...")
     
-    # Step 2: Cache MISS - do extraction
-    logger.info("Cache MISS - proceeding with extraction")
+                # Step 2: Cache MISS or no cached results - do full extraction
+    logger.info("Cache MISS - proceeding with FULL extraction")
+    logger.info(f"Reason: force_refresh={force_refresh}, cached_results={'None' if not cached_results else 'exists but filtered to empty'}")
     logger.info(f"Calling extraction function: {extraction_function.__name__}")
     logger.info(f"Extraction kwargs: {list(extraction_kwargs.keys())}")
+    logger.info(f"Extracting all requested statements: {selected_types}")
     
-    st.info(f"🔄 Extracting from PDF... (This may take 8-10 minutes)")
-    st.caption(f"💡 Results will be cached for future use")
-    st.caption(f"📝 Debug log: {log_file}")
+    # Don't show redundant messages here - the st.status widget in hkex_ui.py already shows progress
+    # st.info(f"🔄 Extracting from PDF... (This may take 8-10 minutes)")
+    # st.caption(f"💡 Results will be cached for future use")
+    # st.caption(f"📝 Debug log: {log_file}")
     
-    # Call the extraction function
+        # Call the extraction function
+    logger.info("CALLING EXTRACTION FUNCTION NOW...")
     try:
         extraction_result = extraction_function(**extraction_kwargs)
         logger.info(f"Extraction completed. Result keys: {list(extraction_result.keys()) if extraction_result else 'None'}")
@@ -209,17 +361,19 @@ def extract_with_cache(
                     'pdf_size': len(pdf_bytes),
                     'num_statements': len(extraction_result["results"]),
                     'statement_types': list(extraction_result["results"].keys())
-                }
+                },
+                manual_pages=manual_pages
             )
             
-            logger.info("✅ Results cached successfully")
-            st.success("💾 Results cached for future use!")
-            st.caption(f"📝 Debug log: {log_file}")
+            logger.info("[OK] Results cached successfully")
+            # Don't show redundant success message - extraction summary already shows success
+            # st.success("💾 Results cached for future use!")
+            # st.caption(f"📝 Debug log: {log_file}")
             
         except Exception as e:
             logger.error(f"Failed to cache results: {e}", exc_info=True)
-            print(f"⚠️ Warning: Could not cache results: {e}")
-            print(f"📝 Check debug log: {log_file}")
+            print(f" Warning: Could not cache results: {e}")
+            print(f" Check debug log: {log_file}")
     else:
         logger.warning("Extraction result is empty or has no 'results' key, not caching")
     
@@ -236,11 +390,19 @@ def render_cache_management_ui():
     if 'extraction_cache' not in st.session_state:
         initialize_extraction_cache()
     
+        # Also render mapping cache UI
+    # Note: Mapping cache UI is rendered separately in brefmap_multi_ui.py
+    # No need to render it here
+    
+    # Continue with extraction cache UI below
+    if 'extraction_cache' not in st.session_state:
+        initialize_extraction_cache()
+    
     cache = st.session_state.extraction_cache
     
     if cache is None:
         st.sidebar.markdown("---")
-        st.sidebar.error("❌ **Cache Status: OFFLINE**")
+        st.sidebar.error(" **Cache Status: OFFLINE**")
         st.sidebar.caption(
             f"Reason: {st.session_state.get('cache_error', 'Unknown error')[:100]}"
         )
@@ -249,7 +411,7 @@ def render_cache_management_ui():
         )
         
         # Add retry button
-        if st.sidebar.button("🔄 Retry Cache Initialization", use_container_width=True):
+        if st.sidebar.button(" Retry Cache Initialization", use_container_width=True):
             if 'extraction_cache' in st.session_state:
                 del st.session_state.extraction_cache
             if 'cache_error' in st.session_state:
@@ -260,9 +422,9 @@ def render_cache_management_ui():
     
     # Cache is available - show status
     st.sidebar.markdown("---")
-    st.sidebar.success("✅ **Cache Status: ONLINE**")
+    st.sidebar.success(" **Cache Status: ONLINE**")
     
-    st.sidebar.subheader("🗄️ Cache Management")
+    st.sidebar.subheader(" Cache Management")
     
     # Get cache statistics
     try:
@@ -278,9 +440,24 @@ def render_cache_management_ui():
         st.sidebar.metric("Total Size", f"{stats.get('total_size_mb', 0)} MB")
         st.sidebar.metric("Total Accesses", stats.get('total_accesses', 0))
         
-        # Show cached companies
+        # Show BREF mapping cache stats if available
+        bref_cache = st.session_state.get('bref_mapping_cache')
+        if bref_cache:
+            try:
+                bref_stats = bref_cache.get_stats()
+                st.sidebar.markdown("**BREF Mapping Cache:**")
+                col3, col4 = st.sidebar.columns(2)
+                with col3:
+                    st.metric("Mappings", bref_stats.get('total_cached', 0))
+                with col4:
+                    st.metric("Time Saved", f"{bref_stats.get('estimated_time_saved_hours', 0)}h")
+                st.sidebar.caption(f"Size: {bref_stats.get('total_size_mb', 0)} MB | Accesses: {bref_stats.get('total_accesses', 0)}")
+            except Exception as e:
+                logger.error(f"Error loading BREF mapping cache stats: {e}")
+        
+                # Show cached companies
         if stats.get('companies'):
-            with st.sidebar.expander("📋 Cached Companies"):
+            with st.sidebar.expander(" Cached Companies"):
                 for company in stats['companies']:
                     st.write(f"• {company}")
         
@@ -288,18 +465,199 @@ def render_cache_management_ui():
         col_refresh, col_clear = st.sidebar.columns(2)
         
         with col_refresh:
-            if st.button("🔄 Refresh", use_container_width=True):
+            if st.button(" Refresh", use_container_width=True):
                 st.rerun()
         
         with col_clear:
-            if st.button("🗑️ Clear All", use_container_width=True):
+            if st.button(" Clear All", use_container_width=True):
                 cache.clear_all()
                 st.sidebar.success("Cache cleared!")
                 st.rerun()
         
+                # ===== NEW: Selective Cache Clearing =====
+        st.sidebar.markdown("---")
+        st.sidebar.subheader(" Selective Cache Clear")
+        st.sidebar.caption("Clear cache for specific company/year (useful when all 3 statements are not cached)")
+        
+        # Get list of cached companies with details
+        cached_companies = cache.list_cached_companies()
+        
+                # ===== DETECT INCOMPLETE CACHES =====
+        incomplete_caches = []
+        complete_caches = []
+        
+        if cached_companies:
+            logger.info(f"Checking {len(cached_companies)} cached companies for completeness...")
+            
+            for company_info in cached_companies:
+                company_name = company_info.get('company_name', 'Unknown')
+                years = company_info.get('years', [])
+                
+                logger.info(f"Checking company: {company_name}, years: {years}")
+                
+                for year in years:
+                    # Check if this cache entry has all 3 statements
+                    try:
+                        entry_details = cache.get_cache_entry_details(company_name, year)
+                        
+                        if entry_details:
+                            extraction_results = entry_details.get('extraction_results', {})
+                            
+                            # DEBUG: Log what we found
+                            logger.info(f"  {company_name} ({year}): extraction_results type = {type(extraction_results)}")
+                            logger.info(f"  {company_name} ({year}): extraction_results keys = {list(extraction_results.keys()) if isinstance(extraction_results, dict) else 'NOT A DICT'}")
+                            
+                            # Handle case where extraction_results might be None or not a dict
+                            if not isinstance(extraction_results, dict):
+                                logger.warning(f"  {company_name} ({year}): extraction_results is not a dict! Value: {extraction_results}")
+                                extraction_results = {}
+                            
+                            required_statements = ['income_statement', 'balance_sheet', 'cash_flow']
+                            cached_statements = [stmt for stmt in required_statements if stmt in extraction_results]
+                            missing_statements = [stmt for stmt in required_statements if stmt not in extraction_results]
+                            
+                            logger.info(f"  {company_name} ({year}): Cached statements = {cached_statements}")
+                            logger.info(f"  {company_name} ({year}): Missing statements = {missing_statements}")
+                            
+                            cache_info = {
+                                'company_name': company_name,
+                                'year': year,
+                                'cached_statements': cached_statements,
+                                'missing_statements': missing_statements,
+                                'is_complete': len(cached_statements) == 3,
+                                'created_at': entry_details.get('created_at'),
+                                'access_count': entry_details.get('access_count', 0)
+                            }
+                            
+                            if cache_info['is_complete']:
+                                complete_caches.append(cache_info)
+                                logger.info(f"  {company_name} ({year}): COMPLETE [OK]")
+                            else:
+                                incomplete_caches.append(cache_info)
+                                logger.warning(f"  {company_name} ({year}): INCOMPLETE [WARNING]")
+                        else:
+                            logger.warning(f"  {company_name} ({year}): No entry_details found!")
+                            
+                    except Exception as e:
+                        logger.error(f"Error checking cache completeness for {company_name} ({year}): {e}", exc_info=True)
+            
+            logger.info(f"Detection complete: {len(incomplete_caches)} incomplete, {len(complete_caches)} complete")
+            
+            # DEBUG: Print to console as well
+            print(f"\n🔍 CACHE COMPLETENESS CHECK:")
+            print(f"  Total companies checked: {len(cached_companies)}")
+            print(f"  Incomplete caches: {len(incomplete_caches)}")
+            print(f"  Complete caches: {len(complete_caches)}")
+            if incomplete_caches:
+                print(f"\n⚠️ INCOMPLETE CACHES:")
+                for cache_info in incomplete_caches:
+                    print(f"  - {cache_info['company_name']} ({cache_info['year']}): {len(cache_info['cached_statements'])}/3 statements")
+                    print(f"    Cached: {cache_info['cached_statements']}")
+                    print(f"    Missing: {cache_info['missing_statements']}")
+            print()
+            
+            # Show warning if incomplete caches found
+            if incomplete_caches:
+                st.sidebar.warning(f"⚠️ {len(incomplete_caches)} incomplete cache(s) found!")
+                st.sidebar.caption("These entries are missing at least one financial statement")
+                
+                # Show incomplete caches in an expander
+                with st.sidebar.expander(f"⚠️ Incomplete Caches ({len(incomplete_caches)})", expanded=True):
+                    for cache_info in incomplete_caches:
+                        st.markdown(f"**{cache_info['company_name']} - {cache_info['year']}**")
+                        st.caption(f"✅ Cached: {', '.join(cache_info['cached_statements']) if cache_info['cached_statements'] else 'None'}")
+                        st.caption(f"❌ Missing: {', '.join(cache_info['missing_statements'])}")
+                        st.caption(f"📊 Accesses: {cache_info['access_count']}")
+                        st.markdown("---")
+            else:
+                st.sidebar.success(f"✅ All {len(complete_caches)} cache(s) are complete!")
+                st.sidebar.caption("All cached entries have all 3 financial statements")
+            
+            # Create options for selectbox - PRIORITIZE INCOMPLETE CACHES
+            incomplete_options = []
+            complete_options = []
+            company_details_map = {}
+            
+            # Separate incomplete and complete caches
+            for cache_info in incomplete_caches:
+                option_key = f"⚠️ {cache_info['company_name']} - {cache_info['year']} (INCOMPLETE)"
+                incomplete_options.append(option_key)
+                company_details_map[option_key] = cache_info
+            
+            for cache_info in complete_caches:
+                option_key = f"✅ {cache_info['company_name']} - {cache_info['year']}"
+                complete_options.append(option_key)
+                company_details_map[option_key] = cache_info
+            
+                        # Combine: incomplete first, then complete
+            company_options = incomplete_options + complete_options
+            
+            # Selectbox for company/year selection
+            selectbox_label = "Select Company & Year"
+            if incomplete_options:
+                selectbox_label = "⚠️ Select Company & Year (Incomplete First)"
+            
+            selected_option = st.sidebar.selectbox(
+                selectbox_label,
+                options=["-- Select --"] + company_options,
+                key="cache_clear_selector",
+                                help="Incomplete caches (⚠️) are shown first. These are missing at least one financial statement."
+            )
+            
+            if selected_option and selected_option != "-- Select --":
+                cache_info = company_details_map[selected_option]
+                company_name = cache_info['company_name']
+                year = cache_info['year']
+                
+                # Show cache status (already computed)
+                st.sidebar.markdown(f"**Cache Status for {company_name} ({year}):**")
+                
+                if cache_info['is_complete']:
+                    st.sidebar.success(f"✅ All 3 statements cached")
+                    st.sidebar.caption(f"✅ {', '.join(cache_info['cached_statements'])}")
+                else:
+                    st.sidebar.error(f"⚠️ Incomplete: {len(cache_info['cached_statements'])}/3 statements")
+                    if cache_info['cached_statements']:
+                        st.sidebar.caption(f"✅ Cached: {', '.join(cache_info['cached_statements'])}")
+                    if cache_info['missing_statements']:
+                        st.sidebar.caption(f"❌ Missing: {', '.join(cache_info['missing_statements'])}")
+                    
+                    # Show recommendation for incomplete caches
+                    st.sidebar.info(
+                        "💡 **Recommendation:**\n\n"
+                        "Clear this cache and re-extract the PDF to get all 3 statements."
+                    )
+                
+                                # Show metadata
+                st.sidebar.caption(f"📅 Cached: {cache_info.get('created_at', 'Unknown')}")
+                st.sidebar.caption(f"📊 Accesses: {cache_info['access_count']}")
+                
+                # Clear button
+                col_clear_btn, col_cancel = st.sidebar.columns(2)
+                
+                with col_clear_btn:
+                    # Use different button style for incomplete vs complete
+                    button_type = "primary" if not cache_info['is_complete'] else "secondary"
+                    button_label = "🗑️ Clear & Re-extract" if not cache_info['is_complete'] else "🗑️ Clear Cache"
+                    
+                    if st.button(button_label, use_container_width=True, type=button_type, key="clear_selected_cache"):
+                        cache.invalidate(company_name=company_name, target_year=year)
+                        st.sidebar.success(f"✅ Cache cleared for {company_name} ({year})")
+                        
+                        if not cache_info['is_complete']:
+                            st.sidebar.info("💡 Now re-upload the PDF to extract all 3 statements")
+                        
+                        st.rerun()
+                
+                with col_cancel:
+                    if st.button("Cancel", use_container_width=True, key="cancel_clear_cache"):
+                        st.rerun()
+        else:
+            st.sidebar.info("No cached entries found")
+        
         # Show most accessed entries
         if stats.get('most_accessed'):
-            with st.sidebar.expander("🔥 Most Accessed"):
+            with st.sidebar.expander(" Most Accessed"):
                 for entry in stats['most_accessed']:
                     st.write(f"• {entry.get('company_name')} ({entry.get('target_year')}): {entry.get('access_count')} hits")
     
@@ -322,9 +680,9 @@ def invalidate_cache_for_company(company_name: str, target_year: int = None):
     
     if cache:
         cache.invalidate(company_name=company_name, target_year=target_year)
-        st.success(f"✅ Cache invalidated for {company_name}")
+        st.success(f" Cache invalidated for {company_name}")
     else:
-        st.warning("⚠️ Cache not available")
+        st.warning(" Cache not available")
 
 
 def get_cache_stats() -> Dict:

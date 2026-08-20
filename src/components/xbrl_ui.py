@@ -450,13 +450,13 @@ def parse_filing_data(filing, lei, api_base, silent=False):
         if json_path:
             xbrl_facts = ovh_parser.parse_xbrl_facts(json_path, fy_label)
             if not silent:
-                st.success(f"✅ Extracted {len(xbrl_facts)} XBRL facts")
+                st.success(f" Extracted {len(xbrl_facts)} XBRL facts")
         else:
             if not silent:
-                st.warning("⚠ Could not download XBRL facts")
+                st.warning(" Could not download XBRL facts")
 
         if not silent:
-            st.success(f"✅ {fy_label}: {len(tables)} statement types parsed")
+            st.success(f" {fy_label}: {len(tables)} statement types parsed")
 
         return tables, xbrl_facts
 
@@ -642,7 +642,7 @@ def _save_xbrl_consolidated_to_mongo(company_name: str, lei: str, region: str,
         # Check document size (MongoDB has 16MB limit)
         data_json = json.dumps(full_data, default=str)
         doc_size_mb = len(data_json) / (1024 * 1024)
-        print(f"📊 Document size: {doc_size_mb:.2f} MB")
+        print(f" Document size: {doc_size_mb:.2f} MB")
         
         # Delete old GridFS file if exists
         existing_doc = reports_collection.find_one({"cache_key": cache_key})
@@ -650,15 +650,15 @@ def _save_xbrl_consolidated_to_mongo(company_name: str, lei: str, region: str,
             try:
                 from bson import ObjectId
                 fs.delete(ObjectId(existing_doc["gridfs_file_id"]))
-                print(f"🗑️ Deleted old GridFS file")
+                print(f" Deleted old GridFS file")
             except Exception as e:
-                print(f"⚠️ Could not delete old GridFS file: {e}")
+                print(f" Could not delete old GridFS file: {e}")
         
         if doc_size_mb > 15:
             # Document too large - use GridFS
-            print(f"📦 Document large ({doc_size_mb:.2f} MB), using GridFS")
+            print(f" Document large ({doc_size_mb:.2f} MB), using GridFS")
             import streamlit as st
-            st.info(f"📦 Saving large cache to GridFS ({doc_size_mb:.2f} MB)...")
+            st.info(f" Saving large cache to GridFS ({doc_size_mb:.2f} MB)...")
             
             # Save to GridFS
             gridfs_file_id = fs.put(
@@ -688,7 +688,7 @@ def _save_xbrl_consolidated_to_mongo(company_name: str, lei: str, region: str,
             }
         else:
             # Document small enough - save directly
-            print(f"💾 Document small ({doc_size_mb:.2f} MB), saving directly")
+            print(f" Document small ({doc_size_mb:.2f} MB), saving directly")
             doc = {
                 "cache_key": cache_key,
                 "company_name": company_name,
@@ -712,17 +712,17 @@ def _save_xbrl_consolidated_to_mongo(company_name: str, lei: str, region: str,
             upsert=True
         )
         
-        print(f"✅ Saved consolidated XBRL to MongoDB: {cache_key}")
+        print(f" Saved consolidated XBRL to MongoDB: {cache_key}")
         import streamlit as st
-        st.success(f"💾 Saved consolidated data to MongoDB cache")
+        st.success(f" Saved consolidated data to MongoDB cache")
         return True
         
     except Exception as e:
-        print(f"⚠️ Failed to save consolidated XBRL to MongoDB: {e}")
+        print(f" Failed to save consolidated XBRL to MongoDB: {e}")
         import traceback
         traceback.print_exc()
         import streamlit as st
-        st.error(f"⚠️ Failed to save to MongoDB cache: {e}")
+        st.error(f" Failed to save to MongoDB cache: {e}")
         return False
 
 
@@ -755,17 +755,17 @@ def _load_xbrl_consolidated_from_mongo(company_name: str, lei: str, region: str)
         doc = reports_collection.find_one({"cache_key": cache_key})
         
         if doc:
-            print(f"✅ Loaded consolidated XBRL from MongoDB cache: {cache_key}")
+            print(f" Loaded consolidated XBRL from MongoDB cache: {cache_key}")
             storage_type = doc.get("storage_type", "direct")
             
             if storage_type == "gridfs":
                 # Load from GridFS
-                print(f"📦 Loading from GridFS (size: {doc.get('size_mb', 0):.2f} MB)")
+                print(f" Loading from GridFS (size: {doc.get('size_mb', 0):.2f} MB)")
                 from bson import ObjectId
                 gridfs_file_id = doc.get("gridfs_file_id")
                 
                 if not gridfs_file_id:
-                    print(f"⚠️ GridFS file ID not found in document")
+                    print(f" GridFS file ID not found in document")
                     return None
                 
                 # Read from GridFS
@@ -793,7 +793,7 @@ def _load_xbrl_consolidated_from_mongo(company_name: str, lei: str, region: str)
                 }
             else:
                 # Load directly from document
-                print(f"💾 Loading from document (size: {doc.get('size_mb', 0):.2f} MB)")
+                print(f" Loading from document (size: {doc.get('size_mb', 0):.2f} MB)")
                 
                 # Deserialize DataFrames from JSON format
                 consolidated_data = {}
@@ -814,12 +814,12 @@ def _load_xbrl_consolidated_from_mongo(company_name: str, lei: str, region: str)
                     "cached_at": doc.get('updated_at')
                 }
         else:
-            print(f"⚠️ No cached consolidated XBRL found in MongoDB: {cache_key}")
+            print(f" No cached consolidated XBRL found in MongoDB: {cache_key}")
             # Don't show UI message here - it's expected on first run
             return None
             
     except Exception as e:
-        print(f"⚠️ Failed to load consolidated XBRL from MongoDB: {e}")
+        print(f" Failed to load consolidated XBRL from MongoDB: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -1051,7 +1051,7 @@ def render_xbrl_section(company, lei):
             with col_load:
                 load_btn = st.button("Load Filings from API", type="primary", use_container_width=True)
             with col_clear:
-                clear_cache_btn = st.button("\U0001f5d1️ Clear Cache", use_container_width=True, help="Clear all cached data and force re-parsing")
+                clear_cache_btn = st.button("\U0001f5d1 Clear Cache", use_container_width=True, help="Clear all cached data and force re-parsing")
 
             if clear_cache_btn:
                 # Clear session state
@@ -1080,7 +1080,7 @@ def render_xbrl_section(company, lei):
                 except Exception as e:
                     st.warning(f"Could not clear local cache: {e}")
 
-                st.success("✅ Cache cleared! Click 'Load Filings from API' to reload.")
+                st.success(" Cache cleared! Click 'Load Filings from API' to reload.")
                 st.rerun()
 
             if load_btn:
@@ -1343,6 +1343,13 @@ def render_xbrl_section(company, lei):
 
         st.info(f"{total_count} filings available. Currently {parsed_count} parsed. Click 'Consolidate Data' to parse and consolidate all filings.")
 
+        # Add checkbox to force refresh (bypass cache)
+        force_refresh = st.checkbox(
+            " Force Refresh (bypass cache and re-parse all filings)",
+            value=False,
+            help="Check this to ignore cached data and re-parse all filings from scratch. This will show the latest column headers with currency/unit information."
+        )
+
         col1, col2 = st.columns([1, 4])
 
         with col1:
@@ -1350,25 +1357,64 @@ def render_xbrl_section(company, lei):
                 if not st.session_state.lei or not st.session_state.api_base:
                     st.error("LEI or API Base URL not set")
                 else:
-                    # Hide individual filing display when consolidating
+                                        # Hide individual filing display when consolidating
                     st.session_state.show_individual_filing = False
                     
-                    # Try to load from MongoDB cache first
+                    # Try to load from MongoDB cache first (unless force refresh is enabled)
                     company_name = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else st.session_state.lei
                     region = st.session_state.get("selected_region", "EMEA")
                     
-                    cached_data = _load_xbrl_consolidated_from_mongo(company_name, st.session_state.lei, region)
+                    cached_data = None
+                    if not force_refresh:
+                        cached_data = _load_xbrl_consolidated_from_mongo(company_name, st.session_state.lei, region)
+                    else:
+                        st.info(" Force refresh enabled - bypassing cache and re-parsing all filings...")
                     
-                    if cached_data:
+                    if cached_data and not force_refresh:
                         # Use cached data
-                        st.info(f"📦 Loaded consolidated data from cache (saved at {cached_data.get('cached_at', 'unknown time')})")
+                        st.info(f" Loaded consolidated data from cache (saved at {cached_data.get('cached_at', 'unknown time')})")
                         st.session_state.consolidated_data = cached_data['consolidated_data']
                         st.session_state.financial_data = cached_data['financial_data']
                         st.session_state.parsed_labels = cached_data['parsed_labels']
                         st.session_state.all_facts = cached_data['all_facts']
-                        st.success(f"✅ Loaded {len(st.session_state.parsed_labels)} fiscal year(s) from cache")
+                        
+                        # IMPORTANT: Extract currency/unit from cached consolidated data
+                        # This is needed for cached data that was created before we added currency/unit support
+                        print("\n Extracting currency/unit from cached consolidated data...")
+                        consolidated_data = st.session_state.consolidated_data
+                        
+                        # Store in session state for BREF mapping to use
+                        if 'xbrl_currency_unit' not in st.session_state:
+                            st.session_state.xbrl_currency_unit = {}
+                        
+                        for stmt_type, df in consolidated_data.items():
+                            if df is not None and not df.empty:
+                                year_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                                if year_cols:
+                                    first_col = year_cols[0]
+                                    print(f"  {stmt_type}: first column = '{first_col}'")
+                                    import re
+                                    match = re.search(r'\(([A-Z]{3})\s+(\w+)\)', str(first_col))
+                                    if match:
+                                        currency = match.group(1)
+                                        unit_scale = match.group(2)
+                                        st.session_state.xbrl_currency_unit = {
+                                            'currency': currency,
+                                            'unit_scale': unit_scale
+                                        }
+                                        print(f"   Extracted from cache: currency={currency}, unit_scale={unit_scale}")
+                                        break
+                        
+                        st.success(f" Loaded {len(st.session_state.parsed_labels)} fiscal year(s) from cache")
                         st.rerun()
-                    # If no cache, continue with normal parsing below
+                                        # If no cache or force refresh, continue with normal parsing below
+
+                    # If force refresh, clear all parsed data to force re-parsing
+                    if force_refresh:
+                        st.session_state.financial_data = {}
+                        st.session_state.all_facts = []
+                        st.session_state.parsed_labels = set()
+                        st.info(" Cleared all parsed data - will re-parse all filings")
 
                     # Check which filings need parsing
                     unparsed_filings = []
@@ -1592,24 +1638,64 @@ def render_xbrl_section(company, lei):
                     year_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
                     all_year_cols.extend(year_cols)
             
-            # Extract years from column names
-            # For balance sheet: columns are dates like "31-Dec-2024"
-            # For income/cash flow: columns are like "FY2024"
+                        # Extract years from column names
+            # For balance sheet: columns are dates like "31-Dec-2024" or "31-Dec-2024 (EUR millions)"
+            # For income/cash flow: columns are like "FY2024" or "FY2024 (EUR millions)"
             years = []
             for col in all_year_cols:
                 if col.startswith("FY"):
                     try:
-                        years.append(int(col.replace("FY", "")))
+                        # Extract year from "FY2024" or "FY2024 (EUR millions)"
+                        year_part = col.replace("FY", "").split(" ")[0].strip()
+                        years.append(int(year_part))
                     except ValueError:
                         pass
-                elif "-" in col:  # Date format like "31-Dec-2024"
+                elif "-" in col:  # Date format like "31-Dec-2024" or "31-Dec-2024 (EUR millions)"
                     try:
-                        year = int(col.split("-")[-1])
+                        # Extract year from date, removing currency/unit suffix
+                        last_part = col.split("-")[-1].strip()
+                        year_str = last_part.split(" ")[0].strip()
+                        year = int(year_str)
                         years.append(year)
                     except (ValueError, IndexError):
                         pass
             
+                                    # Use the most recent year that actually has data
+            # For balance sheet, this is the latest instant date (e.g., 31-Dec-2024)
+            # For income/cash flow, this is the latest fiscal year (e.g., FY2024)
             target_year = max(years) if years else datetime.now().year
+            
+            # IMPORTANT: For balance sheet, verify the target year actually exists in the data
+            # If not, use the maximum year that has actual data
+            if years:
+                # Check if we have balance sheet data
+                try:
+                    balance_df = consolidated_data.get("Assets")
+                    if balance_df is None:
+                        balance_df = consolidated_data.get("Liabilities")
+                    
+                    if balance_df is not None:
+                        if not balance_df.empty:
+                            # Get actual year columns from balance sheet
+                            balance_year_cols = [c for c in balance_df.columns if c not in ("French Label", "English Label", "Concept")]
+                            balance_years = []
+                            for col in balance_year_cols:
+                                if "-" in col:  # Date format
+                                    try:
+                                        last_part = col.split("-")[-1].strip()
+                                        year_str = last_part.split(" ")[0].strip()
+                                        balance_years.append(int(year_str))
+                                    except (ValueError, IndexError):
+                                        pass
+                            
+                            if balance_years:
+                                # Use the maximum year from actual balance sheet data
+                                target_year = max(balance_years)
+                                st.info(f" Using target year {target_year} from balance sheet data (latest instant date)")
+                except Exception as e:
+                    # If there's any error, just use the original target_year
+                    pass
+            
             company_name = st.session_state.selected_company.get("name", "") if st.session_state.selected_company else ""
             
             # Map XBRL statement types to BREF statement types
@@ -1625,6 +1711,47 @@ def render_xbrl_section(company, lei):
             # Set session state so brefmap_multi_ui can read it
             st.session_state.selected_region = "EMEA"
             
+                                                # Extract currency and unit information from column headers
+            # First check if it's already in session state (from cached data)
+            currency = None
+            unit_scale = None
+            
+            if 'xbrl_currency_unit' in st.session_state and st.session_state.xbrl_currency_unit:
+                currency = st.session_state.xbrl_currency_unit.get('currency')
+                unit_scale = st.session_state.xbrl_currency_unit.get('unit_scale')
+                print(f"\n Using currency/unit from session state: currency={currency}, unit_scale={unit_scale}")
+            else:
+                # Extract from consolidated data column headers
+                print(f"\n Extracting currency/unit from XBRL consolidated data...")
+                for stmt_type, df in consolidated_data.items():
+                    if df is not None and not df.empty:
+                        # Get first year column (skip label columns)
+                        year_cols = [c for c in df.columns if c not in ("French Label", "English Label", "Concept")]
+                        print(f"  {stmt_type}: year_cols = {year_cols[:3] if len(year_cols) > 3 else year_cols}")
+                        if year_cols:
+                            first_col = year_cols[0]
+                            print(f"  First column: '{first_col}'")
+                            # Extract currency/unit from column header
+                            # E.g., "FY2024 (EUR thousands)" or "31-Dec-2024 (EUR thousands)"
+                            import re
+                            match = re.search(r'\(([A-Z]{3})\s+(\w+)\)', str(first_col))
+                            if match:
+                                currency = match.group(1)  # EUR, USD, etc.
+                                unit_scale = match.group(2)  # thousands, millions, etc.
+                                print(f"   Extracted: currency={currency}, unit_scale={unit_scale}")
+                                break
+                            else:
+                                print(f"   No currency/unit found in column header")
+                
+                print(f" Final extracted: currency={currency}, unit_scale={unit_scale}")
+                
+                # Store in session state for future use
+                if currency and unit_scale:
+                    st.session_state.xbrl_currency_unit = {
+                        'currency': currency,
+                        'unit_scale': unit_scale
+                    }
+            
             # Convert consolidated data to extraction results format
             extraction_results = {}
             
@@ -1636,19 +1763,37 @@ def render_xbrl_section(company, lei):
                 if not bref_stmt_type:
                     continue
                 
-                # For balance sheet, we need to combine Assets and Liabilities
+                                                # For balance sheet, we need to combine Assets and Liabilities
                 if bref_stmt_type == "balance_sheet":
                     if bref_stmt_type not in extraction_results:
+                        # Create year_currencies dict for all available years
+                        year_currencies_dict = {}
+                        if currency:
+                            # Add currency for all years found in the data
+                            for year in years:
+                                year_currencies_dict[str(year)] = currency
+                        
                         extraction_results[bref_stmt_type] = {
                             "rows": [],
                             "target_year": target_year,
                             "company": company_name,
+                            "year_currencies": year_currencies_dict,
+                            "unit_scale": unit_scale,
                         }
                 else:
+                    # Create year_currencies dict for all available years
+                    year_currencies_dict = {}
+                    if currency:
+                        # Add currency for all years found in the data
+                        for year in years:
+                            year_currencies_dict[str(year)] = currency
+                    
                     extraction_results[bref_stmt_type] = {
                         "rows": [],
                         "target_year": target_year,
                         "company": company_name,
+                        "year_currencies": year_currencies_dict,
+                        "unit_scale": unit_scale,
                     }
                 
                 # Convert DataFrame rows to extraction format
@@ -1666,13 +1811,21 @@ def render_xbrl_section(company, lei):
                         if col in ("French Label", "English Label", "Concept"):
                             continue
                         
-                        # Extract year from column name
+                                                # Extract year from column name
+                        # Handle both "FY2024" and "FY2024 (EUR millions)" formats
+                        # Handle both "31-Dec-2024" and "31-Dec-2024 (EUR millions)" formats
                         year_str = None
                         if col.startswith("FY"):
-                            year_str = col.replace("FY", "")
+                            # Extract year from "FY2024" or "FY2024 (EUR millions)"
+                            year_part = col.replace("FY", "").split(" ")[0].strip()
+                            year_str = year_part
                         elif "-" in col:  # Date format
                             try:
-                                year_str = col.split("-")[-1]
+                                # Extract year from "31-Dec-2024" or "31-Dec-2024 (EUR millions)"
+                                # Split by "-" and get last part, then remove any parentheses
+                                last_part = col.split("-")[-1].strip()
+                                # Remove everything after the first space (removes currency/unit suffix)
+                                year_str = last_part.split(" ")[0].strip()
                             except IndexError:
                                 continue
                         

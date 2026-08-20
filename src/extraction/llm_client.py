@@ -81,7 +81,6 @@ def get_client(provider: str = None, model: str = None):
             _model = LLM_MODEL if LLM_PROVIDER == "openai" else "gemma3-27b-it/"
         else:
             logging.info(f"Using Maia API with model: {_model}")
-            from .maia_llm import get_maia_client
             
             # Get proxy configuration from environment or config.ini
             proxies = None
@@ -117,41 +116,47 @@ def get_client(provider: str = None, model: str = None):
                         logging.info(f"Using corporate proxy from config: {host}:{port}")
             
             # IMPORTANT: Maia API is on .intranet domain - should NOT use proxy
-            # Check if Maia endpoint is internal
-            from .maia_llm import MAIA_API_ENDPOINT
-            if ".intranet" in MAIA_API_ENDPOINT:
-                logging.info("Maia API is on .intranet domain - bypassing proxy")
+            # CRITICAL: Clear ALL proxy environment variables BEFORE importing maia_llm
+            # httpx reads these vars when the Client is created in __init__
+            old_proxy_env = {}
+            for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
+                       'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
+                old_proxy_env[var] = os.environ.pop(var, None)
+            
+            try:
+                # Disable SSL verification for internal domains
+                os.environ['PYTHONHTTPSVERIFY'] = '0'
+                os.environ['CURL_CA_BUNDLE'] = ''
+                os.environ['REQUESTS_CA_BUNDLE'] = ''
                 
-                # CRITICAL: Clear ALL proxy environment variables before creating Maia client
-                # httpx picks up these env vars even when we say use_proxy=False
-                old_proxy_env = {}
-                for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 
-                           'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']:
-                    old_proxy_env[var] = os.environ.pop(var, None)
+                # NOW import and check - after clearing env vars
+                from .maia_llm import MAIA_API_ENDPOINT, get_maia_client
                 
-                try:
-                    # Disable SSL verification for internal domains
-                    os.environ['PYTHONHTTPSVERIFY'] = '0'
-                    os.environ['CURL_CA_BUNDLE'] = ''
-                    os.environ['REQUESTS_CA_BUNDLE'] = ''
-                    
+                if ".intranet" in MAIA_API_ENDPOINT:
+                    logging.info("Maia API is on .intranet domain - bypassing proxy (env vars cleared)")
                     client = get_maia_client(_maia_creds, _model, proxies=None, use_proxy=False)
                     return client
-                finally:
-                    # Restore proxy environment variables for other parts of the app
+                else:
+                    # External endpoint - restore proxy and use it
                     for var, val in old_proxy_env.items():
                         if val is not None:
                             os.environ[var] = val
-                        else:
-                            os.environ.pop(var, None)
-            elif proxy_url:
-                proxies = {
-                    "http://": proxy_url,
-                    "https://": proxy_url
-                }
-                return get_maia_client(_maia_creds, _model, proxies=proxies, use_proxy=True)
-            else:
-                return get_maia_client(_maia_creds, _model, proxies=None, use_proxy=True)
+                    
+                    if proxy_url:
+                        proxies = {
+                            "http://": proxy_url,
+                            "https://": proxy_url
+                        }
+                        return get_maia_client(_maia_creds, _model, proxies=proxies, use_proxy=True)
+                    else:
+                        return get_maia_client(_maia_creds, _model, proxies=None, use_proxy=True)
+            finally:
+                # Restore proxy environment variables for other parts of the app
+                for var, val in old_proxy_env.items():
+                    if val is not None:
+                        os.environ[var] = val
+                    else:
+                        os.environ.pop(var, None)
     
     # Use OpenAI-compatible API (Gemma, etc.) if provider is openai/gemma or after fallback
     if _provider == "openai" or _provider == "gemma":

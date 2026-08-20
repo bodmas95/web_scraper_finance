@@ -59,98 +59,39 @@ def convert_fields_to_bref_excel(fields: list, target_year: int, statement_type:
     Convert field dictionaries to BREF Excel format.
     This creates a simple Excel with Field Code column + all year columns.
     
-    IMPORTANT: This function is FULLY DYNAMIC - it detects ALL years present in the data,
-    not just target_year and reference_year. It will create columns for ALL years found.
-    
     Args:
         fields: List of field dictionaries with 'label', 'year_values', etc.
-        target_year: Target year (only used as fallback if no years detected)
+        target_year: Target year for the mapping
         statement_type: Type of statement (income_statement, balance_sheet, cash_flow)
     
     Returns:
         bytes: Excel file in BREF format
     """
-    debug_log(f"\n🔄 Converting {len(fields)} fields to BREF Excel format...")
-    debug_log(f"   Statement type: {statement_type}")
+    debug_log(f"\n Converting {len(fields)} fields to BREF Excel format...")
+    debug_log(f"   Target year: {target_year}")
     
-            # ============================================================================
-    # STEP 1: EXTRACT ALL YEARS FROM FIELDS (FULLY DYNAMIC)
-    # ============================================================================
-    # We check multiple sources to find ALL years present in the data:
-    # 1. year_values dict - contains actual year data (e.g., {'2021': 100, '2022': 200})
-    # 2. available_years list - metadata about which years are available
-    # 3. Individual year columns (e.g., field['2021'], field['2022'])
-    # 4. Fallback: target_value/reference_value (only if nothing else found)
+    # Extract all available years from fields
+    # Fields can have either:
+    # 1. year_values dict (from fast_mapper)
+    # 2. target_value + reference_value (from regular mapper)
     all_years = set()
-    
-    debug_log(f"\n🔍 Analyzing {len(fields)} fields to detect available years...")
-    
-    # Debug: Print first field to see what data it contains
-    if fields:
-        first_field = fields[0]
-        debug_log(f"   First field keys: {list(first_field.keys())}")
-        if 'year_values' in first_field:
-            debug_log(f"   First field year_values: {first_field['year_values']}")
-        if 'available_years' in first_field:
-            debug_log(f"   First field available_years: {first_field['available_years']}")
-        if 'target_value' in first_field:
-            debug_log(f"   First field target_value: {first_field['target_value']}")
-        if 'reference_value' in first_field:
-            debug_log(f"   First field reference_value: {first_field['reference_value']}")
     
     # First, check if fields have year_values dictionary
     has_year_values = any('year_values' in field and field['year_values'] for field in fields)
     
-    # Also check if there's an available_years list in the first field
-    has_available_years = any('available_years' in field and field['available_years'] for field in fields)
-    
-    debug_log(f"   has_year_values: {has_year_values}")
-    debug_log(f"   has_available_years: {has_available_years}")
-    
-            # Priority 1: Extract from year_values dictionary (MOST RELIABLE)
-    # This contains the actual year data like {'2021': 100, '2022': 200, '2023': 300, '2024': 400}
     if has_year_values:
-        debug_log(f"   ✅ Found year_values dictionary in fields")
+        # Extract years from year_values dictionary
         for field in fields:
             if 'year_values' in field and field['year_values']:
-                year_keys = list(field['year_values'].keys())
-                all_years.update(year_keys)
-                debug_log(f"   Field '{field.get('label', 'Unknown')}' has years: {year_keys}")
-        debug_log(f"   Total years from year_values: {sorted(all_years)}")
-    
-    # Priority 2: Check for available_years list (metadata)
-    if has_available_years:
-        debug_log(f"   ✅ Found available_years list in fields")
-        for field in fields:
-            if 'available_years' in field and field['available_years']:
-                avail_years = [str(y) for y in field['available_years']]
-                all_years.update(avail_years)
-                debug_log(f"   available_years: {avail_years}")
-                break  # Only need one field with available_years
-        debug_log(f"   Total years after available_years: {sorted(all_years)}")
-    
-    # Priority 3: Check for individual year columns (e.g., field['2021'], field['2022'])
-    # This handles cases where years are stored as direct field keys
-    if len(all_years) == 0:
-        debug_log(f"   Checking for individual year columns in field keys...")
-        for field in fields:
-            for key in field.keys():
-                # Check if key is a 4-digit year between 2000-2030
-                if isinstance(key, str) and key.isdigit() and len(key) == 4:
-                    year_int = int(key)
-                    if 2000 <= year_int <= 2030:
-                        all_years.add(key)
-                        debug_log(f"   Found year column: {key}")
-        if all_years:
-            debug_log(f"   Total years from field keys: {sorted(all_years)}")
-      
-            # Priority 4: FALLBACK - Use target_value/reference_value (ONLY if no years found)
-    # This is the LAST RESORT and should rarely be used
-    if len(all_years) == 0:
-        debug_log(f"   ⚠️ WARNING: No years found in year_values, available_years, or field keys!")
-        debug_log(f"   Falling back to target_value/reference_value logic...")
+                all_years.update(field['year_values'].keys())
+        debug_log(f"   Using year_values dictionary")
+    else:
+        # Fields have target_value and reference_value
+        # SIMPLE APPROACH: If we have both target_value and reference_value,
+        # we have 2 years of data. Just add both years.
+        debug_log(f"   Using target_value + reference_value")
         
-        # Check if ANY field has reference_value or target_value
+        # Check if ANY field has reference_value (check both field names)
         has_reference_data = any(
             field.get('reference_value') is not None or 
             field.get('extracted_reference_value') is not None 
@@ -158,39 +99,49 @@ def convert_fields_to_bref_excel(fields: list, target_year: int, statement_type:
         )
         has_target_data = any(field.get('target_value') is not None for field in fields)
         
-        debug_log(f"   Has target_value: {has_target_data}")
-        debug_log(f"   Has reference_value: {has_reference_data}")
+        debug_log(f"   Has target data: {has_target_data}")
+        debug_log(f"   Has reference data: {has_reference_data}")
         
-        # Add target year if target_value exists
+        # Debug: Check first field to see what keys it has
+        if fields:
+            first_field_keys = list(fields[0].keys())
+            debug_log(f"   First field keys: {first_field_keys}")
+            debug_log(f"   First field reference_value: {fields[0].get('reference_value')}")
+            debug_log(f"   First field extracted_reference_value: {fields[0].get('extracted_reference_value')}")
+        
+        # Always add target year
         if has_target_data:
             all_years.add(str(target_year))
-            debug_log(f"   Added target year: {target_year}")
         
-        # Add reference year if reference_value exists
+        # If we have reference data, add the reference year
+        # The reference year is typically target_year - 1
         if has_reference_data:
-            ref_year = target_year - 1
-            all_years.add(str(ref_year))
-            debug_log(f"   Added reference year: {ref_year}")
+            # Try to find the reference year from field metadata
+            ref_year_found = False
+            for field in fields:
+                if 'reference_year' in field:
+                    all_years.add(str(field['reference_year']))
+                    ref_year_found = True
+                    debug_log(f"   Found reference_year in field: {field['reference_year']}")
+                    break
+            
+            # If no explicit reference year, assume target_year - 1
+            if not ref_year_found:
+                ref_year = target_year - 1
+                all_years.add(str(ref_year))
+                debug_log(f"   No explicit reference_year, using target_year - 1 = {ref_year}")
+      
+    debug_log(f"   Final years to create: {sorted(all_years)}")
     
-        # ============================================================================
-    # STEP 2: VALIDATE AND SORT YEARS
-    # ============================================================================
-    debug_log(f"\n📊 YEAR DETECTION SUMMARY:")
-    debug_log(f"   Raw years found: {sorted(all_years)}")
-    
-    # Sort years in ascending order (convert to int for proper sorting)
+    # Sort years in ascending order
     sorted_years = sorted([int(y) for y in all_years if str(y).isdigit()])
     
-    debug_log(f"   Sorted years (ascending): {sorted_years}")
-    debug_log(f"   Number of years: {len(sorted_years)}")
+    debug_log(f"    Creating BREF Excel with {len(sorted_years)} years: {', '.join(map(str, sorted_years))}")
     
     # Validate: we should have at least 1 year
     if not sorted_years:
-        debug_log(f"   ❌ ERROR: No years detected! Using target_year as emergency fallback.")
+        debug_log(f"    WARNING: No years detected! Using target_year as fallback.")
         sorted_years = [target_year]
-    
-    debug_log(f"\n✅ Creating BREF Excel with {len(sorted_years)} years: {', '.join(map(str, sorted_years))}")
-    debug_log(f"   This will create {len(sorted_years)} year columns in the Excel file.")
     
     # Create workbook
     wb = openpyxl.Workbook()
@@ -203,57 +154,55 @@ def convert_fields_to_bref_excel(fields: list, target_year: int, statement_type:
         col_letter = chr(64 + idx)  # B, C, D, E...
         ws[f'{col_letter}1'] = str(year)
     
-    # Write data rows
+        # Write data rows
     row_idx = 2
     for field in fields:
         field_label = field.get('label', '')
         
+        # CRITICAL FIX: Strip * prefix from calculated fields
+        # The summary generator looks for "Q93", not "*Q93"
+        if field_label.startswith('*'):
+            field_label = field_label.lstrip('*')
+        
         # Write field code in column A
         ws.cell(row=row_idx, column=1, value=field_label)
         
-                # ============================================================================
-        # STEP 3: WRITE YEAR VALUES (FULLY DYNAMIC)
-        # ============================================================================
-        # For each year, we check multiple sources to find the value:
-        # 1. year_values dict (e.g., field['year_values']['2021'])
-        # 2. Direct year key (e.g., field['2021'])
-        # 3. Fallback: target_value/reference_value (only if year matches)
-        
-        for idx, year in enumerate(sorted_years, start=2):
-            value = None
-            year_str = str(year)
+        # Write year values
+        if has_year_values:
+            # Use year_values dictionary
+            year_values = field.get('year_values', {})
+            for idx, year in enumerate(sorted_years, start=2):
+                year_str = str(year)
+                value = year_values.get(year_str)
+                if value is not None:
+                    try:
+                        ws.cell(row=row_idx, column=idx, value=float(value))
+                    except (ValueError, TypeError):
+                        ws.cell(row=row_idx, column=idx, value=value)
+        else:
+            # Use target_value and reference_value
+            # Match values to years based on which year is the target year
+            target_val = field.get('target_value')
+            # Try both reference_value and extracted_reference_value
+            ref_val = field.get('reference_value')
+            if ref_val is None:
+                ref_val = field.get('extracted_reference_value')
             
-            # Priority 1: Check year_values dictionary
-            if 'year_values' in field and field['year_values']:
-                if year_str in field['year_values']:
-                    value = field['year_values'][year_str]
-                    # debug_log(f"     Year {year}: Found in year_values = {value}")
-            
-            # Priority 2: Check direct year key (e.g., field['2021'])
-            if value is None and year_str in field:
-                value = field[year_str]
-                # debug_log(f"     Year {year}: Found as direct key = {value}")
-            
-            # Priority 3: FALLBACK - Check target_value/reference_value
-            # (Only use if this year matches target_year or reference_year)
-            if value is None:
-                if year == target_year and 'target_value' in field:
-                    value = field['target_value']
-                    # debug_log(f"     Year {year}: Using target_value = {value}")
-                elif year == (target_year - 1):
-                    if 'reference_value' in field and field['reference_value'] is not None:
-                        value = field['reference_value']
-                        # debug_log(f"     Year {year}: Using reference_value = {value}")
-                    elif 'extracted_reference_value' in field and field['extracted_reference_value'] is not None:
-                        value = field['extracted_reference_value']
-                        # debug_log(f"     Year {year}: Using extracted_reference_value = {value}")
-            
-            # Write value to Excel cell (only if not None)
-            if value is not None:
-                try:
-                    ws.cell(row=row_idx, column=idx, value=float(value))
-                except (ValueError, TypeError):
-                    ws.cell(row=row_idx, column=idx, value=value)
+            for idx, year in enumerate(sorted_years, start=2):
+                value = None
+                
+                # Match by year number: target_year gets target_value, others get reference_value
+                if year == target_year:
+                    value = target_val
+                else:
+                    # Any other year gets reference_value
+                    value = ref_val
+                
+                if value is not None:
+                    try:
+                        ws.cell(row=row_idx, column=idx, value=float(value))
+                    except (ValueError, TypeError):
+                        ws.cell(row=row_idx, column=idx, value=value)
         
         row_idx += 1
     
@@ -263,12 +212,7 @@ def convert_fields_to_bref_excel(fields: list, target_year: int, statement_type:
     output.seek(0)
     wb.close()
     
-    debug_log(f"\n✅ BREF Excel Creation Complete:")
-    debug_log(f"   Total rows: {row_idx - 2}")
-    debug_log(f"   Total year columns: {len(sorted_years)}")
-    debug_log(f"   Years: {', '.join(map(str, sorted_years))}")
-    debug_log(f"   Excel structure: Field Code | {' | '.join(map(str, sorted_years))}")
-    debug_log(f"="*80)
+    debug_log(f"    Created BREF Excel with {row_idx - 2} rows and {len(sorted_years)} year columns")
     
     return output.getvalue()
 
@@ -472,7 +416,7 @@ def transform_bref_to_summary_format(bref_excel_bytes: bytes, statement_type: st
     output_buffer.seek(0)
     output_wb.close()
     
-    print(f"   ✅ Transformed ({len(output_wb.worksheets)} sheets)")
+    print(f"    Transformed ({len(output_wb.worksheets)} sheets)")
     return output_buffer.getvalue()
 
 
@@ -803,7 +747,7 @@ def generate_summary_directly(input_excel_bytes: bytes, sheet_name: str, stateme
                 ('Equity affiliates', [f'{bs_prefix}20']),
                 ('Inventories', [f'{bs_prefix}24']),
                 ('Trade & Other receivables', [f'{bs_prefix}29']),
-                ('Other assets', ('sum', [f'{bs_prefix}6', f'{bs_prefix}18', f'{bs_prefix}17', f'{bs_prefix}88', f'{bs_prefix}21', f'{bs_prefix}98', f'{bs_prefix}35', f'{bs_prefix}38'])),
+                ('Other assets', ('sum', [f'{bs_prefix}6', f'{bs_prefix}18', f'{bs_prefix}17', f'{bs_prefix}88', f'{bs_prefix}21', f'{bs_prefix}98', f'{bs_prefix}36', f'{bs_prefix}38'])),
                 ('Equity', [f'{bs_prefix}161']),
                 ('Equity after MI', [f'{bs_prefix}43']),
                 ('Gross Debt', ('sum', [f'{bs_prefix}53', f'{bs_prefix}63'])),
@@ -1195,19 +1139,24 @@ def generate_summary_directly(input_excel_bytes: bytes, sheet_name: str, stateme
     out_ws = out_wb.active
     out_ws.title = title
     
-            # MULTI-YEAR: Create headers dynamically for all years
+                # MULTI-YEAR: Create headers dynamically for all years
     out_ws['A1'] = 'Metric'
     
-        # Write year headers dynamically with currency and unit
+        # Write year headers dynamically (preserve currency/unit if present)
     for year_idx in range(num_years):
         col_letter = chr(66 + year_idx)  # B, C, D, E, F...
-        year_value = header[year_idx + 1] if (year_idx + 1) < len(header) else f'Year {year_idx + 1}'
+        year_header = header[year_idx + 1] if (year_idx + 1) < len(header) else f'Year {year_idx + 1}'
         
-        # Add currency and unit to year header (e.g., "2024 (RMB Thousands)")
-        if currency:
-            year_header = f"{year_value} ({currency})"
-        else:
-            year_header = year_value
+        # CRITICAL FIX: Add currency/unit to header if not already present
+        # Check if header already has currency/unit (contains parentheses)
+        if '(' not in str(year_header) and currency:
+            # Extract just the year from the header
+            import re
+            year_match = re.search(r'\d{4}', str(year_header))
+            if year_match:
+                year_num = year_match.group()
+                # Format: "2024 (USD Millions)"
+                year_header = f"{year_num} ({currency})"
         
         out_ws[f'{col_letter}1'] = year_header
     
@@ -1252,25 +1201,29 @@ def generate_summary_directly(input_excel_bytes: bytes, sheet_name: str, stateme
         highlight_metrics = set()
         calculated_metrics = set()
     
-                # MULTI-YEAR: Write data for all years
+    # Define which metrics should be formatted as percentages
+    # Income Statement metrics
+    percentage_metrics = ['Gross Margin (%)', 'Revenues growth', 'EBITDA margin', 'EBIT margin']
+    # Cash Flow metrics
+    percentage_metrics.extend(['Capex  (% CA)', 'EBITDA cash conversion', 'Capex Covearage ( Op.CF)'])
+    # Balance Sheet metrics (gearing ratios shown as percentages)
+    percentage_metrics.extend(['Gross Gearing(Gross Debt/Equity)', 'Net Gearing (Net Debt/Equity)'])
+    
+    # Define ratio metrics (shown as regular numbers, not percentages)
+    ratio_metrics = ['Interest coverage ratio', 'Gross Leverage(Gross Debt/Recurring EBITDA)', 'Net Leverage(Net Debt/Recurring EBITDA)']
+    
+    # MULTI-YEAR: Write data for all years
     for idx, row_data in enumerate(summary_data, start=2):
         metric_name = row_data[0]
         out_ws[f'A{idx}'] = metric_name
         
-                # Write all year values
+                        # Write all year values
         for year_idx in range(num_years):
             col_letter = chr(66 + year_idx)  # B, C, D, E...
             value = row_data[year_idx + 1] if (year_idx + 1) < len(row_data) else ''
             out_ws[f'{col_letter}{idx}'] = value
             
-                                                            # Apply percentage formatting for percentage metrics - show as XX.X%
-            # Income Statement metrics
-            percentage_metrics = ['Gross Margin (%)', 'Revenues growth', 'EBITDA margin', 'EBIT margin']
-            # Cash Flow metrics
-            percentage_metrics.extend(['Capex  (% CA)', 'EBITDA cash conversion', 'Capex Covearage ( Op.CF)'])
-            # Balance Sheet metrics (gearing ratios shown as percentages)
-            percentage_metrics.extend(['Gross Gearing(Gross Debt/Equity)', 'Net Gearing (Net Debt/Equity)'])
-            
+            # Apply percentage formatting for percentage metrics - show as XX.X%
             if metric_name in percentage_metrics and value != '':
                 try:
                     # Value is already a percentage (e.g., 93.1), convert to decimal for Excel
@@ -1280,11 +1233,6 @@ def generate_summary_directly(input_excel_bytes: bytes, sheet_name: str, stateme
                     pass
             
             # Apply number formatting for ratio metrics - show as regular number with 1 decimal
-            # Income Statement ratios
-            ratio_metrics = ['Interest coverage ratio']
-            # Balance Sheet leverage ratios (shown as X.X, not percentage)
-            ratio_metrics.extend(['Gross Leverage(Gross Debt/Recurring EBITDA)', 'Net Leverage(Net Debt/Recurring EBITDA)'])
-            
             if metric_name in ratio_metrics and value != '':
                 try:
                     # Keep value as-is, just apply number format
@@ -1542,13 +1490,13 @@ def generate_summary_from_fields(income_fields: list, balance_fields: list, cash
     
     try:
         # Step 1: Convert field dictionaries to BREF Excel format
-        print("\n📝 Step 1: Converting fields to BREF Excel format...")
+        print("\n Step 1: Converting fields to BREF Excel format...")
         income_bref_bytes = convert_fields_to_bref_excel(income_fields, target_year, "income_statement")
         balance_bref_bytes = convert_fields_to_bref_excel(balance_fields, target_year, "balance_sheet")
         cashflow_bref_bytes = convert_fields_to_bref_excel(cashflow_fields, target_year, "cash_flow")
         
         # Step 2: Transform BREF to Summary Generator format (with dynamic year detection)
-        print("\n🔄 Step 2: Transforming to Summary Generator format...")
+        print("\n Step 2: Transforming to Summary Generator format...")
         consolidated_input_bytes = generate_consolidated_summary_input(
             income_bref_bytes=income_bref_bytes,
             balance_bref_bytes=balance_bref_bytes,
@@ -1558,7 +1506,7 @@ def generate_summary_from_fields(income_fields: list, balance_fields: list, cash
         )
         
         # Step 3: Generate summaries
-        print("\n📊 Step 3: Generating summaries...")
+        print("\n Step 3: Generating summaries...")
         result = generate_all_summaries_from_consolidated_excel(
             consolidated_excel_bytes=consolidated_input_bytes,
             company_name=company_name,
@@ -1569,7 +1517,7 @@ def generate_summary_from_fields(income_fields: list, balance_fields: list, cash
         if result.get('error'):
             return {'error': result['error']}
         
-        print("\n✅ SUCCESS: 7-sheet file created with dynamic multi-year support!")
+        print("\n SUCCESS: 7-sheet file created with dynamic multi-year support!")
         print("="*80)
         
         return result
@@ -1578,5 +1526,6 @@ def generate_summary_from_fields(income_fields: list, balance_fields: list, cash
         import traceback
         traceback.print_exc()
         return {'error': str(e)}
+
 
 

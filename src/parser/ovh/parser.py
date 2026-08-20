@@ -314,9 +314,9 @@ def _match_value(xbrl_thousands, excel_val_str: str) -> bool:
     return abs(a - b) / max(a, b) < 0.02 or abs(a - b) <= 200
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# 
 # XBRL Concept Mapping (from sample_parser.py)
-# ═══════════════════════════════════════════════════════════════════════════
+# 
 
 TARGET_YEARS = [2021, 2022, 2023, 2024, 2025]
 CONSOLIDATED_SHEET_TYPES = [

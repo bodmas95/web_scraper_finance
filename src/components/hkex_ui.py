@@ -165,14 +165,14 @@ def render_hkex_section(company, hkex_ticker):
     if stock_id and not st.session_state.hkex_reports_loaded:
         from src.pipeline.hkex_reports_cache import get_cached_reports, cache_reports
         
-        with st.spinner(f"🔍 Loading annual reports for {company_name}..."):
+        with st.spinner(f" Loading annual reports for {company_name}..."):
             # Try to get from cache first
             cached_reports = get_cached_reports(stock_id)
             
             if cached_reports:
                 st.session_state.hkex_reports = cached_reports
                 st.session_state.hkex_reports_loaded = True
-                st.success(f"✅ Loaded {len(cached_reports)} annual reports from cache")
+                st.success(f" Loaded {len(cached_reports)} annual reports from cache")
             else:
                 # Fetch from HKEX API (last 5 years)
                 reports = search_hkex_annual_reports(stock_id)
@@ -182,9 +182,9 @@ def render_hkex_section(company, hkex_ticker):
                 if reports:
                     # Cache the results
                     cache_reports(stock_id, reports)
-                    st.success(f"✅ Found {len(reports)} annual reports (last 5 years)")
+                    st.success(f" Found {len(reports)} annual reports (last 5 years)")
                 else:
-                    st.warning("⚠️ No annual reports found for this company")
+                    st.warning(" No annual reports found for this company")
 
     st.markdown("---")
 
@@ -195,13 +195,13 @@ def render_hkex_section(company, hkex_ticker):
         # Display summary metrics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("📄 Total Reports", len(st.session_state.hkex_reports))
+            st.metric(" Total Reports", len(st.session_state.hkex_reports))
         with col2:
             years = [r.get('fiscalYear') for r in st.session_state.hkex_reports if r.get('fiscalYear')]
             if years:
-                st.metric("📅 Year Range", f"{min(years)} - {max(years)}")
+                st.metric(" Year Range", f"{min(years)} - {max(years)}")
         with col3:
-            st.metric("🏢 Company", company.get('name', 'N/A')[:20] + "...")
+            st.metric(" Company", company.get('name', 'N/A')[:20] + "...")
 
         st.markdown("")
 
@@ -230,9 +230,9 @@ def render_hkex_section(company, hkex_ticker):
         st.subheader("Extract Financial Data or Download")
 
         if show_extraction:
-            st.info("💡 You can extract financial statements directly from PDFs or download them for later use.")
+            st.info(" You can extract financial statements directly from PDFs or download them for later use.")
         else:
-            st.info("💡 Download annual reports for your records.")
+            st.info(" Download annual reports for your records.")
 
         # Use text extraction by default (no user selection)
         extraction_method = "Text (PDFPlumber)"
@@ -243,7 +243,7 @@ def render_hkex_section(company, hkex_ticker):
             report_title = report.get('title', 'N/A')
             fiscal_year = report.get('fiscalYear', 'N/A')
 
-            with st.expander(f"📑 {idx + 1}. {report_title} (FY {fiscal_year})", expanded=False):
+            with st.expander(f" {idx + 1}. {report_title} (FY {fiscal_year})", expanded=False):
                 st.caption(f"**Filename:** {report.get('filename', 'N/A')}")
                 st.markdown("")
 
@@ -256,11 +256,11 @@ def render_hkex_section(company, hkex_ticker):
                 with col1:
                     # View button
                     if report_url:
-                        st.link_button("👁️ View", report_url, use_container_width=True)
+                        st.link_button(" View", report_url, use_container_width=True)
 
                 with col2:
                                             # Download button
-                    if st.button("⬇️ Download", key=f"download_btn_{idx}", use_container_width=True):
+                    if st.button(" Download", key=f"download_btn_{idx}", use_container_width=True):
                         with st.spinner(f"Downloading..."):
                             from pathlib import Path as PathLib
                             _HKEX_CFG = _get_section("HKEX")
@@ -274,10 +274,10 @@ def render_hkex_section(company, hkex_ticker):
                             )
 
                         if file_path:
-                            st.success(f"✅ Downloaded to: {file_path}")
+                            st.success(f" Downloaded to: {file_path}")
                             with open(file_path, 'rb') as f:
                                 st.download_button(
-                                    label="💾 Save to Computer",
+                                    label=" Save to Computer",
                                     data=f.read(),
                                     file_name=report.get('filename'),
                                     mime="application/pdf",
@@ -285,15 +285,16 @@ def render_hkex_section(company, hkex_ticker):
                                     use_container_width=True
                                 )
                         else:
-                            st.error("❌ Download failed")
+                            st.error(" Download failed")
 
                 # Extract section (only for APAC region)
                 if show_extraction:
                     with col3:
-                        # Statement selection checkboxes - directly above Extract button
+                                                # Statement selection checkboxes - directly above Extract button
+                        # Order matches extraction order: Balance Sheet → Income Statement → Cash Flow
                         st.markdown("<p style='font-size:0.85rem;font-weight:600;margin-bottom:0.25rem;'>Select statements:</p>", unsafe_allow_html=True)
-                        extract_income = st.checkbox("Income Statement", value=True, key=f"cb_income_{idx}")
                         extract_balance = st.checkbox("Balance Sheet", value=True, key=f"cb_balance_{idx}")
+                        extract_income = st.checkbox("Income Statement", value=True, key=f"cb_income_{idx}")
                         extract_cashflow = st.checkbox("Cash Flow", value=True, key=f"cb_cashflow_{idx}")
                                                                                                 # Use Gemma by default (no UI selection)
                         provider, model_id = get_extraction_model()
@@ -307,9 +308,9 @@ def render_hkex_section(company, hkex_ticker):
                         st.markdown("")
                         extract_disabled = not selected_types
                         if extract_disabled:
-                            st.caption("⚠️ Select at least one")
+                            st.caption(" Select at least one")
 
-                        if st.button("🔬 Extract", key=f"extract_btn_{idx}", use_container_width=True, type="primary", disabled=extract_disabled):
+                        if st.button(" Extract", key=f"extract_btn_{idx}", use_container_width=True, type="primary", disabled=extract_disabled):
                             # Download PDF first
                             with st.spinner(f"Downloading PDF for extraction..."):
                                 from pathlib import Path as PathLib
@@ -361,7 +362,7 @@ def render_hkex_section(company, hkex_ticker):
                                     with open(_pdf_path, "wb") as _f:
                                         _f.write(pdf_bytes)
 
-                                                                        # ── Parallel extraction ──────────────────────
+                                                                        #  Parallel extraction 
                                     # Use cache wrapper for extraction
                                     from src.cache.hkex_cache_wrapper import extract_hkex_with_cache
                                     
@@ -369,9 +370,9 @@ def render_hkex_section(company, hkex_ticker):
                                     _target_yr = bref_target_year if 'bref_target_year' in locals() else (fiscal_year if fiscal_year != 'N/A' else datetime.now().year)
 
                                                                         # Show extraction progress with status
-                                    with st.status(f"🔍 Extracting {len(selected_types)} statement(s)...", expanded=True) as status:
+                                    with st.status(f" Extracting {len(selected_types)} statement(s)...", expanded=True) as status:
                                         st.write(f"⏳ Processing {len(selected_types)} financial statements...")
-                                        st.write("⚡ Checking cache first... If not cached, extraction may take 8-10 minutes.")
+                                        st.write(" Checking cache first... If not cached, extraction may take 8-10 minutes.")
                                         
                                                                                 # Extract with caching enabled
                                         _par = extract_hkex_with_cache(
@@ -385,7 +386,7 @@ def render_hkex_section(company, hkex_ticker):
                                             model_id=model_id
                                         )
                                         
-                                        status.update(label=f"✅ Extraction complete!", state="complete")
+                                        status.update(label=f" Extraction complete!", state="complete")
 
                                     _new_results = _par["results"]
                                     _manual_needed = _par["manual_needed"]
@@ -395,15 +396,15 @@ def render_hkex_section(company, hkex_ticker):
                                         
                                         # Show summary first
                                         if _stype in _par["errors"]:
-                                            st.error(f"❌ **{statement_label}**: Extraction failed")
+                                            st.error(f" **{statement_label}**: Extraction failed")
                                         elif _stype in _par["results"]:
                                             _r = _par["results"][_stype]
-                                            st.success(f"✅ **{statement_label}**: Extracted {_r['total_rows']} rows from page {_r['page']}")
+                                            st.success(f" **{statement_label}**: Extracted {_r['total_rows']} rows from page {_r['page']}")
                                         elif _stype in _manual_needed:
-                                            st.warning(f"⚠️ **{statement_label}**: Could not locate automatically. Manual page input required.")
+                                            st.warning(f" **{statement_label}**: Could not locate automatically. Manual page input required.")
                                         
                                         # Detailed logs in collapsible expander
-                                        with st.expander(f"📝 View detailed logs for {statement_label}", expanded=False):
+                                        with st.expander(f" View detailed logs for {statement_label}", expanded=False):
                                             st.text(_par["logs"].get(_stype, ""))
                                             if _stype in _par["errors"]:
                                                 st.markdown("**Error Details:**")
@@ -411,7 +412,7 @@ def render_hkex_section(company, hkex_ticker):
 
                                 if _manual_needed:
                                     st.markdown("---")
-                                    st.markdown("### 📝 Manual Page Input Required")
+                                    st.markdown("###  Manual Page Input Required")
                                     st.warning(f"Could not automatically locate {len(_manual_needed)} statement(s). Please enter page numbers manually.")
                                     _manual_pages = {}
                                     cols = st.columns(len(_manual_needed))
@@ -426,10 +427,11 @@ def render_hkex_section(company, hkex_ticker):
                                                 help="Enter the page number where this statement starts"
                                             )
 
-                                    if st.button("🔬 Extract from Manual Pages", key=f"manual_extract_{idx}", type="primary"):
+                                    if st.button(" Extract from Manual Pages", key=f"manual_extract_{idx}", type="primary"):
+                                        st.info("📄 Extracting from manually specified pages (cache not available for manual pages)")
                                         for _stype, page_num_1based in _manual_pages.items():
                                             statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                                            with st.expander(f"📝 Manual Extraction Log — {statement_label}", expanded=False):
+                                            with st.expander(f" Manual Extraction Log — {statement_label}", expanded=False):
                                                 _log_placeholder = st.empty()
                                                 _token_placeholder = st.empty()
                                                 _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
@@ -467,7 +469,7 @@ def render_hkex_section(company, hkex_ticker):
                                                         "target_year": manual_bref_target_year if 'manual_bref_target_year' in locals() else manual_year,
                                                         "statement": _stype,
                                                     }
-                                                    st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
+                                                    st.success(f" Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
 
                                                 except Exception as _e:
                                                         st.warning(f"Extraction failed: {_e}")
@@ -481,10 +483,10 @@ def render_hkex_section(company, hkex_ticker):
                                             for _k in list(st.session_state.keys()):
                                                 if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
                                                     del st.session_state[_k]
-                                            st.success(f"✅ Manual extraction complete! {len(_new_results)} statement(s) extracted.")
+                                            st.success(f" Manual extraction complete! {len(_new_results)} statement(s) extracted.")
                                             # Note: No st.rerun() - results display automatically below
 
-                                                                # Store results in session state to display outside the table
+                                # Store results in session state to display outside the table
                                 if _new_results:
                                     # Debug: Show what's in _new_results
                                     print(f"DEBUG: _new_results keys = {list(_new_results.keys())}")
@@ -499,17 +501,17 @@ def render_hkex_section(company, hkex_ticker):
                                     
                                     # Show correct count of extracted statements
                                     extracted_statements = ', '.join([STATEMENT_LABELS.get(k, k) for k in _new_results.keys()])
-                                    st.success(f"✅ Extraction complete! {len(_new_results)} statement(s) extracted: {extracted_statements}. Scroll down to view results.")
+                                    st.success(f" Extraction complete! {len(_new_results)} statement(s) extracted: {extracted_statements}. Scroll down to view results.")
                                     # Note: No st.rerun() - results display automatically below
                                 else:
                                     st.error("No statements could be extracted.")
                             else:
-                                st.error("❌ Failed to download PDF for extraction")
+                                st.error(" Failed to download PDF for extraction")
 
                     st.markdown("---")
 
     elif st.session_state.hkex_reports_loaded:
-        st.info("ℹ️ No annual reports found for the selected company and date range.")
+        st.info("ℹ No annual reports found for the selected company and date range.")
         st.markdown("**Suggestions:**")
         st.markdown("- Try expanding the date range")
         st.markdown("- Verify the company has filed annual reports with HKEX")
@@ -543,7 +545,7 @@ def render_hkex_section(company, hkex_ticker):
             render_multi_statement_mapping(results, key_prefix="hkex")
 
             # Clear results button
-            if st.button("❌ Clear Results", key="clear_hkex_extraction"):
+            if st.button(" Clear Results", key="clear_hkex_extraction"):
                 st.session_state.hkex_extraction_results = None
                 st.session_state.hkex_extraction_report_title = None
                 st.session_state.uploaded_pdf_bytes = None
@@ -581,7 +583,7 @@ def render_hkex_section(company, hkex_ticker):
         """, unsafe_allow_html=True)
         
         # Wrap manual upload in expander (accordion)
-        with st.expander("📤 Upload Annual Report Manually)", expanded=False):
+        with st.expander(" Upload Annual Report Manually)", expanded=False):
             st.caption("If you have a PDF file saved locally, you can upload it here for extraction.")
 
             manual_pdf = st.file_uploader(
@@ -591,7 +593,7 @@ def render_hkex_section(company, hkex_ticker):
                 label_visibility="collapsed"
             )
             if manual_pdf:
-                st.caption(f"📎 {manual_pdf.name}  —  {manual_pdf.size / 1024:.0f} KB")
+                st.caption(f" {manual_pdf.name}  —  {manual_pdf.size / 1024:.0f} KB")
 
                 # Fiscal year input
                 col_year, col_spacer = st.columns([1, 2])
@@ -617,9 +619,9 @@ def render_hkex_section(company, hkex_ticker):
                 st.markdown("**Select statements to extract:**")
                 col_cb1, col_cb2, col_cb3 = st.columns(3)
                 with col_cb1:
-                    manual_extract_income = st.checkbox("Income Statement", value=True, key="manual_cb_income")
-                with col_cb2:
                     manual_extract_balance = st.checkbox("Balance Sheet", value=True, key="manual_cb_balance")
+                with col_cb2:
+                    manual_extract_income = st.checkbox("Income Statement", value=True, key="manual_cb_income")
                 with col_cb3:
                     manual_extract_cashflow = st.checkbox("Cash Flow", value=True, key="manual_cb_cashflow")
 
@@ -639,7 +641,7 @@ def render_hkex_section(company, hkex_ticker):
                 manual_page_balance = 0
                 manual_page_cashflow = 0
 
-                with st.expander("🔧 Or specify pages manually (if automatic detection fails)"):
+                with st.expander(" Or specify pages manually (if automatic detection fails)"):
                     st.warning("**IMPORTANT**: Enter the **PDF viewer page number** (what your PDF reader shows), NOT the document page number printed on the page!")
                     st.caption("Example: If your PDF viewer shows 'Page 302 of 472' and the page has '300' printed at the bottom, enter **302**.")
 
@@ -668,9 +670,9 @@ def render_hkex_section(company, hkex_ticker):
 
                 # END MANUAL PAGE SPECIFICATION
                 if extract_disabled:
-                    st.warning("⚠️ Please select at least one statement type to extract.")
+                    st.warning(" Please select at least one statement type to extract.")
 
-                if st.button("🔬 Extract from Uploaded PDF", type="primary", use_container_width=True, disabled=extract_disabled):
+                if st.button(" Extract from Uploaded PDF", type="primary", use_container_width=True, disabled=extract_disabled):
                     # Parse manual page inputs (supports single page or range)
                     def parse_page_input(page_str):
                         """Parse page input: '300' -> 300, '300-301' -> [300, 301], '' -> None"""
@@ -735,176 +737,181 @@ def render_hkex_section(company, hkex_ticker):
                         with open(_pdf_path, "wb") as _f:
                             _f.write(manual_pdf.getvalue())
 
-                        for _stype in manual_selected_types:
-                            _stype_result = None
-                            statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                                                        # CRITICAL: Use cache wrapper for manual uploads!
+                        # For now, manual pages bypass cache (TODO: add manual page support to cache)
+                        has_manual_pages = any(manual_pages_dict.values())
+                        
+                        if not has_manual_pages:
+                            # No manual pages specified - use cache wrapper (automatic detection)
+                            from src.cache.hkex_cache_wrapper import extract_hkex_with_cache
+                            
+                            # CRITICAL FIX: Use PDF filename for cache, not dropdown company name
+                            # This ensures manual uploads are cached by their actual filename
+                            _company_name = manual_pdf.name.replace('.pdf', '').replace('_', ' ')
+                            _target_yr = manual_year
 
-                            with st.expander(f"📝 Extraction Log — {statement_label}", expanded=False):
+                            # Show extraction progress with status
+                            with st.status(f"🔍 Extracting {len(manual_selected_types)} statement(s)...", expanded=True) as status:
+                                st.write(f"⏳ Processing {len(manual_selected_types)} financial statements...")
+                                st.write("💾 Checking cache first... If not cached, extraction may take 8-10 minutes.")
+                                
+                                # Extract with caching enabled
+                                _par = extract_hkex_with_cache(
+                                    pdf_path=_pdf_path,
+                                    pdf_bytes=manual_pdf.getvalue(),
+                                    company_name=_company_name,
+                                    target_year=_target_yr,
+                                    selected_types=manual_selected_types,
+                                    stitch_fn=stitch_images_vertical,
+                                    provider=manual_provider,
+                                    model_id=manual_model_id
+                                )
+                                
+                                status.update(label=f"✅ Extraction complete!", state="complete")
 
-                                _log_placeholder = st.empty()
-                                _token_placeholder = st.empty()
-                                _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
+                            _new_results = _par["results"]
+                            _manual_needed = _par["manual_needed"]
 
-                                try:
-                                # Check if manual page specified for this statement type
-                                    manual_page_num = manual_pages_dict.get(_stype)
+                            # Show summary for each statement
+                            for _stype in manual_selected_types:
+                                statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                
+                                if _stype in _par["errors"]:
+                                    st.error(f"❌ **{statement_label}**: Extraction failed")
+                                elif _stype in _par["results"]:
+                                    _r = _par["results"][_stype]
+                                    st.success(f"✅ **{statement_label}**: Extracted {_r['total_rows']} rows from page {_r['page']}")
+                                elif _stype in _manual_needed:
+                                    st.warning(f"⚠️ **{statement_label}**: Could not locate automatically. Manual page input required.")
+                                
+                                                                # Detailed logs in collapsible expander
+                                with st.expander(f"📋 View detailed logs for {statement_label}", expanded=False):
+                                    st.text(_par["logs"].get(_stype, ""))
+                                    if _stype in _par["errors"]:
+                                        st.markdown("**Error Details:**")
+                                        st.code(_par["errors"][_stype], language="python")
+                        
+                        else:
+                            # Manual pages specified - use cache with manual pages!
+                            from src.cache.hkex_cache_wrapper import extract_hkex_with_cache
+                            
+                            _company_name = manual_pdf.name.replace('.pdf', '').replace('_', ' ')
+                            _target_yr = manual_year
+                            
+                            st.info("📄 Manual pages specified - extracting with cache support")
+                            st.caption("💡 Results will be cached for future use!")
+                            
+                            # Show extraction progress with status
+                            with st.status(f"🔍 Extracting {len(manual_selected_types)} statement(s) from manual pages...", expanded=True) as status:
+                                st.write(f"⏳ Processing {len(manual_selected_types)} financial statements...")
+                                st.write("💾 Checking cache first... If not cached, extraction may take 8-10 minutes.")
+                                
+                                # Extract with caching enabled (with manual pages)
+                                _par = extract_hkex_with_cache(
+                                    pdf_path=_pdf_path,
+                                    pdf_bytes=manual_pdf.getvalue(),
+                                    company_name=_company_name,
+                                    target_year=_target_yr,
+                                    selected_types=manual_selected_types,
+                                    stitch_fn=stitch_images_vertical,
+                                    provider=manual_provider,
+                                    model_id=manual_model_id,
+                                    manual_pages=manual_pages_dict
+                                )
+                                
+                                status.update(label=f"✅ Extraction complete!", state="complete")
+                            
+                            _new_results = _par["results"]
+                            _manual_needed = _par["manual_needed"]
+                            
+                            # Show summary for each statement
+                            for _stype in manual_selected_types:
+                                statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                
+                                if _stype in _par["errors"]:
+                                    st.error(f"❌ **{statement_label}**: Extraction failed")
+                                elif _stype in _par["results"]:
+                                    _r = _par["results"][_stype]
+                                    st.success(f"✅ **{statement_label}**: Extracted {_r['total_rows']} rows from page {_r['page']}")
+                                elif _stype in _manual_needed:
+                                    st.warning(f"⚠️ **{statement_label}**: Could not locate automatically. Manual page input required.")
+                                
+                                                                # Detailed logs in collapsible expander
+                                with st.expander(f"📋 View detailed logs for {statement_label}", expanded=False):
+                                    st.text(_par["logs"].get(_stype, ""))
+                                    if _stype in _par["errors"]:
+                                        st.markdown("**Error Details:**")
+                                        st.code(_par["errors"][_stype], language="python")
+                        
+                                                # Handle manual page input if needed (after cache-based extraction)
+                        if _manual_needed and len(_manual_needed) > 0:
+                            st.markdown("---")
+                            st.markdown("###  Manual Page Input Required")
+                            st.warning(f"Could not automatically locate {len(_manual_needed)} statement(s). Please enter page numbers manually.")
+                            _manual_pages = {}
+                            cols = st.columns(len(_manual_needed))
+                            for col, _stype in zip(cols, _manual_needed):
+                                with col:
+                                    statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                    _manual_pages[_stype] = st.number_input(
+                                        statement_label,
+                                        min_value=1,
+                                        step=1,
+                                        key=f"manual_page_upload_{_stype}",
+                                        help="Enter the page number where this statement starts"
+                                    )
 
-                                    if manual_page_num:
-                                        # Use manual page specification (single page or range)
-                                        from src.extraction.scanner import build_manual_candidate
-                                        import pdfplumber
+                            if st.button(" Extract from Manual Pages", key=f"manual_extract_upload", type="primary"):
+                                st.info("📄 Extracting from manually specified pages (cache not available for manual pages)")
+                                for _stype, page_num_1based in _manual_pages.items():
+                                    statement_label = STATEMENT_LABELS.get(_stype, _stype)
+                                    with st.expander(f" Manual Extraction Log — {statement_label}", expanded=False):
+                                        _log_placeholder = st.empty()
+                                        _token_placeholder = st.empty()
+                                        _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
 
-                                        if isinstance(manual_page_num, list):
-                                            # Page range: [302, 303] - explicitly merge all pages
-                                            _log_placeholder.info(f"✅ Using manually specified pages {manual_page_num[0]}-{manual_page_num[-1]} for {statement_label}")
-                                            print(f"Extracting from page range: {manual_page_num}")
-
-                                            # Build candidate from first page
+                                        try:
                                             with contextlib.redirect_stdout(_logger):
-                                                _page = build_manual_candidate(_pdf_path, manual_page_num[0] - 1, _stype)
+                                                _page = build_manual_candidate(_pdf_path, int(page_num_1based) - 1, _stype)
 
-                                            if _page and len(manual_page_num) > 1:
-                                                # Explicitly add remaining pages in the range
-                                                if _page.get("text_garbled"):
-                                                    for page_idx in range(1, len(manual_page_num)):
-                                                        pdf_page_num = manual_page_num[page_idx] - 1
-                                                        _page["all_page_nums"].append(pdf_page_num)
-                                                        print(f"  Added page {manual_page_num[page_idx]} (garbled — images will be rendered at extraction)")
-                                                else:
-                                                    with pdfplumber.open(_pdf_path) as pdf:
-                                                        for page_idx in range(1, len(manual_page_num)):
-                                                            pdf_page_num = manual_page_num[page_idx] - 1  # Convert to 0-based
-                                                            if pdf_page_num < len(pdf.pages):
-                                                                page_text = pdf.pages[pdf_page_num].extract_text() or ""
-                                                                _page["full_text"] += f"\n{page_text}"
-                                                                _page["all_page_nums"].append(pdf_page_num)
-                                                                print(f"  Added page {manual_page_num[page_idx]} to extraction")
+                                            if not _page:
+                                                st.warning(f"Page {page_num_1based} could not be read.")
+                                                continue
 
-                                                print(f"Manual page range {manual_page_num[0]}-{manual_page_num[-1]} specified, extracted pages: {[p+1 for p in _page.get('all_page_nums', [])]}")
-                                        else:
-                                            # Single page: 302
                                             with contextlib.redirect_stdout(_logger):
-                                                _page = build_manual_candidate(_pdf_path, manual_page_num - 1, _stype)
-                                            if _page:
-                                                _log_placeholder.info(f"✅ Using manually specified page {manual_page_num} for {statement_label}")
-                                                print(f"Manual page {manual_page_num} specified, extracted pages: {[p+1 for p in _page.get('all_page_nums', [])]}")
-                                    else:
-                                        # Use automatic detection
-                                        with contextlib.redirect_stdout(_logger):
-                                            _page = find_correct_page(_pdf_path, _stype)
-
-                                    if not _page:
-                                        if manual_page_num:
-                                            page_display = f"{manual_page_num[0]}-{manual_page_num[-1]}" if isinstance(manual_page_num, list) else str(manual_page_num)
-                                            st.error(f"Manual page(s) {page_display} specified but could not extract data from **{statement_label}**")
-                                        else:
-                                            st.warning(f"Could not locate **{statement_label}** page — skipped.")
-                                    else:
-                                                                                                                    # Extract table with detailed logging
-                                        print(f"Extracting table from {len(_page.get('all_page_nums', []))} page(s): {[p+1 for p in _page.get('all_page_nums', [])]}")
-                                        with contextlib.redirect_stdout(_logger):
-                                            _table = extract_table_with_vision_fallback(
-                                                _page, _pdf_path, stitch_images_vertical,
-                                                provider=manual_provider, model=manual_model_id
-                                            )
+                                                _table = extract_table_with_vision_fallback(
+                                                    _page, _pdf_path, stitch_images_vertical,
+                                                    provider=manual_provider, model=manual_model_id
+                                                )
 
                                             if not _table["rows"]:
-                                                st.warning(f"Page found but no data extracted for **{statement_label}**. Manual page input required.")
-                                                _manual_needed.append(_stype)
-                                            else:
-                                                _used_vision = _page.get("text_garbled", False)
-                                                _stype_result = {
-                                                    "page": _page["page_display"],
-                                                    "page_num": _page["page_num"],
-                                                    "all_page_nums": _page.get("all_page_nums", [_page["page_num"]]),
-                                                    "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
-                                                    "rows": _table["rows"],
-                                                    "year_headers": _table.get("year_headers", []),
-                                                    "unit_scale": _table.get("unit_scale"),
-                                                    "year_end_date": _table.get("year_end_date"),
-                                                    "total_rows": _table["total_rows"],
-                                                    "extraction_method": "vision" if _used_vision else "text",
-                                                    "company": company.get('name', 'Unknown'),
-                                                    "statement": _stype,
-                                                    "target_year": manual_year,
-                                                }
-                                                st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
+                                                st.warning(f"No data extracted from page {page_num_1based}.")
+                                                continue
 
-                                except Exception as _e:
-                                    st.warning(f"Extraction failed for **{statement_label}**: {_e}")
-                                    import traceback
-                                    _logger.write(traceback.format_exc())
-                            
-                            if _stype_result:
-                                _new_results[_stype] = _stype_result
+                                            _used_vision = _page.get("text_garbled", False)
+                                            _all_pnums = _page.get("all_page_nums", [_page["page_num"]])
+                                            _new_results[_stype] = {
+                                                "page": _page["page_display"],
+                                                "page_num": _page["page_num"],
+                                                "all_page_nums": _all_pnums,
+                                                "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
+                                                "rows": _table["rows"],
+                                                "year_headers": _table.get("year_headers", []),
+                                                "year_currencies": _table.get("year_currencies", {}),
+                                                "unit_scale": _table.get("unit_scale"),
+                                                "year_end_date": _table.get("year_end_date"),
+                                                "total_rows": _table["total_rows"],
+                                                "extraction_method": "vision" if _used_vision else "text",
+                                                "company": company.get('name', 'Unknown'),
+                                                "statement": _stype,
+                                                "target_year": fiscal_year if fiscal_year != 'N/A' else datetime.now().year,
+                                            }
+                                            st.success(f" Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
 
-                    if _manual_needed:
-                        st.markdown("---")
-                        st.markdown("### 📝 Manual Page Input Required")
-                        st.warning(f"Could not automatically locate {len(_manual_needed)} statement(s). Please enter page numbers manually.")
-                        _manual_pages = {}
-                        cols = st.columns(len(_manual_needed))
-                        for col, _stype in zip(cols, _manual_needed):
-                            with col:
-                                statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                                _manual_pages[_stype] = st.number_input(
-                                    statement_label,
-                                    min_value=1,
-                                    step=1,
-                                    key=f"manual_page_upload_{_stype}",
-                                    help="Enter the page number where this statement starts"
-                                )
-
-                        if st.button("🔬 Extract from Manual Pages", key=f"manual_extract_upload", type="primary"):
-                            for _stype, page_num_1based in _manual_pages.items():
-                                statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                                with st.expander(f"📝 Manual Extraction Log — {statement_label}", expanded=False):
-                                    _log_placeholder = st.empty()
-                                    _token_placeholder = st.empty()
-                                    _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)
-
-                                    try:
-                                        with contextlib.redirect_stdout(_logger):
-                                            _page = build_manual_candidate(_pdf_path, int(page_num_1based) - 1, _stype)
-
-                                        if not _page:
-                                            st.warning(f"Page {page_num_1based} could not be read.")
-                                            continue
-
-                                        with contextlib.redirect_stdout(_logger):
-                                            _table = extract_table_with_vision_fallback(
-                                                _page, _pdf_path, stitch_images_vertical,
-                                                provider=manual_provider, model=manual_model_id
-                                            )
-
-                                        if not _table["rows"]:
-                                            st.warning(f"No data extracted from page {page_num_1based}.")
-                                            continue
-
-                                        _used_vision = _page.get("text_garbled", False)
-                                        _all_pnums = _page.get("all_page_nums", [_page["page_num"]])
-                                        _new_results[_stype] = {
-                                            "page": _page["page_display"],
-                                            "page_num": _page["page_num"],
-                                            "all_page_nums": _all_pnums,
-                                            "landscape_crop_bbox": _page.get("landscape_crop_bbox"),
-                                            "rows": _table["rows"],
-                                            "year_headers": _table.get("year_headers", []),
-                                            "year_currencies": _table.get("year_currencies", {}),
-                                            "unit_scale": _table.get("unit_scale"),
-                                            "year_end_date": _table.get("year_end_date"),
-                                            "total_rows": _table["total_rows"],
-                                            "extraction_method": "vision" if _used_vision else "text",
-                                            "company": company.get('name', 'Unknown'),
-                                            "statement": _stype,
-                                            "target_year": fiscal_year if fiscal_year != 'N/A' else datetime.now().year,
-                                        }
-                                        st.success(f"✅ Extracted {_table['total_rows']} rows from page {_page['page_display']}" + (" (vision)" if _used_vision else ""))
-
-                                    except Exception as _e:
-                                        st.warning(f"Extraction failed: {_e}")
-                                        import traceback
-                                        _logger.write(traceback.format_exc())
+                                        except Exception as _e:
+                                            st.warning(f"Extraction failed: {_e}")
+                                            import traceback
+                                            _logger.write(traceback.format_exc())
 
                                 if _new_results:
                                     st.session_state.hkex_extraction_results = _new_results
@@ -913,11 +920,10 @@ def render_hkex_section(company, hkex_ticker):
                                     for _k in list(st.session_state.keys()):
                                         if _k.endswith("_translated_income_statement") or _k.endswith("_translated_balance_sheet") or _k.endswith("_translated_cash_flow"):
                                             del st.session_state[_k]
-                                    st.success(f"✅ Manual extraction complete! {len(_new_results)} statement(s) extracted.")
+                                            st.success(f" Manual extraction complete! {len(_new_results)} statement(s) extracted.")
                                             # Note: No st.rerun() - results display automatically below
 
-
-                                                                                            # Display results inline with side-by-side view (moved outside loop)
+                    # Display results inline with side-by-side view (moved outside loop)
                     if _new_results:
                         # Debug: Show what's in _new_results
                         print(f"DEBUG: Manual upload _new_results keys = {list(_new_results.keys())}")
@@ -933,7 +939,7 @@ def render_hkex_section(company, hkex_ticker):
 
                         # Show correct count of extracted statements
                         extracted_statements = ', '.join([STATEMENT_LABELS.get(k, k) for k in _new_results.keys()])
-                        st.success(f"✅ Extraction complete! {len(_new_results)} statement(s) extracted: {extracted_statements}. Scroll down to view results.")
+                        st.success(f" Extraction complete! {len(_new_results)} statement(s) extracted: {extracted_statements}. Scroll down to view results.")
                                     # Note: No st.rerun() - results display automatically below
                     else:
                         st.error("No statements could be extracted.")
@@ -966,7 +972,7 @@ def render_hkex_section(company, hkex_ticker):
             render_multi_statement_mapping(results, key_prefix="manual")
 
             # Clear results button
-            if st.button("❌ Clear Results", key="clear_manual_extraction"):
+            if st.button(" Clear Results", key="clear_manual_extraction"):
                 st.session_state.manual_extraction_results = None
                 st.session_state.manual_extraction_report_title = None
                 st.session_state.uploaded_pdf_bytes = None

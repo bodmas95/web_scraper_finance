@@ -1,0 +1,139 @@
+"""
+Currency and Unit Display Integration
+
+This module provides functions to extract and format currency/unit information
+for display in summary table headers.
+
+Example: "2023 (RMB thousands)" instead of just "2023"
+
+Author: Integration Team
+Date: 2024
+"""
+
+from typing import Tuple, List
+from src.integration.currency_unit_logger import get_logger
+
+
+def extract_currency_and_unit(rows: list) -> Tuple[str, str]:
+    """
+    Extract currency and unit from extraction rows.
+    
+    Args:
+        rows: List of extraction row dictionaries containing 'Currency' and 'Unit' keys
+    
+    Returns:
+        Tuple of (currency, unit) e.g. ('RMB', 'thousands') or ('USD', 'millions')
+        Returns ('', '') if not found
+    
+    Examples:
+        >>> rows = [{'label': 'Revenue', 'Currency': 'RMB', 'Unit': 'thousands', '2023': 1000}]
+        >>> extract_currency_and_unit(rows)
+        ('RMB', 'thousands')
+    """
+    logger = get_logger()
+    logger.log_extraction_attempt(rows, source="extract_currency_and_unit")
+    
+    if not rows:
+        logger.logger.warning("  No rows provided, returning empty tuple")
+        return ('', '')
+    
+    # Try to get from first row
+    first_row = rows[0]
+    currency = first_row.get('Currency', '').strip()
+    unit = first_row.get('Unit', '').strip()
+    
+    logger.logger.info(f"  From first row: currency='{currency}', unit='{unit}'")
+    
+    # If not found in first row, search all rows
+    if not currency or not unit:
+        logger.logger.info("  Searching all rows for currency/unit...")
+        for i, row in enumerate(rows):
+            if not currency:
+                currency = row.get('Currency', '').strip()
+                if currency:
+                    logger.logger.info(f"    Found currency in row {i}: '{currency}'")
+            if not unit:
+                unit = row.get('Unit', '').strip()
+                if unit:
+                    logger.logger.info(f"    Found unit in row {i}: '{unit}'")
+            if currency and unit:
+                break
+    
+    logger.log_final_result(currency, unit, source="extract_currency_and_unit")
+    return (currency, unit)
+
+
+def format_year_header(year: int, currency: str, unit: str) -> str:
+    """
+    Format year header with currency and unit for display.
+    
+    Args:
+        year: Year number (e.g., 2023)
+        currency: Currency code (e.g., 'RMB', 'USD', 'EUR')
+        unit: Unit description (e.g., 'thousands', 'millions')
+    
+    Returns:
+        Formatted string like "2023 (RMB thousands)" or just "2023" if no currency/unit
+    
+    Examples:
+        >>> format_year_header(2023, 'RMB', 'thousands')
+        '2023 (RMB thousands)'
+        
+        >>> format_year_header(2024, 'USD', 'millions')
+        '2024 (USD millions)'
+        
+        >>> format_year_header(2023, '', '')
+        '2023'
+    """
+    year_str = str(year)
+    
+    if currency and unit:
+        return f"{year_str} ({currency} {unit})"
+    elif currency:
+        return f"{year_str} ({currency})"
+    elif unit:
+        return f"{year_str} ({unit})"
+    else:
+        return year_str
+
+
+def format_multiple_year_headers(years: List[int], currency: str, unit: str) -> dict:
+    """
+    Format multiple year headers at once.
+    
+    Args:
+        years: List of year numbers
+        currency: Currency code
+        unit: Unit description
+    
+    Returns:
+        Dictionary mapping year (as string) to formatted header
+    
+    Examples:
+        >>> format_multiple_year_headers([2022, 2023, 2024], 'RMB', 'thousands')
+        {'2022': '2022 (RMB thousands)', '2023': '2023 (RMB thousands)', '2024': '2024 (RMB thousands)'}
+    """
+    return {
+        str(year): format_year_header(year, currency, unit)
+        for year in years
+    }
+
+
+def get_currency_unit_from_mapping_result(mapping_result: dict) -> Tuple[str, str]:
+    """
+    Extract currency and unit from a mapping result dictionary.
+    
+    Args:
+        mapping_result: Mapping result dictionary containing 'currency' and 'unit' keys
+    
+    Returns:
+        Tuple of (currency, unit)
+    
+    Examples:
+        >>> result = {'currency': 'RMB', 'unit': 'thousands', 'fields': [...]}
+        >>> get_currency_unit_from_mapping_result(result)
+        ('RMB', 'thousands')
+    """
+    currency = mapping_result.get('currency', '').strip()
+    unit = mapping_result.get('unit', '').strip()
+    return (currency, unit)

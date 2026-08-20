@@ -318,10 +318,12 @@ Rules:
 - If a value is missing or blank for a year, use null.
 
 LANGUAGE HANDLING:
-- CRITICAL: All labels MUST be in ENGLISH.
-- If the document is bilingual (e.g., Indonesian + English, Chinese + English), extract labels from the ENGLISH column/section.
-- If the document is monolingual in a non-English language (Indonesian, Chinese, French, etc.), translate all labels to English.
-- Common translations: "Pendapatan" → "Revenue", "Beban" → "Expenses", "Laba" → "Profit", "Rugi" → "Loss", "Aset" → "Assets", "Liabilitas" → "Liabilities", "Ekuitas" → "Equity", "Arus Kas" → "Cash Flow"
+- CRITICAL: All labels MUST be in ENGLISH ONLY.
+- If a row has BOTH Indonesian and English labels (e.g., "Pendapatan Revenue"), extract ONLY the English part ("Revenue").
+- If a row has ONLY Indonesian labels, translate to English (e.g., "Pendapatan" → "Revenue").
+- DO NOT create separate rows for Indonesian and English versions of the same line item.
+- DO NOT include Indonesian labels in the output - English only!
+- Common translations: "Pendapatan" → "Revenue", "Beban" → "Expenses", "Laba" → "Profit", "Rugi" → "Loss", "Aset" → "Assets", "Liabilitas" → "Liabilities", "Ekuitas" → "Equity", "Arus Kas" → "Cash Flow", "Selular" → "Cellular", "Jumlah" → "Total"
 
 Page text:
 {page_text}
@@ -392,10 +394,12 @@ Rules:
 - If a value is missing or blank for a year, use null.
 
 LANGUAGE HANDLING:
-- CRITICAL: All labels MUST be in ENGLISH.
-- If the document is bilingual (e.g., Indonesian + English, Chinese + English), extract labels from the ENGLISH column/section.
-- If the document is monolingual in a non-English language (Indonesian, Chinese, French, etc.), translate all labels to English.
-- Common translations: "Pendapatan" → "Revenue", "Beban" → "Expenses", "Laba" → "Profit", "Rugi" → "Loss", "Aset" → "Assets", "Liabilitas" → "Liabilities", "Ekuitas" → "Equity", "Arus Kas" → "Cash Flow"
+- CRITICAL: All labels MUST be in ENGLISH ONLY.
+- If a row has BOTH Indonesian and English labels (e.g., "Pendapatan Revenue"), extract ONLY the English part ("Revenue").
+- If a row has ONLY Indonesian labels, translate to English (e.g., "Pendapatan" → "Revenue").
+- DO NOT create separate rows for Indonesian and English versions of the same line item.
+- DO NOT include Indonesian labels in the output - English only!
+- Common translations: "Pendapatan" → "Revenue", "Beban" → "Expenses", "Laba" → "Profit", "Rugi" → "Loss", "Aset" → "Assets", "Liabilitas" → "Liabilities", "Ekuitas" → "Equity", "Arus Kas" → "Cash Flow", "Selular" → "Cellular", "Jumlah" → "Total"
 
 Respond in this exact JSON format:
 {

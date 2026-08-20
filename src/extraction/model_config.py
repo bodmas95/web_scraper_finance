@@ -72,14 +72,47 @@ def get_default_model():
 
 def get_extraction_model():
     """
-    Get the model to use for extraction (no UI selection).
-    Uses Gemma by default.
+    Get the model to use for extraction from config.ini.
+    Uses Claude Opus 4.6 by default (as per config).
     
     Returns:
         tuple: (provider, model_id)
     """
-    # Always use Gemma for extraction
-    return "gemma", "gemma3-27b-it/"
+    from config.config import load_config
+    
+    _cfg = load_config()
+    provider = _cfg.get("LLM", "provider", fallback="maia").lower()
+    
+    if provider == "maia":
+        # Use Maia model from config (claude-opus-4-6 by default)
+        model = _cfg.get("LLM", "maia_model", fallback="claude-opus-4-6")
+        return "maia", model
+    else:
+        # Use Gemma/OpenAI-compatible model
+        model = _cfg.get("LLM", "model", fallback="gemma3-27b-it/")
+        return "openai", model
+
+
+def get_bref_mapping_model():
+    """
+    Get the model to use for BREF mapping.
+    Uses separate maia_mapping_model from config (GPT-5.5 by default).
+    
+    Returns:
+        tuple: (provider, model_id)
+    """
+    from config.config import load_config
+    
+    _cfg = load_config()
+    use_maia = _cfg.getboolean("LLM", "use_maia_for_bref", fallback=True)
+    
+    if use_maia:
+        # Use separate mapping model (GPT-5.5 by default, different from extraction model)
+        mapping_model = _cfg.get("LLM", "maia_mapping_model", fallback="gpt-5.5-2026-04-24")
+        return "maia", mapping_model
+    else:
+        # Use Gemma for BREF mapping
+        return "openai", "gemma3-27b-it/"
 
 
 def get_fallback_model():
@@ -144,6 +177,6 @@ def render_model_selector(key_prefix=""):
     
     # Show info message if Maia credentials not configured
     if not has_maia_credentials:
-        st.info("ℹ️ To use Maia models (GPT-5.1, Claude, Gemini), add credentials to config.ini: `maia_credentials = CLIENT_ID:CLIENT_SECRET`")
+        st.info("ℹ To use Maia models (GPT-5.1, Claude, Gemini), add credentials to config.ini: `maia_credentials = CLIENT_ID:CLIENT_SECRET`")
     
     return parse_model_selection(selected)

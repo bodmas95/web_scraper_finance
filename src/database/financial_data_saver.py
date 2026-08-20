@@ -44,7 +44,7 @@ class FinancialDataSaver:
             # Index on fiscal year
             self.collection.create_index('fiscal_year')
             
-            logger.info("✅ Financial data indexes created")
+            logger.info(" Financial data indexes created")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
     
@@ -99,10 +99,10 @@ class FinancialDataSaver:
                 
                 if result.upserted_id:
                     saved_count += 1
-                    logger.info(f"💾 Saved {statement_type} for {company_name} ({fiscal_year})")
+                    logger.info(f" Saved {statement_type} for {company_name} ({fiscal_year})")
                 else:
                     updated_count += 1
-                    logger.info(f"🔄 Updated {statement_type} for {company_name} ({fiscal_year})")
+                    logger.info(f" Updated {statement_type} for {company_name} ({fiscal_year})")
                 
             except Exception as e:
                 error_msg = f"Error saving {statement_type}: {e}"
@@ -116,7 +116,7 @@ class FinancialDataSaver:
             'total': len(extraction_results)
         }
         
-        logger.info(f"📊 Save summary: {saved_count} saved, {updated_count} updated, {len(errors)} errors")
+        logger.info(f" Save summary: {saved_count} saved, {updated_count} updated, {len(errors)} errors")
         
         return summary
     
@@ -147,7 +147,7 @@ class FinancialDataSaver:
         
         results = list(self.collection.find(query))
         
-        logger.info(f"📊 Found {len(results)} documents for {company_name}")
+        logger.info(f" Found {len(results)} documents for {company_name}")
         
         return results
     
@@ -178,7 +178,7 @@ class FinancialDataSaver:
         
         result = self.collection.delete_many(query)
         
-        logger.info(f"🗑️ Deleted {result.deleted_count} documents for {company_name}")
+        logger.info(f" Deleted {result.deleted_count} documents for {company_name}")
         
         return result.deleted_count
     

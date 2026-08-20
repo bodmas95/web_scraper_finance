@@ -1,6 +1,7 @@
 """
-reads company and source info using db_utils
+reads company and source info using db_utils 
 writes the results to reports
+
 """
 
 import os
@@ -10,13 +11,12 @@ import requests
 from config.config import USER_AGENT
 from src.http_client import get
 
-
 def build_gridfs_metadata(
     company_doc: dict,
     source_doc: dict,
     stock_id: str,
     stock_code: str,
-    report_item: dict,
+    report_item:dict,
 ) -> dict:
     """
     Build metadata to store in GridFS.
@@ -27,7 +27,7 @@ def build_gridfs_metadata(
         stock_id: HKHEX stock id.
         stock_code: HKHEX symbol.
         report_item: Parsed report item.
-
+    
     Returns:
         MetaData dictionary.
     """
@@ -45,7 +45,6 @@ def build_gridfs_metadata(
         "uploadAt": datetime.utcnow(),
     }
 
-
 def build_ingestion_file_entry(
     file_id: str | None,
     filename: str,
@@ -53,7 +52,7 @@ def build_ingestion_file_entry(
     file_bytes: bytes | None,
     language: str,
     download_status: str,
-    downloader_error_message: str | None = None,
+    downloader_error_message: str | None = None, 
 ) -> dict:
     """
     Build file entry for ingestionLogs and reports.
@@ -66,7 +65,7 @@ def build_ingestion_file_entry(
         language: file language.
         download_status: success or failed.
         downloader_error_message: Optional error text.
-
+    
     Returns:
         File metadata entry.
     """
@@ -74,7 +73,7 @@ def build_ingestion_file_entry(
 
     return {
         "fileId": file_id,
-        "fileName": filename,
+        "fileName":filename,
         "url": file_url,
         "format": "PDF",
         "mimeType": "application/pdf",
@@ -84,7 +83,6 @@ def build_ingestion_file_entry(
         "downloadedAt": datetime.utcnow(),
         "downoaderErrorMessage": downloader_error_message,
     }
-
 
 def download_pdf(url: str, folder: str) -> tuple[str, bytes]:
     """
@@ -96,8 +94,8 @@ def download_pdf(url: str, folder: str) -> tuple[str, bytes]:
     Returns:
         Tuple of (filename, file_bytes).
     """
-    os.makedirs(folder, exist_ok=True)
-
+    os.makedirs(folder, exist_ok = True)
+  
     filename = url.split("/")[-1]
     file_path = os.path.join(folder, filename)
 
@@ -105,7 +103,7 @@ def download_pdf(url: str, folder: str) -> tuple[str, bytes]:
     if os.path.exists(file_path):
         with open(file_path, "rb") as file_obj:
             return filename, file_obj.read()
-
+    
     # Download using proxy-aware HTTP client
     response = get(
         url=url,
@@ -114,9 +112,9 @@ def download_pdf(url: str, folder: str) -> tuple[str, bytes]:
     )
     response.raise_for_status()
     body = response.content
-
+    
     # Save to local file
     with open(file_path, "wb") as file_obj:
         file_obj.write(body)
-
+    
     return filename, body

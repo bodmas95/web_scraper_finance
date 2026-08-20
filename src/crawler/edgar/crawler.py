@@ -1,7 +1,10 @@
+# In any script that uses EDGAR:
+from src.edgar_proxy_wrapper import setup_edgar_with_proxy
 from edgar import Company, set_identity
 from src.crawler.base import BaseCrawler
 from typing import Any, Dict, Optional
 import pandas as pd
+setup_edgar_with_proxy()
 
 
 class EdgarCrawler(BaseCrawler):

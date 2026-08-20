@@ -7,6 +7,7 @@ instead of waiting for each other sequentially.
 """
 
 import io
+import sys
 import contextlib
 import traceback
 import logging
@@ -17,6 +18,22 @@ from src.worker_pool import get_thread_pool
 _log = logging.getLogger(__name__)
 
 
+class TeeOutput:
+    """Write to both a buffer and stdout for real-time logging."""
+    def __init__(self, buffer, stdout):
+        self.buffer = buffer
+        self.stdout = stdout
+    
+    def write(self, text):
+        self.buffer.write(text)
+        self.stdout.write(text)
+        self.stdout.flush()  # Ensure immediate display
+    
+    def flush(self):
+        self.buffer.flush()
+        self.stdout.flush()
+
+
 def _extract_one_statement(args):
     """
     Extract a single financial statement from a PDF.
@@ -24,12 +41,12 @@ def _extract_one_statement(args):
 
     Args:
         args: tuple of (pdf_path, statement_type, stitch_fn, provider, model_id,
-                         company_name, target_year)
+                         company_name, target_year, balance_sheet_anchor)
 
     Returns:
         dict with keys: stype, result, logs, error, manual_needed
     """
-    pdf_path, stype, stitch_fn, provider, model_id, company_name, target_year = args
+    pdf_path, stype, stitch_fn, provider, model_id, company_name, target_year, balance_sheet_anchor = args
 
     log_buf = io.StringIO()
     try:
@@ -37,8 +54,11 @@ def _extract_one_statement(args):
         from src.extraction.extractor import extract_table_with_vision_fallback
         from src.extraction.model_config import get_fallback_model
 
-        with contextlib.redirect_stdout(log_buf):
-            page = find_correct_page(pdf_path, stype)
+                # Use TeeOutput to write to both buffer and stdout for real-time logging
+        tee = TeeOutput(log_buf, sys.stdout)
+        with contextlib.redirect_stdout(tee):
+            # CRITICAL: Pass balance sheet anchor for optimized search
+            page = find_correct_page(pdf_path, stype, balance_sheet_anchor=balance_sheet_anchor)
 
         if not page:
             return {
@@ -49,20 +69,20 @@ def _extract_one_statement(args):
                 "manual_needed": True,
             }
 
-        # Try with primary model (Gemma)
+                # Try with primary model (Gemma)
         try:
-            with contextlib.redirect_stdout(log_buf):
+            with contextlib.redirect_stdout(tee):
                 table = extract_table_with_vision_fallback(
                     page, pdf_path, stitch_fn,
                     provider=provider, model=model_id,
                 )
         except Exception as e:
             # Fallback to GPT-4o
-            log_buf.write(f"\n⚠️ Primary model ({provider}/{model_id}) failed: {str(e)}\n")
-            log_buf.write("🔄 Falling back to GPT-4o...\n")
+            tee.write(f"\n Primary model ({provider}/{model_id}) failed: {str(e)}\n")
+            tee.write(" Falling back to GPT-4o...\n")
             
             fallback_provider, fallback_model = get_fallback_model()
-            with contextlib.redirect_stdout(log_buf):
+            with contextlib.redirect_stdout(tee):
                 table = extract_table_with_vision_fallback(
                     page, pdf_path, stitch_fn,
                     provider=fallback_provider, model=fallback_model,
@@ -112,6 +132,77 @@ def _extract_one_statement(args):
         }
 
 
+def _ensure_currency_consistency(results: dict) -> dict:
+    """
+    Ensure currency consistency across all extracted statements.
+    
+    If multiple statements are extracted from the same PDF, they should all use
+    the same currency unless explicitly different. This function:
+    1. Finds the most common currency across all statements
+    2. Updates statements with missing or inconsistent currencies
+    
+    Args:
+        results: Dict of {statement_type: result_dict}
+    
+    Returns:
+        Updated results dict with consistent currencies
+    """
+    if len(results) <= 1:
+        return results
+    
+    # Collect all currencies from all statements
+    currency_counts = {}
+    for stype, result in results.items():
+        year_currencies = result.get("year_currencies", {})
+        for year, currency in year_currencies.items():
+            if currency:
+                currency_counts[currency] = currency_counts.get(currency, 0) + 1
+    
+    if not currency_counts:
+        # No currencies found in any statement
+        return results
+    
+    # Find the most common currency
+    most_common_currency = max(currency_counts, key=currency_counts.get)
+    
+    _log.info(
+        "Currency consistency check: Most common currency is %s (found %d times)",
+        most_common_currency, currency_counts[most_common_currency]
+    )
+    
+    # Update statements with missing or inconsistent currencies
+    for stype, result in results.items():
+        year_currencies = result.get("year_currencies", {})
+        year_headers = result.get("year_headers", [])
+        
+        # Check if this statement has missing or inconsistent currencies
+        needs_update = False
+        if not year_currencies:
+            needs_update = True
+        else:
+            # Check if any year is missing currency or has different currency
+            for year in year_headers:
+                if year not in year_currencies or not year_currencies[year]:
+                    needs_update = True
+                    break
+                # Check for inconsistent currency (different from most common)
+                if year_currencies[year] != most_common_currency:
+                    # Only update if this currency appears less frequently
+                    if currency_counts.get(year_currencies[year], 0) < currency_counts[most_common_currency]:
+                        needs_update = True
+                        break
+        
+        if needs_update:
+            _log.warning(
+                "Updating currency for %s: %s -> %s",
+                stype, year_currencies, most_common_currency
+            )
+            # Update all years to use the most common currency
+            result["year_currencies"] = {year: most_common_currency for year in year_headers}
+    
+    return results
+
+
 def extract_statements_parallel(
     pdf_path: str,
     statement_types: list[str],
@@ -122,10 +213,14 @@ def extract_statements_parallel(
     target_year: int = 0,
 ) -> dict:
     """
-    Extract multiple financial statements from a PDF in parallel.
-
-    Submits all statement types to the thread pool simultaneously so
-    LLM API calls overlap instead of running sequentially.
+    Extract multiple financial statements from a PDF SEQUENTIALLY.
+    
+    CRITICAL: Changed from parallel to sequential execution to avoid race conditions
+    where multiple statement types find the same page.
+    
+    Extraction order: balance_sheet -> income_statement -> cash_flow
+    This ensures balance sheet is extracted first (serves as anchor), then income
+    statement and cash flow use optimized search (10-page window after balance sheet).
 
     Args:
         pdf_path: Path to the PDF file
@@ -147,31 +242,46 @@ def extract_statements_parallel(
     if not statement_types:
         return {"results": {}, "manual_needed": [], "logs": {}, "errors": {}}
 
-    pool = get_thread_pool()
-    args_list = [
-        (pdf_path, stype, stitch_fn, provider, model_id, company_name, target_year)
-        for stype in statement_types
-    ]
+        # CRITICAL: Process in specific order to avoid conflicts
+    # Balance sheet first (serves as anchor for optimized search)
+    # Income statement second (uses balance sheet anchor for faster search)
+    # Cash flow last (uses balance sheet anchor for faster search)
+    ordered_types = []
+    for preferred in ['balance_sheet', 'income_statement', 'cash_flow']:
+        if preferred in statement_types:
+            ordered_types.append(preferred)
+    # Add any other types not in the preferred list
+    for stype in statement_types:
+        if stype not in ordered_types:
+            ordered_types.append(stype)
 
     _log.info(
-        "Submitting %d statement extractions in parallel (types: %s)",
-        len(statement_types), statement_types,
+        "Extracting %d statements SEQUENTIALLY (order: %s)",
+        len(ordered_types), ordered_types,
     )
-
-    futures = {
-        pool.submit(_extract_one_statement, args): args[1]
-        for args in args_list
-    }
 
     results = {}
     manual_needed = []
     logs = {}
     errors = {}
+    
+    # Track which pages have been used to avoid duplicates
+    used_pages = set()
+    
+    # CRITICAL: Track balance sheet anchor for optimized search
+    # When we extract balance sheet first, save its page number
+    # Then reuse it for income statement and cash flow extraction
+    balance_sheet_anchor_page = None
 
-    for future in as_completed(futures):
-        stype = futures[future]
+    for stype in ordered_types:
+        # CRITICAL: Pass balance sheet anchor to income statement and cash flow
+        args = (pdf_path, stype, stitch_fn, provider, model_id, company_name, target_year, balance_sheet_anchor_page)
         try:
-            out = future.result()
+            print(f"\n{'='*80}")
+            print(f"EXTRACTING: {stype.upper().replace('_', ' ')}")
+            print(f"{'='*80}\n")
+            
+            out = _extract_one_statement(args)
             logs[out["stype"]] = out["logs"]
 
             if out["error"]:
@@ -179,14 +289,42 @@ def extract_statements_parallel(
             elif out["manual_needed"]:
                 manual_needed.append(out["stype"])
             elif out["result"]:
-                results[out["stype"]] = out["result"]
+                # Check if this page was already used by another statement
+                page_num = out["result"]["page_num"]
+                if page_num in used_pages:
+                    _log.warning(
+                        "Page %d already used by another statement, skipping %s",
+                        page_num + 1, stype
+                    )
+                    print(f"\n⚠️ WARNING: Page {page_num + 1} already extracted for another statement")
+                    print(f"   Skipping {stype} to avoid duplicate extraction\n")
+                    manual_needed.append(out["stype"])
+                else:
+                    results[out["stype"]] = out["result"]
+                    used_pages.add(page_num)
+                    print(f"\n✅ Successfully extracted {stype} from page {page_num + 1}\n")
+                    
+                                        # CRITICAL: If this is balance sheet, save the LAST page as anchor for other statements
+                    # This ensures income statement search starts AFTER balance sheet ends
+                    if stype == "balance_sheet":
+                        # Get the last page of balance sheet (including continuations)
+                        all_pages = out["result"].get("all_page_nums", [page_num])
+                        last_bs_page = max(all_pages)
+                        balance_sheet_anchor_page = last_bs_page
+                        print(f"  📍 Balance sheet extracted from pages: {[p + 1 for p in all_pages]}")
+                        print(f"  📍 Balance sheet anchor saved: page {last_bs_page + 1} (last page of balance sheet)")
+                        print(f"  📍 Income statement and cash flow will search starting from page {last_bs_page + 2}\n")
         except Exception:
             errors[stype] = traceback.format_exc()
 
     _log.info(
-        "Parallel extraction done: %d success, %d manual, %d errors",
+        "Sequential extraction done: %d success, %d manual, %d errors",
         len(results), len(manual_needed), len(errors),
     )
+    
+    # CRITICAL: Ensure currency consistency across all statements
+    if results:
+        results = _ensure_currency_consistency(results)
 
     return {
         "results": results,

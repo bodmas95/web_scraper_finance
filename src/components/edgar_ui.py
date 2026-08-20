@@ -149,9 +149,11 @@ def _patch_httpx_proxy(proxy_url: str) -> None:
 
 
 def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
+    # CRITICAL: Patch httpx proxy BEFORE importing edgar modules
     http_proxy, https_proxy = _get_edgar_proxy_urls()
     _patch_httpx_proxy(http_proxy)
-
+    
+    # Now import edgar modules (after proxy is patched)
     from src.crawler.edgar.crawler import EdgarCrawler
     from src.parser.edgar.parser import EdgarParser
 
@@ -159,26 +161,38 @@ def _fetch_and_parse_edgar(ticker: str, year: int, identity: str):
     if cache_key in st.session_state:
         return st.session_state[cache_key]
 
+    # Build configuration object
     cfg = _types.SimpleNamespace(
         identity=identity,
         http_proxy=http_proxy,
         https_proxy=https_proxy,
         max_filings=1,
     )
+    
     try:
+        # Create crawler (proxy is already patched via httpx)
         crawler = EdgarCrawler(cfg)
+        
+        # Fetch financials
         raw = crawler.fetch_company_financials(ticker, year)
         if not raw:
             return None
+        
+        # Parse financials
         parsed = EdgarParser.parse_financials(ticker, raw, year)
         if not parsed:
             return None
+        
         parsed["company_name"] = raw.get("company_name", ticker)
         parsed["cik"] = str(raw.get("cik", ""))
         st.session_state[cache_key] = parsed
         return parsed
+        
     except Exception as e:
         st.error(f"Error fetching {ticker} from SEC EDGAR: {e}")
+        import traceback
+        with st.expander("Error Details"):
+            st.code(traceback.format_exc())
         return None
 
 
@@ -315,13 +329,16 @@ def _convert_edgar_to_extraction_format(financials: dict, company_name: str, tar
         "cash_flow_statement": [...]
     }
     
-    Extraction format:
+    Extraction format (MUST match HKEX/PDF extraction format for cache compatibility):
     {
         "balance_sheet": {
             "rows": [{"label": "...", "2024": 123, "2023": 456}, ...],
             "company": "...",
             "target_year": 2024,
-            "statement": "balance_sheet"
+            "statement": "balance_sheet",
+            "year_headers": ["2024", "2023", "2022"],
+            "year_currencies": {"2024": "USD", "2023": "USD", "2022": "USD"},
+            "unit_scale": "Millions"
         },
         ...
     }
@@ -340,6 +357,51 @@ def _convert_edgar_to_extraction_format(financials: dict, company_name: str, tar
         if not records:
             continue
         
+        # Extract year headers from first record (all year columns)
+        year_headers = []
+        if records:
+            first_record = records[0]
+            for key in first_record.keys():
+                # Check if key looks like a year or date
+                if key not in ["label", "concept", "standard_concept", "level", "parent_concept", "index"]:
+                    # Extract year from date format (e.g., "2024-12-31 (FY)" -> "2024")
+                    import re
+                    year_match = re.search(r'(\d{4})', str(key))
+                    if year_match:
+                        year = year_match.group(1)
+                        if year not in year_headers:
+                            year_headers.append(year)
+                    else:
+                        # If no year found, use the key as-is (might be a year already)
+                        if key not in year_headers:
+                            year_headers.append(key)
+        
+        # Sort year headers in descending order (most recent first)
+        try:
+            year_headers.sort(key=lambda x: int(re.search(r'(\d{4})', str(x)).group(1)) if re.search(r'(\d{4})', str(x)) else 0, reverse=True)
+        except:
+            pass
+        
+        # Create year_currencies dict (EDGAR data is always in USD)
+        year_currencies = {year: "USD" for year in year_headers}
+        
+        # Determine unit scale from first numeric value
+        unit_scale = "Millions"  # Default for EDGAR data
+        if records:
+            for record in records[:5]:  # Check first 5 records
+                for key, value in record.items():
+                    if key not in ["label", "concept", "standard_concept", "level", "parent_concept", "index"]:
+                        if isinstance(value, (int, float)) and value != 0:
+                            # If value is > 1000, it's likely in thousands
+                            # If value is < 1000, it's likely in millions
+                            if abs(value) > 10000:
+                                unit_scale = "Thousands"
+                            else:
+                                unit_scale = "Millions"
+                            break
+                if unit_scale != "Millions":
+                    break
+        
         # Convert records to extraction format
         rows = []
         for record in records:
@@ -354,7 +416,7 @@ def _convert_edgar_to_extraction_format(financials: dict, company_name: str, tar
             
             rows.append(row)
         
-        # Create extraction result structure
+        # CRITICAL: Create extraction result structure that matches HKEX/PDF format
         extraction_results[extraction_name] = {
             "rows": rows,
             "company": company_name,
@@ -363,7 +425,11 @@ def _convert_edgar_to_extraction_format(financials: dict, company_name: str, tar
             "total_rows": len(rows),
             "page": "N/A (EDGAR API)",
             "page_num": 0,
-            "extraction_method": "edgar_api"
+            "extraction_method": "edgar_api",
+            # CRITICAL: Add these fields for cache compatibility
+            "year_headers": year_headers,
+            "year_currencies": year_currencies,
+            "unit_scale": unit_scale,
         }
     
     return extraction_results
@@ -390,10 +456,9 @@ def render_sec_edgar_section(company):
 
     _cfg = load_config()
     _proxy_use = _cfg.get("PROXY", "proxy_use", fallback="none").strip().lower()
-    proxy_labels = {"none": "🟢 Direct (no proxy)", "server": "🔵 Server proxy (IP-based)",
-                    "system": "🟠 Corporate proxy (NTLM)"}
-    st.caption(f"Network: {proxy_labels.get(_proxy_use, _proxy_use)}  "
-               f"— controlled by `config.ini [PROXY] proxy_use`")
+    proxy_labels = {"none": "Direct (no proxy)", "server": "Server proxy (IP-based)",
+                    "system": "Corporate proxy (NTLM)"}
+    st.caption(f"Network: {proxy_labels.get(_proxy_use, _proxy_use)} - controlled by config.ini [PROXY] proxy_use")
 
     st.markdown("---")
 
@@ -401,7 +466,7 @@ def render_sec_edgar_section(company):
     identity = _cfg_identity if "@" in _cfg_identity else f"{_cfg_identity} research@example.com".strip()
     identity_ok = bool(identity and "@" in identity)
     if not identity_ok:
-        st.warning("SEC identity not configured. Set `identity` in `config.ini [EDGAR]` as `Name email@domain.com`.", icon="⚠️")
+        st.warning("SEC identity not configured. Set `identity` in `config.ini [EDGAR]` as `Name email@domain.com`.")
 
     col_yr, _ = st.columns([1, 3])
     with col_yr:
@@ -413,7 +478,7 @@ def render_sec_edgar_section(company):
     col_btn, _ = st.columns([1, 3])
     with col_btn:
         fetch = st.button(
-            f"🔄 Fetch {company_name} FY{fiscal_year}",
+            f"Fetch {company_name} FY{fiscal_year}",
             disabled=not identity_ok,
             key="sec_fetch_btn",
         )
@@ -448,12 +513,11 @@ def render_sec_edgar_section(company):
 
         if st.session_state.edgar_mongo_saved:
             st.success(
-                f"✅ Raw JSON saved to MongoDB `reports` collection  "
-                f"(sourceFilingId: `{res_year}_AR_{ticker}_SEC`)",
-                icon="💾",
+                f"Raw JSON saved to MongoDB `reports` collection "
+                f"(sourceFilingId: `{res_year}_AR_{ticker}_SEC`)"
             )
         else:
-            st.info("Fetched but not saved to MongoDB (check connection or company doc).", icon="ℹ️")
+            st.info("Fetched but not saved to MongoDB (check connection or company doc).")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Company", res_company[:22])
@@ -462,7 +526,7 @@ def render_sec_edgar_section(company):
         c4.metric("Cash Flow rows", len(cf_rec))
 
         tab_bs, tab_is, tab_cf = st.tabs(
-            ["🏦 Balance Sheet", "📊 Income Statement", "💵 Cash Flow"]
+            ["Balance Sheet", "Income Statement", "Cash Flow"]
         )
 
         def _show_stmt(tab, records, key_suffix):
@@ -495,7 +559,7 @@ def render_sec_edgar_section(company):
 
         col_gen, col_dl = st.columns([1, 2])
         with col_gen:
-            if st.button("⚙️ Generate Excel", key="sec_gen_excel"):
+            if st.button("Generate Excel", key="sec_gen_excel"):
                 with st.spinner("Building Excel workbook …"):
                     st.session_state.edgar_excel_bytes = _build_edgar_excel(
                         result, ticker, res_year
@@ -505,7 +569,7 @@ def render_sec_edgar_section(company):
         with col_dl:
             if st.session_state.edgar_excel_bytes:
                 st.download_button(
-                    label=f"⬇ Download {res_company} FY{res_year} (.xlsx)",
+                    label=f"Download {res_company} FY{res_year} (.xlsx)",
                     data=st.session_state.edgar_excel_bytes,
                     file_name=f"{ticker}_{res_year}_financial_statements.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -655,7 +719,7 @@ def render_sec_edgar_section(company):
                     _auto_types = [s for s in sec_selected_types if not sec_pages_dict.get(s)]
                     _manual_types = [s for s in sec_selected_types if sec_pages_dict.get(s)]
 
-                                        # ── Auto-detect types: run in parallel ──────────────
+                                        #  Auto-detect types: run in parallel 
                     if _auto_types:
                         from src.extraction.parallel import extract_statements_parallel
                         with st.spinner(f"Extracting {len(_auto_types)} statement(s) in parallel..."):
@@ -674,8 +738,9 @@ def render_sec_edgar_section(company):
                         
                         for _stype in _auto_types:
                             statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                            with st.expander(f"📝 Extraction Log — {statement_label}", expanded=False):
+                            with st.expander(f"Extraction Log - {statement_label}", expanded=False):
                                 st.text(_par["logs"].get(_stype, ""))
+                            
                             if _stype in _par["errors"]:
                                 st.warning(f"Extraction failed for **{statement_label}**")
                             elif _stype in _par["results"]:
@@ -684,11 +749,11 @@ def render_sec_edgar_section(company):
                             elif _stype in _par["manual_needed"]:
                                 st.warning(f"Could not locate **{statement_label}** page -- skipped.")
 
-                    # ── Manual-page types: sequential (complex multi-page handling) ─
+                    #  Manual-page types: sequential (complex multi-page handling) 
                     for _stype in _manual_types:
                         _stype_result = None
                         statement_label = STATEMENT_LABELS.get(_stype, _stype)
-                        with st.expander(f"📝 Extraction Log — {statement_label}", expanded=False):
+                        with st.expander(f"Extraction Log - {statement_label}", expanded=False):
                             _log_placeholder = st.empty()
                             _token_placeholder = st.empty()
                             _logger = PDFLiveLogger(_log_placeholder, _token_placeholder)

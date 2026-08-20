@@ -83,10 +83,10 @@ def extract_labels_from_ixbrl_viewer(html_content: str) -> Dict[str, Tuple[str, 
 # ---------------------------------------------------------------------------
 
 IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
-    # ── Income Statement ────────────────────────────────────────────────────
+    #  Income Statement 
     "Revenue":
         ("Produits des activités ordinaires", "Revenue"),
-    # ── Income Statement (standard IFRS) ────────────────────────────────────
+    #  Income Statement (standard IFRS) 
     "RevenueFromContractsWithCustomers":
         ("Produits des contrats avec les clients", "Revenue from contracts with customers"),
     "OtherIncome":
@@ -109,6 +109,7 @@ IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
         ("Frais commerciaux, généraux et administratifs", "SG&A expenses"),
     "OtherExpenseByFunction":
         ("Autres charges", "Other expenses"),
+    "ServicesExpense":("Charges externes","Services Expense"),
     "OtherExpenseByNature":
         ("Autres charges par nature", "Other expenses by nature"),
     "EmployeeBenefitsExpense":
@@ -200,7 +201,7 @@ IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
     "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences":
         ("Résultat financier (hors écarts de change réalisés)", "Net financial (income) expenses (excluding foreign exchange differences)"),
 
-    # ── Balance Sheet – Assets ───────────────────────────────────────────────
+    #  Balance Sheet – Assets 
     "Assets":
         ("Actifs", "Assets"),
     "NoncurrentAssets":
@@ -256,7 +257,7 @@ IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
     "CashAndCashEquivalents":
         ("Trésorerie et équivalents de trésorerie", "Cash and cash equivalents"),
 
-    # ── Balance Sheet – Liabilities & Equity ────────────────────────────────
+    #  Balance Sheet – Liabilities & Equity 
     "EquityAndLiabilities":
         ("Capitaux propres et passifs", "Equity and liabilities"),
     "Equity":
@@ -328,7 +329,7 @@ IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
     "OtherCurrentLiabilities":
         ("Autres passifs courants", "Other current liabilities"),
 
-    # ── Cash Flow ────────────────────────────────────────────────────────────
+    #  Cash Flow 
     "CashFlowsFromUsedInOperatingActivities":
         ("Flux de trésorerie résultant (utilisés dans le cadre) des activités opérationnelles", "Cash flows from (used in) operating activities"),
     "CashFlowsFromUsedInOperations":
@@ -443,7 +444,7 @@ IFRS_CONCEPT_LABELS: Dict[str, Tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 STATEMENT_MAP: Dict[str, str] = {
-    # ── Income Statement ─────────────────────────────────────────────────────
+    #  Income Statement 
     "Revenue":                              "Income Statement",
     "RevenueFromContractsWithCustomers":    "Income Statement",
     # VINCI-specific revenue concepts
@@ -523,7 +524,7 @@ STATEMENT_MAP: Dict[str, str] = {
     "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss": "Income Statement",
     "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss": "Income Statement",
     "ComprehensiveIncome":                  "Income Statement",
-    # ── Assets ───────────────────────────────────────────────────────────────
+    #  Assets 
     "Assets":                               "Assets",
     "NoncurrentAssets":                     "Assets",
     "CurrentAssets":                        "Assets",
@@ -560,7 +561,7 @@ STATEMENT_MAP: Dict[str, str] = {
     "CashAndCashEquivalents":               "Assets",
     "CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners":  "Assets",
     "NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale":  "Assets",
-    # ── Liabilities & Equity ─────────────────────────────────────────────────
+    #  Liabilities & Equity 
     "EquityAndLiabilities":                 "Liabilities",
     "Equity":                               "Liabilities",
     "AccumulatedOtherComprehensiveIncome": "Liabilities",
@@ -609,7 +610,7 @@ STATEMENT_MAP: Dict[str, str] = {
     "TradeAndOtherPayablesToTradeSuppliers":"Liabilities",
     "OtherCurrentLiabilities":              "Liabilities",
     "CurrentLeaseLiabilities":"Liabilities",
-    # ── Cash Flow ────────────────────────────────────────────────────────────
+    #  Cash Flow 
     "ProfitLoss": "Cash Flow",
     "CashFlowsFromUsedInOperatingActivities":   "Cash Flow",
     "CashFlowsFromUsedInOperations":            "Cash Flow",
@@ -996,6 +997,49 @@ def get_value_unit_label(decimals) -> str:
             return "€"
     except (TypeError, ValueError):
         return "€"
+
+
+def _extract_currency_and_unit(facts: List[dict]) -> Tuple[str, str]:
+    """
+    Extract currency and unit information from a list of facts.
+    
+    Returns:
+        Tuple of (currency, unit_scale) e.g. ('EUR', 'millions')
+    """
+    # Default to EUR for European companies
+    currency = "EUR"
+    unit_scale = "millions"
+    
+    # Find a fact with unit and decimals information
+    for fact in facts:
+        if fact.get("value_numeric") is not None:
+            # Extract currency from unit field
+            unit = fact.get("unit", "")
+            if unit:
+                # Unit is typically like "iso4217:EUR" or just "EUR"
+                if ":" in unit:
+                    currency = unit.split(":")[-1].upper()
+                else:
+                    currency = unit.upper()
+            
+            # Extract unit scale from decimals
+            decimals = fact.get("decimals", "")
+            try:
+                dec = int(decimals)
+                if dec <= -6:
+                    unit_scale = "millions"
+                elif dec <= -3:
+                    unit_scale = "thousands"
+                else:
+                    unit_scale = "units"
+            except (TypeError, ValueError):
+                unit_scale = "millions"
+            
+            # Found valid info, return
+            if currency and unit_scale:
+                return (currency, unit_scale)
+    
+    return (currency, unit_scale)
 
 
 def _format_instant_date(period_end: str) -> str:
@@ -1462,13 +1506,19 @@ def build_consolidated(
     company_key: optional company identifier for custom mapping lookup (e.g., 'vinci', 'ovhcloud')
 
     Returns dict: {statement_type: DataFrame}
-    For Assets/Liabilities: Columns show instant dates (e.g., "31-Dec-2024")
-    For Income/Cash Flow: Columns show fiscal years (e.g., "FY2024")
+    For Assets/Liabilities: Columns show instant dates with currency/unit (e.g., "31-Dec-2024 (EUR millions)")
+    For Income/Cash Flow: Columns show fiscal years with currency/unit (e.g., "FY2024 (EUR millions)")
     """
     if not all_facts_by_fy:
         return {}
 
     fy_labels = sorted(all_facts_by_fy.keys(), reverse=True)
+    
+    # Extract currency and unit information from facts
+    # Use facts from the first fiscal year as representative
+    first_fy_facts = all_facts_by_fy.get(fy_labels[0], [])
+    currency, unit_scale = _extract_currency_and_unit(first_fy_facts)
+    currency_unit_suffix = f" ({currency} {unit_scale})"
     
     # Build mapping: fy_label -> period_end date for instant statements
     fy_to_period_end: Dict[str, str] = {}
@@ -1531,17 +1581,17 @@ def build_consolidated(
         if concept_data:
             # Determine column headers based on statement type
             if stmt_type in ["Assets", "Liabilities"]:
-                # Use instant dates for balance sheet items
+                # Use instant dates for balance sheet items with currency/unit
                 # Need to rename the FY columns to date columns
                 date_headers = [
-                    _format_instant_date(fy_to_period_end.get(fy_lbl, ""))
+                    _format_instant_date(fy_to_period_end.get(fy_lbl, "")) + currency_unit_suffix
                     for fy_lbl in fy_labels
                 ]
                 
                 # Create DataFrame with FY labels first
                 df = pd.DataFrame(list(concept_data.values()))
                 
-                # Rename FY columns to date columns
+                # Rename FY columns to date columns with currency/unit
                 rename_map = {fy_lbl: date_hdr for fy_lbl, date_hdr in zip(fy_labels, date_headers)}
                 df = df.rename(columns=rename_map)
                 
@@ -1549,9 +1599,19 @@ def build_consolidated(
                 columns = ["French Label", "English Label", "Concept"] + date_headers
                 df = df[columns]
             else:
-                # Use FY labels for income statement and cash flow
-                columns = ["French Label", "English Label", "Concept"] + fy_labels
-                df = pd.DataFrame(list(concept_data.values()), columns=columns)
+                # Use FY labels for income statement and cash flow with currency/unit
+                fy_headers_with_unit = [fy_lbl + currency_unit_suffix for fy_lbl in fy_labels]
+                
+                # Create DataFrame with FY labels first
+                df = pd.DataFrame(list(concept_data.values()))
+                
+                # Rename FY columns to include currency/unit
+                rename_map = {fy_lbl: fy_hdr for fy_lbl, fy_hdr in zip(fy_labels, fy_headers_with_unit)}
+                df = df.rename(columns=rename_map)
+                
+                # Reorder columns
+                columns = ["French Label", "English Label", "Concept"] + fy_headers_with_unit
+                df = df[columns]
             
             result[stmt_type] = df
 
@@ -1669,7 +1729,7 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
         d.update(kw)
         return wb.add_format(d)
 
-    # ── Sheet 1: All Facts ────────────────────────────────────────────────────
+    #  Sheet 1: All Facts 
     ws1 = wb.add_worksheet("All Facts")
     hdr = [
         "FY Label", "Concept (full)", "Namespace", "Concept (short)",
@@ -1734,7 +1794,7 @@ def create_xbrl_facts_excel(all_facts: List[dict]) -> bytes:
     ws1.autofilter(0, 0, len(all_facts), len(hdr) - 1)
     ws1.freeze_panes(1, 0)
 
-    # ── Sheet 2: By Concept (pivoted) ─────────────────────────────────────────
+    #  Sheet 2: By Concept (pivoted) 
     ws2 = wb.add_worksheet("By Concept")
     all_years = sorted({f.get("fy_year") for f in all_facts if f.get("fy_year")})
 
