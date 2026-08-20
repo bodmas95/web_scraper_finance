@@ -1,0 +1,433 @@
+"""
+Editable BREF Table with Dynamic Recalculation
+================================================
+Shows ALL BREF fields in one table. Direct fields are editable;
+calculated fields auto-update when "Save & Recalculate" is clicked.
+"""
+
+import re
+import pandas as pd
+import streamlit as st
+from datetime import datetime
+
+
+# ─── Public API ──────────────────────────────────────────────────────────
+
+def render_editable_bref_table(mapping_key: str, statement_type: str, key_prefix: str):
+    """
+    Render a single editable table for ALL BREF fields (direct + calculated).
+
+    Reads fields from st.session_state.bref_mapping_results[mapping_key],
+    builds a DataFrame, and shows it via st.data_editor.
+    A "Save & Recalculate" button writes edits back and recomputes formulas.
+    """
+    if mapping_key not in st.session_state.bref_mapping_results:
+        st.info("No mapping results available.")
+        return
+
+    mapping_results = st.session_state.bref_mapping_results[mapping_key]
+    fields = mapping_results["fields"]
+    mode = mapping_results.get("mode", "bref_direct")
+    target_year = mapping_results.get("target_year", datetime.now().year)
+    available_years = mapping_results.get("available_years", [target_year])
+    region = mapping_results.get("region", "US")
+    extraction_rows = mapping_results.get("extraction_rows", [])
+
+    reference_year = target_year - 1
+
+    # ── Load field definitions for formulas and indent levels ────────
+    from src.mapping.field_mappings import get_field_mappings
+    field_defs = get_field_mappings(region).get(statement_type, {})
+
+    # ── Metrics row ─────────────────────────────────────────────────
+    total = len(fields)
+    direct_count = sum(1 for f in fields if not f.get("is_calculated", False))
+    calc_count = total - direct_count
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Fields", total)
+    col2.metric("Direct (editable)", direct_count)
+    col3.metric("Calculated (auto)", calc_count)
+    st.markdown("---")
+
+    # ── Build lookup for extraction rows (used for fallback values) ──
+    extraction_lookup = {}
+    year_to_column = {}
+    if extraction_rows:
+        for row in extraction_rows:
+            label = row.get("label", "")
+            if label:
+                extraction_lookup[label.lower().strip()] = row
+        first_row = extraction_rows[0]
+        for col_name in first_row:
+            if col_name in ("label", "parent", "parent_abstract_concept", "Currency", "Unit"):
+                continue
+            m = re.search(r"(\d{4})", str(col_name))
+            if m:
+                yr = int(m.group(1))
+                if yr in available_years or yr == reference_year:
+                    year_to_column[yr] = col_name
+
+    # ── Build DataFrame ─────────────────────────────────────────────
+    year_columns = sorted(set([reference_year] + list(available_years)))
+    year_col_strs = [str(y) for y in year_columns]
+
+    df_rows = []
+    for field in fields:
+        label = field.get("label", "")
+        is_calc = field.get("is_calculated", False)
+
+        # Indent + calculated marker
+        field_def = field_defs.get(label, {})
+        indent = field_def.get("indent_level", 0)
+        if indent is None:
+            indent = 1 if "o/w" in label.lower() else 0
+        display_label = "    " * indent + ("*" + label if is_calc else label)
+
+        row = {"BREF Field": display_label}
+
+        # Fill year values
+        for yr in year_columns:
+            yr_s = str(yr)
+            val = None
+
+            # Priority 1: year_values dict
+            yv = field.get("year_values", {})
+            if yv:
+                val = yv.get(yr_s)
+
+            # Priority 2: dedicated keys
+            if val is None and yr == target_year:
+                val = field.get("target_value")
+            if val is None and yr == reference_year:
+                val = field.get("reference_value")
+                if val is None:
+                    val = field.get("extracted_reference_value")
+
+            # Priority 3: template_year_values
+            if val is None and "template_year_values" in field:
+                val = field["template_year_values"].get(yr_s)
+
+            # Priority 4: extraction row fallback
+            if val is None:
+                matched = field.get("matched_label", "")
+                if matched and matched != "—" and extraction_lookup:
+                    ext_row = extraction_lookup.get(matched.lower().strip())
+                    if ext_row:
+                        year_col = year_to_column.get(yr)
+                        if year_col and year_col in ext_row:
+                            val = ext_row[year_col]
+
+            row[yr_s] = val
+
+        row["Annual Report Label"] = field.get("matched_label", "—")
+        row["Reason"] = field.get("reason", "")
+        df_rows.append(row)
+
+    df = pd.DataFrame(df_rows)
+
+    # ── Sanitise values ─────────────────────────────────────────────
+    for col in year_col_strs:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float).astype("float64")
+    for col in ("BREF Field", "Annual Report Label", "Reason"):
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str).replace(
+                {"None": "", "nan": "", "NaN": "", "<NA>": ""}
+            )
+
+    # ── Column config ───────────────────────────────────────────────
+    column_config = {
+        "BREF Field": st.column_config.TextColumn("BREF Field", disabled=True),
+        "Reason": st.column_config.TextColumn("Reason", disabled=True),
+    }
+    for yr_s in year_col_strs:
+        column_config[yr_s] = st.column_config.NumberColumn(yr_s, format="%.2f")
+
+    editor_key = f"{key_prefix}_unified_editor_{statement_type}_{mapping_key}"
+
+    edited_df = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        height=min(200 + len(df) * 35, 800),
+        column_config=column_config,
+        disabled=["BREF Field", "Reason"],
+        key=editor_key,
+    )
+
+    # ── Action buttons ──────────────────────────────────────────────
+    btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 2])
+
+    with btn_col1:
+        recalc_clicked = st.button(
+            "Save & Recalculate",
+            key=f"{key_prefix}_recalc_{statement_type}_{mapping_key}",
+            type="primary",
+            use_container_width=True,
+        )
+
+    with btn_col2:
+        st.download_button(
+            "Download Excel",
+            data=_to_excel_bytes(df),
+            file_name=f"BREF_{statement_type}_{target_year}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"{key_prefix}_dl_{statement_type}_{mapping_key}",
+        )
+
+    with btn_col3:
+        st.download_button(
+            "Download JSON",
+            data=pd.DataFrame(fields).to_json(orient="records", indent=2),
+            file_name=f"BREF_{statement_type}_{target_year}.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"{key_prefix}_json_{statement_type}_{mapping_key}",
+        )
+
+    # ── Recalculate on button click ─────────────────────────────────
+    if recalc_clicked:
+        _save_and_recalculate(
+            edited_df=edited_df,
+            fields=fields,
+            field_defs=field_defs,
+            year_col_strs=year_col_strs,
+            target_year=target_year,
+            reference_year=reference_year,
+            mapping_key=mapping_key,
+            statement_type=statement_type,
+            region=region,
+        )
+        st.success("Calculated fields updated.")
+        st.rerun()
+
+
+# ─── Recalculation Logic ────────────────────────────────────────────────
+
+def _save_and_recalculate(
+    edited_df: pd.DataFrame,
+    fields: list,
+    field_defs: dict,
+    year_col_strs: list,
+    target_year: int,
+    reference_year: int,
+    mapping_key: str,
+    statement_type: str,
+    region: str,
+):
+    """
+    Write edited values from the DataFrame back into session-state fields,
+    then recalculate every calculated field for all years.
+    """
+    # Step 1: Write edited direct-field values back into the fields list
+    for idx, row in edited_df.iterrows():
+        if idx >= len(fields):
+            break
+        field = fields[idx]
+        if field.get("is_calculated", False):
+            continue  # skip calculated — will be recomputed below
+
+        # Update matched_label if changed
+        new_label = row.get("Annual Report Label", "")
+        if new_label and new_label != "—":
+            field["matched_label"] = new_label
+
+        # Update year values
+        if "year_values" not in field:
+            field["year_values"] = {}
+        for yr_s in year_col_strs:
+            val = row.get(yr_s)
+            if pd.notna(val):
+                field["year_values"][yr_s] = float(val)
+                if yr_s == str(target_year):
+                    field["target_value"] = float(val)
+                if yr_s == str(reference_year):
+                    field["reference_value"] = float(val)
+
+    # Step 2: Build a flat lookup {field_label: {year: value}} for the calc engine
+    values_by_label = {}
+    for field in fields:
+        label = field.get("label", "")
+        yv = {}
+        for yr_s in year_col_strs:
+            v = (field.get("year_values") or {}).get(yr_s)
+            if v is not None:
+                try:
+                    yv[yr_s] = float(v)
+                except (ValueError, TypeError):
+                    pass
+        if yv:
+            values_by_label[label] = yv
+
+    # Step 3: Iteratively calculate all computed fields (handles dependency chains)
+    max_passes = 10
+    for _ in range(max_passes):
+        progress = False
+        for field in fields:
+            if not field.get("is_calculated", False):
+                continue
+            label = field.get("label", "")
+            defn = field_defs.get(label, {})
+            formula = defn.get("calculation", "")
+            if not formula:
+                continue
+
+            for yr_s in year_col_strs:
+                calc_val = _eval_formula(formula, values_by_label, yr_s)
+                if calc_val is not None:
+                    old = values_by_label.get(label, {}).get(yr_s)
+                    if old is None or abs(old - calc_val) > 0.001:
+                        values_by_label.setdefault(label, {})[yr_s] = calc_val
+                        progress = True
+        if not progress:
+            break
+
+    # Step 4: Write calculated values back into fields
+    for field in fields:
+        if not field.get("is_calculated", False):
+            continue
+        label = field.get("label", "")
+        yv = values_by_label.get(label, {})
+        if yv:
+            field["year_values"] = yv
+            field["target_value"] = yv.get(str(target_year))
+            ref_val = yv.get(str(reference_year))
+            if ref_val is not None:
+                field["reference_value"] = ref_val
+
+    # Step 5: Persist
+    st.session_state.bref_mapping_results[mapping_key]["fields"] = fields
+
+
+def _eval_formula(formula: str, values_by_label: dict, year: str) -> float | None:
+    """
+    Evaluate a BREF formula like "Q1+Q3" or "Q93-Q5" for a given year.
+    Returns None if any dependency is missing.
+    """
+    clean = formula.replace(" ", "").replace("(", "").replace(")", "")
+    tokens = re.split(r"([+\-*/])", clean)
+    tokens = [t for t in tokens if t]
+
+    result = 0.0
+    op = "+"
+    found_any = False
+
+    for token in tokens:
+        if token in ("+", "-", "*", "/"):
+            op = token
+            continue
+        # token is a field code like "Q1" — find its full label
+        val = _lookup_value(token, values_by_label, year)
+        if val is None:
+            val = 0.0  # treat missing as zero
+        else:
+            found_any = True
+
+        if op == "+":
+            result += val
+        elif op == "-":
+            result -= val
+        elif op == "*":
+            result *= val
+        elif op == "/" and val != 0:
+            result /= val
+        elif op == "/":
+            return None
+
+    return result if found_any else None
+
+
+def _lookup_value(field_code: str, values_by_label: dict, year: str) -> float | None:
+    """Find the value for a field code (e.g. 'Q1') across all labels."""
+    prefix = field_code + " |"
+    for label, year_vals in values_by_label.items():
+        if label.startswith(prefix) or label == field_code:
+            v = year_vals.get(year)
+            if v is not None:
+                return float(v)
+    return None
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────────
+
+def _to_float(v) -> float:
+    """Convert any value to a plain Python float, or NaN."""
+    if v is None:
+        return float("nan")
+    if hasattr(v, "as_py"):
+        v = v.as_py()
+    if hasattr(v, "item"):
+        v = v.item()
+    if v is None:
+        return float("nan")
+    if isinstance(v, (int, float)):
+        return float("nan") if pd.isna(v) else float(v)
+    if isinstance(v, str):
+        clean = v.replace(",", "").strip()
+        if clean in ("", "None", "nan", "NaN", "—"):
+            return float("nan")
+        try:
+            return float(clean)
+        except ValueError:
+            return float("nan")
+    return float("nan")
+
+
+def _to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """Convert DataFrame to Excel bytes for download."""
+    import io
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, sheet_name="BREF Mapping", index=False)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def render_save_button(
+    mapping_key: str,
+    statement_type: str,
+    company_name: str,
+    target_year: int,
+    region: str,
+    key_prefix: str,
+):
+    """
+    Render a save-to-MongoDB button (kept for backward compatibility).
+    """
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button(
+            "Save to MongoDB",
+            type="primary",
+            use_container_width=True,
+            key=f"{key_prefix}_{statement_type}_save",
+        ):
+            _save_to_mongodb(mapping_key, statement_type, company_name, target_year, region)
+
+
+def _save_to_mongodb(mapping_key, statement_type, company_name, target_year, region):
+    if mapping_key not in st.session_state.bref_mapping_results:
+        st.error("No mapping results found to save.")
+        return
+    try:
+        mapping_results = st.session_state.bref_mapping_results[mapping_key]
+        from src.cache import get_mongo_client
+        from src.cache.bref_mapping_cache import BREFMappingCache
+
+        cache = BREFMappingCache(get_mongo_client())
+        success = cache.set(
+            company_name=company_name,
+            extraction_rows=mapping_results.get("extraction_rows", []),
+            statement_type=statement_type,
+            target_year=target_year,
+            mapping_result=mapping_results,
+            mode=mapping_results.get("mode", "bref_direct"),
+            region=region,
+        )
+        if success:
+            st.success(f"Saved {statement_type} mapping to MongoDB.")
+        else:
+            st.error("Failed to save to MongoDB.")
+    except Exception as e:
+        st.error(f"Error saving to MongoDB: {e}")
