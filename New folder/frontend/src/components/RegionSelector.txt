@@ -19,15 +19,18 @@ interface RegionSelectorProps {
     country: Country
     company: Company
   }) => void
+  onClear?: () => void
 }
 
-export function RegionSelector({ onSelectionChange }: RegionSelectorProps) {
+export function RegionSelector({ onSelectionChange, onClear }: RegionSelectorProps) {
   const [regions, setRegions] = useState<Region[]>([])
   const [selectedRegion, setSelectedRegion] = useState<Region | null>(null)
   const [selectedCountry, setSelectedCountry] = useState<Country | null>(null)
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null)
   const [showAddCompany, setShowAddCompany] = useState(false)
   const [newCompanyName, setNewCompanyName] = useState('')
+  const [newTicker, setNewTicker] = useState('')
+  const [newLei, setNewLei] = useState('')
   const [newCurrency] = useState('USD')
 
   useEffect(() => {
@@ -40,6 +43,7 @@ export function RegionSelector({ onSelectionChange }: RegionSelectorProps) {
     setSelectedRegion(region ?? null)
     setSelectedCountry(null)
     setSelectedCompany(null)
+    onClear?.()
 
     if (region && region.countries.length === 1) {
       setSelectedCountry(region.countries[0])
@@ -53,6 +57,7 @@ export function RegionSelector({ onSelectionChange }: RegionSelectorProps) {
     )
     setSelectedCountry(country ?? null)
     setSelectedCompany(null)
+    onClear?.()
   }
 
   const handleCompanyChange = (id: string | null) => {
@@ -84,7 +89,10 @@ export function RegionSelector({ onSelectionChange }: RegionSelectorProps) {
       selectedRegion.region_code,
       selectedCountry.country_code,
       newCompanyName.trim(),
-      currency
+      currency,
+      1000,
+      selectedRegion.region_code === 'AMER' ? newTicker.trim() || undefined : undefined,
+      selectedRegion.region_code === 'EMEA' ? newLei.trim() || undefined : undefined
     )
     const refreshed = await fetchRegions()
     setRegions(refreshed)
@@ -97,6 +105,8 @@ export function RegionSelector({ onSelectionChange }: RegionSelectorProps) {
     )
     setSelectedCountry(updatedCountry ?? null)
     setNewCompanyName('')
+    setNewTicker('')
+    setNewLei('')
     setShowAddCompany(false)
   }
 
@@ -189,6 +199,28 @@ export function RegionSelector({ onSelectionChange }: RegionSelectorProps) {
                 placeholder="Enter company name"
               />
             </div>
+            {selectedRegion?.region_code === 'AMER' && (
+              <div className="w-36 space-y-2">
+                <Label>Ticker</Label>
+                <input
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={newTicker}
+                  onChange={(e) => setNewTicker(e.target.value)}
+                  placeholder="e.g. AAPL"
+                />
+              </div>
+            )}
+            {selectedRegion?.region_code === 'EMEA' && (
+              <div className="w-56 space-y-2">
+                <Label>LEI</Label>
+                <input
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={newLei}
+                  onChange={(e) => setNewLei(e.target.value)}
+                  placeholder="LEI identifier"
+                />
+              </div>
+            )}
             <Button onClick={handleAddCompany} disabled={!newCompanyName.trim()}>
               Add Company
             </Button>
