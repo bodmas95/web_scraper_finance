@@ -15,12 +15,31 @@ export async function addCompany(
   countryCode: string,
   companyName: string,
   currency: string = 'USD',
-  unit: number = 1000
+  unit: number = 1000,
+  ticker?: string,
+  lei?: string
 ) {
   const { data } = await api.post(
     `/regions/${regionCode}/countries/${countryCode}/companies`,
-    { company_name: companyName, currency, unit }
+    { company_name: companyName, currency, unit, ticker, lei }
   )
+  return data
+}
+
+export async function createSource(
+  companyId: string,
+  regionCode: string,
+  countryCode: string,
+  reportYear: number,
+  extractionMethod: string = 'pdf'
+): Promise<{ source_id: string; status: string }> {
+  const formData = new FormData()
+  formData.append('company_id', companyId)
+  formData.append('region_code', regionCode)
+  formData.append('country_code', countryCode)
+  formData.append('report_year', String(reportYear))
+  formData.append('extraction_method', extractionMethod)
+  const { data } = await api.post('/documents/create-source', formData)
   return data
 }
 
@@ -97,6 +116,18 @@ export async function clearMapping(sourceId: string): Promise<void> {
   await api.delete(`/map/${sourceId}`)
 }
 
+export async function saveMapping(
+  sourceId: string,
+  mapping: MappingResult
+): Promise<MappingResult> {
+  const { data } = await api.put(`/map/${sourceId}`, {
+    income_statement: mapping.income_statement,
+    balance_sheet: mapping.balance_sheet,
+    cash_flow: mapping.cash_flow,
+  })
+  return data
+}
+
 export async function exportMapping(sourceId: string): Promise<Blob> {
   const { data } = await api.get(`/map/${sourceId}/export`, {
     responseType: 'blob',
@@ -123,6 +154,13 @@ export async function fetchSummary(
 
 export async function exportSummary(sourceId: string): Promise<Blob> {
   const { data } = await api.get(`/map/${sourceId}/summary/export`, {
+    responseType: 'blob',
+  })
+  return data
+}
+
+export async function downloadBrefTemplate(sourceId: string): Promise<Blob> {
+  const { data } = await api.get(`/documents/source/${sourceId}/bref-template`, {
     responseType: 'blob',
   })
   return data
