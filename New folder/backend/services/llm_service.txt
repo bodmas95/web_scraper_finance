@@ -104,7 +104,7 @@ class MaiaLLM(BaseChatModel):
             "generationConfig": {
                 "outputFormat": "TEXT",
                 "temperature": self.temperature,
-                "outputMaxTokens": 4096
+                "outputMaxTokens": 16384
             },
         }
 
