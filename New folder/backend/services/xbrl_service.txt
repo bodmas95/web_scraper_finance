@@ -1,0 +1,778 @@
+"""
+XBRL Extraction Service
+Fetches IFRS financial filings from filings.xbrl.org by LEI.
+Auto-discovers available years and returns consolidated multi-year statements.
+Uses OIM xBRL-JSON format — same approach as web_scraper_finance parser.
+"""
+
+import asyncio
+import json
+import logging
+import re
+from collections import Counter
+from io import BytesIO
+from typing import Any
+from urllib.parse import urlencode
+
+import requests as req_lib
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+STATEMENT_MAP = {
+    # ── Income Statement ──────────────────────────────────────────────
+    "Revenue": "income_statement",
+    "RevenueFromContractsWithCustomers": "income_statement",
+    "OtherIncome": "income_statement",
+    "OtherRevenue": "income_statement",
+    "OtherOperatingIncome": "income_statement",
+    "MiscellaneousOtherOperatingIncome": "income_statement",
+    "MiscellaneousOtherOperatingExpense": "income_statement",
+    "CostOfSales": "income_statement",
+    "GrossProfit": "income_statement",
+    "DistributionCosts": "income_statement",
+    "AdministrativeExpense": "income_statement",
+    "SellingGeneralAndAdministrativeExpense": "income_statement",
+    "OtherExpenseByFunction": "income_statement",
+    "OtherExpenseByNature": "income_statement",
+    "EmployeeBenefitsExpense": "income_statement",
+    "DepreciationAndAmortisationExpense": "income_statement",
+    "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "income_statement",
+    "DepreciationRightOfUseAssets": "income_statement",
+    "ImpairmentLossRecognisedInProfitOrLoss": "income_statement",
+    "RawMaterialsAndConsumablesUsed": "income_statement",
+    "OtherOperatingExpense": "income_statement",
+    "OperatingExpense": "income_statement",
+    "ServicesExpense": "income_statement",
+    "OperatingExpensesOtherThanPersonnelExpenses": "income_statement",
+    "EarningsBeforeInterestTaxesDepreciationAndAmortisation": "income_statement",
+    "CurrentEbitda": "income_statement",
+    "CurrentOperatingIncome": "income_statement",
+    "ProfitLossFromOperatingActivities": "income_statement",
+    "ExpenseFromSharebasedPaymentTransactionsWithEmployees": "income_statement",
+    "FinanceCosts": "income_statement",
+    "FinanceIncome": "income_statement",
+    "FinanceIncomeExpense": "income_statement",
+    "FinanceIncomeCost": "income_statement",
+    "FinanceCostsRecognisedInProfitOrLoss": "income_statement",
+    "FinanceIncomeRecognisedInProfitOrLoss": "income_statement",
+    "OtherFinanceIncome": "income_statement",
+    "OtherFinanceCost": "income_statement",
+    "OtherFinanceIncomeCost": "income_statement",
+    "InterestExpense": "income_statement",
+    "InterestExpenseOnBorrowings": "income_statement",
+    "InterestExpenseOnLeaseLiabilities": "income_statement",
+    "InterestIncomeOnCashAndCashEquivalents": "income_statement",
+    "RevaluationOfHedgingInstruments": "income_statement",
+    "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences": "income_statement",
+    "GainsLossesOnExchangeDifferences": "income_statement",
+    "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod": "income_statement",
+    "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": "income_statement",
+    "ProfitLossBeforeTax": "income_statement",
+    "IncomeTaxExpenseContinuingOperations": "income_statement",
+    "ProfitLoss": "income_statement",
+    "ProfitLossAttributableToOwnersOfParent": "income_statement",
+    "ProfitLossAttributableToNoncontrollingInterests": "income_statement",
+    "BasicEarningsLossPerShare": "income_statement",
+    "DilutedEarningsLossPerShare": "income_statement",
+    # OCI
+    "OtherComprehensiveIncome": "income_statement",
+    "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax": "income_statement",
+    "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax": "income_statement",
+    "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation": "income_statement",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans": "income_statement",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesFromInvestmentsInEquityInstruments": "income_statement",
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss": "income_statement",
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss": "income_statement",
+    "ComprehensiveIncome": "income_statement",
+    # ── Balance Sheet – Assets ────────────────────────────────────────
+    "Assets": "balance_sheet",
+    "NoncurrentAssets": "balance_sheet",
+    "CurrentAssets": "balance_sheet",
+    "Goodwill": "balance_sheet",
+    "OtherIntangibleAssets": "balance_sheet",
+    "IntangibleAssetsOtherThanGoodwill": "balance_sheet",
+    "PropertyPlantAndEquipment": "balance_sheet",
+    "PropertyPlantAndEquipmentIncludingRightofuseAssets": "balance_sheet",
+    "RightOfUseAssets": "balance_sheet",
+    "RightofuseAssets": "balance_sheet",
+    "InvestmentProperty": "balance_sheet",
+    "InvestmentsAccountedForUsingEquityMethod": "balance_sheet",
+    "InvestmentAccountedForUsingEquityMethod": "balance_sheet",
+    "DeferredTaxAssets": "balance_sheet",
+    "NoncurrentFinancialAssets": "balance_sheet",
+    "OtherNoncurrentFinancialAssets": "balance_sheet",
+    "NoncurrentDerivativeFinancialAssets": "balance_sheet",
+    "OtherNoncurrentAssets": "balance_sheet",
+    "OtherNoncurrentReceivables": "balance_sheet",
+    "Inventories": "balance_sheet",
+    "TradeAndOtherCurrentReceivables": "balance_sheet",
+    "TradeReceivables": "balance_sheet",
+    "CurrentTradesReceivablesAndContractAssets": "balance_sheet",
+    "CurrentTaxAssets": "balance_sheet",
+    "CurrentTaxAssetsCurrent": "balance_sheet",
+    "CurrentFinancialAssets": "balance_sheet",
+    "OtherCurrentFinancialAssets": "balance_sheet",
+    "CurrentDerivativeFinancialAssets": "balance_sheet",
+    "OtherCurrentAssets": "balance_sheet",
+    "OtherReceivablesAndCurrentAssets": "balance_sheet",
+    "CashAndCashEquivalents": "balance_sheet",
+    "CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners": "balance_sheet",
+    "NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale": "balance_sheet",
+    # ── Balance Sheet – Liabilities & Equity ──────────────────────────
+    "EquityAndLiabilities": "balance_sheet",
+    "Equity": "balance_sheet",
+    "EquityAttributableToOwnersOfParent": "balance_sheet",
+    "NoncontrollingInterests": "balance_sheet",
+    "IssuedCapital": "balance_sheet",
+    "SharePremium": "balance_sheet",
+    "RetainedEarnings": "balance_sheet",
+    "ReservesAndRetainedEarnings": "balance_sheet",
+    "RetainedEarningsProfitLossForReportingPeriod": "balance_sheet",
+    "OtherReserves": "balance_sheet",
+    "AccumulatedOtherComprehensiveIncome": "balance_sheet",
+    "ReserveOfSharebasedPayments": "balance_sheet",
+    "ReserveOfExchangeDifferencesOnTranslation": "balance_sheet",
+    "TreasuryShares": "balance_sheet",
+    "Liabilities": "balance_sheet",
+    "NoncurrentLiabilities": "balance_sheet",
+    "CurrentLiabilities": "balance_sheet",
+    "NoncurrentBorrowings": "balance_sheet",
+    "LongtermBorrowings": "balance_sheet",
+    "NoncurrentLeaseLiabilities": "balance_sheet",
+    "DeferredTaxLiabilities": "balance_sheet",
+    "NoncurrentProvisions": "balance_sheet",
+    "NoncurrentProvisionsForEmployeeBenefits": "balance_sheet",
+    "OtherLongtermProvisions": "balance_sheet",
+    "OtherNoncurrentLiabilities": "balance_sheet",
+    "NoncurrentFinancialLiabilities": "balance_sheet",
+    "OtherNoncurrentFinancialLiabilities": "balance_sheet",
+    "NoncurrentDerivativeFinancialLiabilities": "balance_sheet",
+    "CurrentBorrowings": "balance_sheet",
+    "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "balance_sheet",
+    "ShorttermBorrowings": "balance_sheet",
+    "CurrentLeaseLiabilities": "balance_sheet",
+    "CurrentProvisions": "balance_sheet",
+    "TradeAndOtherCurrentPayables": "balance_sheet",
+    "TradeAndOtherCurrentPayablesToTradeSuppliers": "balance_sheet",
+    "TradePayables": "balance_sheet",
+    "CurrentTaxLiabilities": "balance_sheet",
+    "CurrentTaxLiabilitiesCurrent": "balance_sheet",
+    "CurrentDerivativeFinancialLiabilities": "balance_sheet",
+    "OtherCurrentLiabilities": "balance_sheet",
+    # ── Cash Flow ─────────────────────────────────────────────────────
+    "CashFlowsFromUsedInOperatingActivities": "cash_flow",
+    "CashFlowsFromUsedInOperations": "cash_flow",
+    "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital": "cash_flow",
+    "CashFlowsFromUsedInInvestingActivities": "cash_flow",
+    "CashFlowsFromUsedInFinancingActivities": "cash_flow",
+    "ProfitLossAdjustedForNoncashItems": "cash_flow",
+    "AdjustmentsForDepreciationAndAmortisationExpense": "cash_flow",
+    "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "cash_flow",
+    "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "cash_flow",
+    "AdjustmentsForProvisions": "cash_flow",
+    "AdjustmentsForIncomeTaxExpense": "cash_flow",
+    "AdjustmentsForFinanceCosts": "cash_flow",
+    "AdjustmentsForSharebasedPayments": "cash_flow",
+    "AdjustmentsForFairValueGainsLosses": "cash_flow",
+    "AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod": "cash_flow",
+    "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets": "cash_flow",
+    "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets": "cash_flow",
+    "IncreaseDecreaseInWorkingCapital": "cash_flow",
+    "IncreaseDecreaseInTradeAndOtherPayables": "cash_flow",
+    "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables": "cash_flow",
+    "IncreaseDecreaseInTradeAndOtherReceivables": "cash_flow",
+    "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables": "cash_flow",
+    "IncreaseDecreaseInInventories": "cash_flow",
+    "IncomeTaxesPaid": "cash_flow",
+    "IncomeTaxesPaidRefundClassifiedAsOperatingActivities": "cash_flow",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities": "cash_flow",
+    "InterestPaid": "cash_flow",
+    "InterestPaidClassifiedAsOperatingActivities": "cash_flow",
+    "InterestPaidClassifiedAsFinancingActivities": "cash_flow",
+    "FinanceCostsPaidClassifiedAsOperatingActivities": "cash_flow",
+    "OtherInflowsOutflowsOfCashClassifiedAsOperatingActivities": "cash_flow",
+    "PurchaseOfPropertyPlantAndEquipment": "cash_flow",
+    "PurchaseOfIntangibleAssets": "cash_flow",
+    "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets": "cash_flow",
+    "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets": "cash_flow",
+    "ProceedsFromDisposalOfPropertyPlantAndEquipment": "cash_flow",
+    "ProceedsFromDisposalOfNoncurrentAssets": "cash_flow",
+    "ProceedsFromDisposalOfAssets": "cash_flow",
+    "AcquisitionOfSubsidiariesNetOfCashAcquired": "cash_flow",
+    "CashInflowsOutflowsRelatedToBusinessCombinationsNetOfCash": "cash_flow",
+    "ProceedsFromSaleOfInterestsInAssociates": "cash_flow",
+    "ReceiptsDisbursementsRelatedToLoansAndAdvancesGranted": "cash_flow",
+    "OtherInflowsOutflowsOfCashClassifiedAsInvestingActivities": "cash_flow",
+    "ProceedsFromBorrowingsClassifiedAsFinancingActivities": "cash_flow",
+    "RepaymentsOfBorrowingsClassifiedAsFinancingActivities": "cash_flow",
+    "ProceedsFromNoncurrentBorrowings": "cash_flow",
+    "RepaymentsOfNoncurrentBorrowings": "cash_flow",
+    "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "cash_flow",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "cash_flow",
+    "PaymentsForRepurchaseOfShares": "cash_flow",
+    "PaymentsToAcquireOrRedeemEntitysShares": "cash_flow",
+    "ProceedsFromIssuingShares": "cash_flow",
+    "DividendsPaid": "cash_flow",
+    "DividendsPaidClassifiedAsFinancingActivities": "cash_flow",
+    "DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities": "cash_flow",
+    "DividendsPaidToNoncontrollingInterestsClassifiedAsFinancingActivities": "cash_flow",
+    "GuaranteeDepositsReceivedAndOtherFinancialDebt": "cash_flow",
+    "EffectOfExchangeRateChangesOnCashAndCashEquivalents": "cash_flow",
+    "IncreaseDecreaseInCashAndCashEquivalents": "cash_flow",
+    "CashAndCashEquivalentsAtBeginningOfPeriod": "cash_flow",
+    "CashAndCashEquivalentsAtEndOfPeriod": "cash_flow",
+    "CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition": "cash_flow",
+    "BankOverdraftsClassifiedAsCashEquivalents": "cash_flow",
+}
+
+CONCEPT_LABELS = {
+    # ── Income Statement ──────────────────────────────────────────────
+    "Revenue": "Revenue",
+    "RevenueFromContractsWithCustomers": "Revenue from contracts with customers",
+    "OtherIncome": "Other income",
+    "OtherRevenue": "Other revenue",
+    "OtherOperatingIncome": "Other operating income",
+    "MiscellaneousOtherOperatingIncome": "Miscellaneous other operating income",
+    "MiscellaneousOtherOperatingExpense": "Miscellaneous other operating expense",
+    "CostOfSales": "Cost of sales",
+    "GrossProfit": "Gross profit",
+    "DistributionCosts": "Distribution costs",
+    "AdministrativeExpense": "Administrative expenses",
+    "SellingGeneralAndAdministrativeExpense": "SG&A expenses",
+    "OtherExpenseByFunction": "Other expenses",
+    "OtherExpenseByNature": "Other expenses by nature",
+    "ServicesExpense": "Services expense",
+    "EmployeeBenefitsExpense": "Employee benefits expense",
+    "DepreciationAndAmortisationExpense": "Depreciation and amortisation",
+    "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Depreciation, amortisation and impairment",
+    "DepreciationRightOfUseAssets": "Depreciation of right-of-use assets",
+    "ImpairmentLossRecognisedInProfitOrLoss": "Impairment loss",
+    "RawMaterialsAndConsumablesUsed": "Raw materials and consumables used",
+    "OtherOperatingExpense": "Other operating expenses",
+    "OperatingExpense": "Operating expenses",
+    "OperatingExpensesOtherThanPersonnelExpenses": "Operating expenses (other than personnel)",
+    "EarningsBeforeInterestTaxesDepreciationAndAmortisation": "EBITDA",
+    "CurrentEbitda": "Current EBITDA",
+    "CurrentOperatingIncome": "Current operating income",
+    "ProfitLossFromOperatingActivities": "Profit from operating activities",
+    "ExpenseFromSharebasedPaymentTransactionsWithEmployees": "Share-based payment expense",
+    "FinanceCosts": "Finance costs",
+    "FinanceIncome": "Finance income",
+    "FinanceIncomeExpense": "Finance income (cost)",
+    "FinanceIncomeCost": "Finance income (cost)",
+    "FinanceCostsRecognisedInProfitOrLoss": "Finance costs",
+    "FinanceIncomeRecognisedInProfitOrLoss": "Finance income",
+    "OtherFinanceIncome": "Other finance income",
+    "OtherFinanceCost": "Other finance cost",
+    "OtherFinanceIncomeCost": "Other finance income (cost)",
+    "InterestExpense": "Interest expense",
+    "InterestExpenseOnBorrowings": "Interest expense on borrowings",
+    "InterestExpenseOnLeaseLiabilities": "Interest expense on lease liabilities",
+    "InterestIncomeOnCashAndCashEquivalents": "Interest income on cash",
+    "RevaluationOfHedgingInstruments": "Revaluation of hedging instruments",
+    "NetFinancialIncomeExpenseExcludingForeignExchangeDifferences": "Net financial income (expense) excl. FX",
+    "GainsLossesOnExchangeDifferences": "Exchange differences",
+    "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod": "Share of profit of associates",
+    "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod": "Share of profit of associates and JVs",
+    "ProfitLossBeforeTax": "Profit before tax",
+    "IncomeTaxExpenseContinuingOperations": "Income tax expense",
+    "ProfitLoss": "Profit (loss)",
+    "ProfitLossAttributableToOwnersOfParent": "Net income (parent)",
+    "ProfitLossAttributableToNoncontrollingInterests": "Net income (NCI)",
+    "BasicEarningsLossPerShare": "Basic EPS",
+    "DilutedEarningsLossPerShare": "Diluted EPS",
+    "OtherComprehensiveIncome": "Other comprehensive income",
+    "OtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLossNetOfTax": "OCI that will be reclassified to P&L",
+    "OtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLossNetOfTax": "OCI that will not be reclassified to P&L",
+    "OtherComprehensiveIncomeNetOfTaxExchangeDifferencesOnTranslation": "OCI: Exchange differences on translation",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesOnRemeasurementsOfDefinedBenefitPlans": "OCI: Remeasurements of defined benefit plans",
+    "OtherComprehensiveIncomeBeforeTaxGainsLossesFromInvestmentsInEquityInstruments": "OCI: Gains/losses from equity investments",
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillBeReclassifiedToProfitOrLoss": "Tax on OCI (reclassifiable)",
+    "IncomeTaxRelatingToComponentsOfOtherComprehensiveIncomeThatWillNotBeReclassifiedToProfitOrLoss": "Tax on OCI (non-reclassifiable)",
+    "ComprehensiveIncome": "Comprehensive income",
+    # ── Balance Sheet – Assets ────────────────────────────────────────
+    "Assets": "Total assets",
+    "NoncurrentAssets": "Non-current assets",
+    "CurrentAssets": "Current assets",
+    "Goodwill": "Goodwill",
+    "OtherIntangibleAssets": "Other intangible assets",
+    "IntangibleAssetsOtherThanGoodwill": "Intangible assets",
+    "PropertyPlantAndEquipment": "Property, plant and equipment",
+    "PropertyPlantAndEquipmentIncludingRightofuseAssets": "PP&E including right-of-use assets",
+    "RightOfUseAssets": "Right-of-use assets",
+    "RightofuseAssets": "Right-of-use assets",
+    "InvestmentProperty": "Investment property",
+    "InvestmentsAccountedForUsingEquityMethod": "Investments in associates",
+    "InvestmentAccountedForUsingEquityMethod": "Investments in associates",
+    "DeferredTaxAssets": "Deferred tax assets",
+    "NoncurrentFinancialAssets": "Non-current financial assets",
+    "OtherNoncurrentFinancialAssets": "Other non-current financial assets",
+    "NoncurrentDerivativeFinancialAssets": "Non-current derivative financial assets",
+    "OtherNoncurrentAssets": "Other non-current assets",
+    "OtherNoncurrentReceivables": "Other non-current receivables",
+    "Inventories": "Inventories",
+    "TradeAndOtherCurrentReceivables": "Trade and other receivables",
+    "TradeReceivables": "Trade receivables",
+    "CurrentTradesReceivablesAndContractAssets": "Trade receivables and contract assets",
+    "CurrentTaxAssets": "Current tax assets",
+    "CurrentTaxAssetsCurrent": "Current tax assets",
+    "CurrentFinancialAssets": "Current financial assets",
+    "OtherCurrentFinancialAssets": "Other current financial assets",
+    "CurrentDerivativeFinancialAssets": "Current derivative financial assets",
+    "OtherCurrentAssets": "Other current assets",
+    "OtherReceivablesAndCurrentAssets": "Other receivables and current assets",
+    "CashAndCashEquivalents": "Cash and cash equivalents",
+    "CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners": "Current assets (excl. held for sale)",
+    "NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale": "Non-current assets held for sale",
+    # ── Balance Sheet – Liabilities & Equity ──────────────────────────
+    "EquityAndLiabilities": "Total equity and liabilities",
+    "Equity": "Total equity",
+    "EquityAttributableToOwnersOfParent": "Equity (parent)",
+    "NoncontrollingInterests": "Non-controlling interests",
+    "IssuedCapital": "Issued capital",
+    "SharePremium": "Share premium",
+    "RetainedEarnings": "Retained earnings",
+    "ReservesAndRetainedEarnings": "Reserves and retained earnings",
+    "RetainedEarningsProfitLossForReportingPeriod": "Retained earnings (reporting period P&L)",
+    "OtherReserves": "Other reserves",
+    "AccumulatedOtherComprehensiveIncome": "Accumulated other comprehensive income",
+    "ReserveOfSharebasedPayments": "Share-based payment reserve",
+    "ReserveOfExchangeDifferencesOnTranslation": "Reserve of exchange differences",
+    "TreasuryShares": "Treasury shares",
+    "Liabilities": "Total liabilities",
+    "NoncurrentLiabilities": "Non-current liabilities",
+    "CurrentLiabilities": "Current liabilities",
+    "NoncurrentBorrowings": "Non-current borrowings",
+    "LongtermBorrowings": "Non-current borrowings",
+    "NoncurrentLeaseLiabilities": "Non-current lease liabilities",
+    "DeferredTaxLiabilities": "Deferred tax liabilities",
+    "NoncurrentProvisions": "Non-current provisions",
+    "NoncurrentProvisionsForEmployeeBenefits": "Non-current provisions for employee benefits",
+    "OtherLongtermProvisions": "Other long-term provisions",
+    "OtherNoncurrentLiabilities": "Other non-current liabilities",
+    "NoncurrentFinancialLiabilities": "Non-current financial liabilities",
+    "OtherNoncurrentFinancialLiabilities": "Other non-current financial liabilities",
+    "NoncurrentDerivativeFinancialLiabilities": "Non-current derivative financial liabilities",
+    "CurrentBorrowings": "Current borrowings",
+    "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings": "Current borrowings (incl. non-current portion)",
+    "ShorttermBorrowings": "Short-term borrowings",
+    "CurrentLeaseLiabilities": "Current lease liabilities",
+    "CurrentProvisions": "Current provisions",
+    "TradeAndOtherCurrentPayables": "Trade and other payables",
+    "TradeAndOtherCurrentPayablesToTradeSuppliers": "Current trade payables",
+    "TradePayables": "Trade payables",
+    "CurrentTaxLiabilities": "Current tax liabilities",
+    "CurrentTaxLiabilitiesCurrent": "Current tax liabilities",
+    "CurrentDerivativeFinancialLiabilities": "Current derivative financial liabilities",
+    "OtherCurrentLiabilities": "Other current liabilities",
+    # ── Cash Flow ─────────────────────────────────────────────────────
+    "CashFlowsFromUsedInOperatingActivities": "Cash flows from operating activities",
+    "CashFlowsFromUsedInOperations": "Cash generated from operations",
+    "CashFlowsFromUsedInOperationsBeforeChangesInWorkingCapital": "Cash flows before changes in working capital",
+    "CashFlowsFromUsedInInvestingActivities": "Cash flows from investing activities",
+    "CashFlowsFromUsedInFinancingActivities": "Cash flows from financing activities",
+    "ProfitLossAdjustedForNoncashItems": "Profit adjusted for non-cash items",
+    "AdjustmentsForDepreciationAndAmortisationExpense": "Adj: Depreciation and amortisation",
+    "AdjustmentsForDepreciationAndAmortisationExpenseAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Adj: Depreciation, amortisation and impairment",
+    "AdjustmentsForImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Adj: Impairment loss",
+    "AdjustmentsForProvisions": "Adj: Provisions",
+    "AdjustmentsForIncomeTaxExpense": "Adj: Income tax",
+    "AdjustmentsForFinanceCosts": "Adj: Finance costs",
+    "AdjustmentsForSharebasedPayments": "Adj: Share-based payments",
+    "AdjustmentsForFairValueGainsLosses": "Adj: Fair value gains/losses",
+    "AdjustmentsForUndistributedProfitsOfInvestmentsAccountedForUsingEquityMethod": "Adj: Undistributed profits of associates",
+    "AdjustmentsForGainsLossesOnDisposalOfNoncurrentAssets": "Adj: Gains/losses on disposal of non-current assets",
+    "AdjustmentsForLossesGainsOnDisposalOfNoncurrentAssets": "Adj: Losses/gains on disposal of non-current assets",
+    "IncreaseDecreaseInWorkingCapital": "Change in working capital",
+    "IncreaseDecreaseInTradeAndOtherPayables": "Change in trade and other payables",
+    "AdjustmentsForIncreaseDecreaseInTradeAndOtherPayables": "Adj: Change in trade and other payables",
+    "IncreaseDecreaseInTradeAndOtherReceivables": "Change in trade and other receivables",
+    "AdjustmentsForDecreaseIncreaseInTradeAndOtherReceivables": "Adj: Change in trade and other receivables",
+    "IncreaseDecreaseInInventories": "Change in inventories",
+    "IncomeTaxesPaid": "Income taxes paid",
+    "IncomeTaxesPaidRefundClassifiedAsOperatingActivities": "Income taxes paid (operating)",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities": "Income taxes paid (operating)",
+    "InterestPaid": "Interest paid",
+    "InterestPaidClassifiedAsOperatingActivities": "Interest paid (operating)",
+    "InterestPaidClassifiedAsFinancingActivities": "Interest paid (financing)",
+    "FinanceCostsPaidClassifiedAsOperatingActivities": "Finance costs paid (operating)",
+    "OtherInflowsOutflowsOfCashClassifiedAsOperatingActivities": "Other cash flows (operating)",
+    "PurchaseOfPropertyPlantAndEquipment": "Purchase of PP&E",
+    "PurchaseOfIntangibleAssets": "Purchase of intangible assets",
+    "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsAndOtherNoncurrentAssets": "Purchase of PP&E and intangibles",
+    "PaymentsRelatedToAcquisitionsOfPropertyPlantAndEquipmentAndIntangibleAssets": "Payments for PP&E and intangibles",
+    "ProceedsFromDisposalOfPropertyPlantAndEquipment": "Proceeds from disposal of PP&E",
+    "ProceedsFromDisposalOfNoncurrentAssets": "Proceeds from disposal of non-current assets",
+    "ProceedsFromDisposalOfAssets": "Proceeds from disposal of assets",
+    "AcquisitionOfSubsidiariesNetOfCashAcquired": "Acquisitions, net of cash",
+    "CashInflowsOutflowsRelatedToBusinessCombinationsNetOfCash": "Business combinations, net of cash",
+    "ProceedsFromSaleOfInterestsInAssociates": "Proceeds from sale of associates",
+    "ReceiptsDisbursementsRelatedToLoansAndAdvancesGranted": "Receipts/disbursements from loans and advances",
+    "OtherInflowsOutflowsOfCashClassifiedAsInvestingActivities": "Other cash flows (investing)",
+    "ProceedsFromBorrowingsClassifiedAsFinancingActivities": "Proceeds from borrowings",
+    "RepaymentsOfBorrowingsClassifiedAsFinancingActivities": "Repayments of borrowings",
+    "ProceedsFromNoncurrentBorrowings": "Proceeds from non-current borrowings",
+    "RepaymentsOfNoncurrentBorrowings": "Repayments of non-current borrowings",
+    "RepaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "Repayments of lease liabilities",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "Payments of lease liabilities",
+    "PaymentsForRepurchaseOfShares": "Payments for repurchase of shares",
+    "PaymentsToAcquireOrRedeemEntitysShares": "Payments to acquire or redeem entity's shares",
+    "ProceedsFromIssuingShares": "Proceeds from issuing shares",
+    "DividendsPaid": "Dividends paid",
+    "DividendsPaidClassifiedAsFinancingActivities": "Dividends paid",
+    "DividendsPaidToEquityHoldersOfParentClassifiedAsFinancingActivities": "Dividends paid to parent shareholders",
+    "DividendsPaidToNoncontrollingInterestsClassifiedAsFinancingActivities": "Dividends paid to NCI",
+    "GuaranteeDepositsReceivedAndOtherFinancialDebt": "Guarantee deposits and other financial debt",
+    "EffectOfExchangeRateChangesOnCashAndCashEquivalents": "FX effect on cash",
+    "IncreaseDecreaseInCashAndCashEquivalents": "Net increase (decrease) in cash",
+    "CashAndCashEquivalentsAtBeginningOfPeriod": "Cash at beginning of period",
+    "CashAndCashEquivalentsAtEndOfPeriod": "Cash at end of period",
+    "CashAndCashEquivalentsIfDifferentFromStatementOfFinancialPosition": "Cash (if different from balance sheet)",
+    "BankOverdraftsClassifiedAsCashEquivalents": "Bank overdrafts",
+}
+
+
+def _curl_get_json(url: str, headers: dict, timeout: int) -> Any:
+    """Fallback: fetch JSON via curl subprocess with NTLM proxy auth."""
+    import subprocess
+
+    proxy_url = f"http://{settings.PROXY_CORPORATE_HOST}:{settings.PROXY_CORPORATE_PORT}"
+    cmd = [
+        "curl", "--silent", "--show-error", "--location", "--ssl-no-revoke",
+        "--proxy", proxy_url,
+        "--proxy-ntlm",
+        "-U", f"{settings.PROXY_CORPORATE_USERNAME}:{settings.PROXY_CORPORATE_PASSWORD}",
+        "--max-time", str(timeout),
+    ]
+    for k, v in headers.items():
+        cmd.extend(["-H", f"{k}: {v}"])
+    cmd.append(url)
+
+    res = subprocess.run(cmd, capture_output=True, timeout=timeout + 30)
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"curl failed ({res.returncode}) for {url}: "
+            f"{res.stderr.decode(errors='replace')}"
+        )
+    return json.loads(res.stdout)
+
+
+def _pycurl_get_json(url: str, headers: dict, timeout: int) -> Any:
+    """Fetch JSON via pycurl with NTLM proxy auth."""
+    import pycurl
+
+    buf = BytesIO()
+    c = pycurl.Curl()
+    try:
+        c.setopt(pycurl.URL, url)
+        c.setopt(pycurl.PROXY, settings.PROXY_CORPORATE_HOST)
+        c.setopt(pycurl.PROXYPORT, settings.PROXY_CORPORATE_PORT)
+        c.setopt(pycurl.PROXYUSERNAME, settings.PROXY_CORPORATE_USERNAME)
+        c.setopt(pycurl.PROXYPASSWORD, settings.PROXY_CORPORATE_PASSWORD)
+        c.setopt(pycurl.PROXYAUTH, pycurl.HTTPAUTH_NTLM)
+        c.setopt(pycurl.SSL_VERIFYPEER, 0)
+        c.setopt(pycurl.SSL_VERIFYHOST, 0)
+        c.setopt(pycurl.TIMEOUT, timeout)
+        c.setopt(pycurl.WRITEDATA, buf)
+        c.setopt(pycurl.HTTPHEADER, [f"{k}: {v}" for k, v in headers.items()])
+        c.perform()
+        status = c.getinfo(pycurl.RESPONSE_CODE)
+    finally:
+        c.close()
+
+    if status >= 400:
+        raise RuntimeError(f"HTTP {status} for {url}")
+    return json.loads(buf.getvalue())
+
+
+def _http_get_json(url: str, params: dict = None, timeout: int = 60) -> Any:
+    headers = {
+        "Accept": "application/json,*/*",
+        "User-Agent": "XBRL-Research/1.0 research@natixis.com",
+    }
+
+    if settings.PROXY_MODE == "system":
+        if params:
+            url = f"{url}?{urlencode(params, doseq=True)}"
+
+        try:
+            return _pycurl_get_json(url, headers, timeout)
+        except ImportError:
+            logger.warning("pycurl not installed, falling back to curl subprocess")
+            return _curl_get_json(url, headers, timeout)
+
+    else:
+        proxies = None
+        if settings.PROXY_MODE == "server":
+            p = f"http://{settings.PROXY_SERVER_HOST}:{settings.PROXY_SERVER_PORT}"
+            proxies = {"http": p, "https": p}
+
+        resp = req_lib.get(
+            url, params=params, headers=headers,
+            timeout=timeout, proxies=proxies, verify=False,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _parse_xbrl_value(val) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).replace(",", "").replace(" ", "").strip()
+    if not s or s in ("", "nan", "None"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _parse_period(period: str) -> tuple[str, str, str, str]:
+    """Parse XBRL period → (type, start, end, fy_year). Matches web_scraper logic."""
+    if not period:
+        return "unknown", "", "", ""
+    if "/" in period:
+        start, end = period.split("/", 1)
+        end_date = end.strip()[:10]
+        if end_date[5:] == "01-01":
+            fy_year = str(int(end_date[:4]) - 1)
+        else:
+            fy_year = end_date[:4]
+        return "duration", start.strip(), end.strip(), fy_year
+    else:
+        date = period.strip()[:10]
+        if len(date) >= 10 and date[5:10] == "01-01":
+            fy_year = str(int(date[:4]) - 1)
+        else:
+            fy_year = date[:4]
+        return "instant", "", period.strip(), fy_year
+
+
+def _fetch_filings(lei: str) -> list[dict]:
+    """Fetch filing list from filings.xbrl.org OIM API."""
+    api_base = settings.XBRL_API_BASE
+    data = _http_get_json(
+        f"{api_base}/api/filings",
+        params={"filter[entity.identifier]": lei, "page[size]": 50},
+        timeout=30,
+    )
+    filings_raw = data.get("data", [])
+    filings = []
+    for f in filings_raw:
+        attrs = dict(f.get("attributes", {}))
+        attrs["_id"] = f.get("id", "")
+        filings.append(attrs)
+    filings.sort(key=lambda x: x.get("period_end", ""), reverse=True)
+    return filings
+
+
+def _fetch_xbrl_facts(filing: dict) -> list[dict]:
+    """Download OIM xBRL-JSON for a filing and extract all facts."""
+    json_url = filing.get("json_url", "")
+    if not json_url:
+        return []
+
+    api_base = settings.XBRL_API_BASE
+    full_url = api_base + json_url if not json_url.startswith("http") else json_url
+    data = _http_get_json(full_url, timeout=120)
+
+    facts_raw = data.get("facts", {})
+    result = []
+
+    for _fact_id, fact in facts_raw.items():
+        dims = fact.get("dimensions", {})
+        concept = dims.get("concept", "")
+        period = dims.get("period", "")
+        unit = dims.get("unit", "")
+        raw_val = fact.get("value", "")
+        decimals = fact.get("decimals", "")
+
+        if not concept:
+            continue
+
+        p_type, p_start, p_end, fy_year = _parse_period(period)
+        numeric = _parse_xbrl_value(raw_val)
+        concept_short = concept.split(":")[-1] if ":" in concept else concept
+
+        result.append({
+            "concept_full": concept,
+            "concept_short": concept_short,
+            "period_type": p_type,
+            "period_start": p_start,
+            "period_end": p_end,
+            "fy_year": fy_year,
+            "unit": unit,
+            "value": numeric,
+            "decimals": decimals,
+        })
+
+    return result
+
+
+def _extract_currency_and_scale(facts: list[dict]) -> tuple[str, str | None, int]:
+    currency = "EUR"
+    for fact in facts:
+        if fact.get("value") is not None:
+            unit = fact.get("unit", "")
+            if unit:
+                currency = unit.split(":")[-1].upper() if ":" in unit else unit.upper()
+            break
+
+    decimals_values = []
+    for fact in facts:
+        if fact.get("value") is not None and fact.get("decimals"):
+            try:
+                decimals_values.append(int(fact["decimals"]))
+            except (ValueError, TypeError):
+                pass
+
+    if decimals_values:
+        most_common = Counter(decimals_values).most_common(1)[0][0]
+        if most_common <= -6:
+            return currency, "Millions", 1_000_000
+        elif most_common <= -3:
+            return currency, "Thousands", 1_000
+
+    values = [abs(f["value"]) for f in facts if f.get("value") and f["value"] != 0]
+    if values:
+        median = sorted(values)[len(values) // 2]
+        if median >= 1_000_000:
+            return currency, "Millions", 1_000_000
+        elif median >= 1_000:
+            return currency, "Thousands", 1_000
+
+    return currency, None, 1
+
+
+def _build_consolidated(all_facts: list[dict]) -> dict:
+    """Build consolidated multi-year statements from all XBRL facts."""
+    duration_years = sorted(
+        {f["fy_year"] for f in all_facts
+         if f.get("fy_year") and f.get("period_type") == "duration"},
+        reverse=True,
+    )
+    if duration_years:
+        keep_years = set(duration_years[:3])
+    else:
+        all_years = sorted(
+            {f["fy_year"] for f in all_facts if f.get("fy_year")},
+            reverse=True,
+        )
+        keep_years = set(all_years[:3])
+
+    currency, unit_label, divisor = _extract_currency_and_scale(all_facts)
+
+    grouped: dict[tuple, dict] = {}
+    concept_full_map: dict[str, str] = {}
+
+    for fact in all_facts:
+        fy = fact.get("fy_year", "")
+        if fy not in keep_years:
+            continue
+
+        cs = fact["concept_short"]
+        cf = fact["concept_full"]
+        stmt_type = STATEMENT_MAP.get(cs)
+        if not stmt_type:
+            continue
+
+        val = fact.get("value")
+        if val is None:
+            continue
+
+        key = (cs, stmt_type)
+        if key not in grouped:
+            grouped[key] = {}
+            concept_full_map[cs] = cf
+
+        if fy not in grouped[key]:
+            grouped[key][fy] = val
+
+    years = sorted(keep_years, reverse=True)
+
+    result = {}
+    for stmt_type in ("income_statement", "balance_sheet", "cash_flow"):
+        rows = []
+        for (cs, st), year_vals in grouped.items():
+            if st != stmt_type:
+                continue
+
+            label = CONCEPT_LABELS.get(cs, cs)
+            row: dict[str, Any] = {
+                "label": label,
+                "concept": concept_full_map.get(cs, cs),
+                "standard_concept": cs,
+            }
+
+            for yr in years:
+                if yr in year_vals:
+                    val = year_vals[yr]
+                    if divisor > 1:
+                        val = val / divisor
+                    row[yr] = round(val, 1)
+
+            rows.append(row)
+
+        result[stmt_type] = {
+            "rows": rows,
+            "year_headers": years,
+            "unit_scale": unit_label,
+            "currency": currency,
+        }
+
+    return result
+
+
+def _fetch_sync(lei: str) -> dict:
+    logger.info("Fetching XBRL filings for LEI=%s", lei)
+
+    filings = _fetch_filings(lei)
+    if not filings:
+        raise ValueError(f"No XBRL filings found for LEI {lei}")
+
+    logger.info("Found %d filings for LEI=%s", len(filings), lei)
+
+    filing_years = []
+    for f in filings:
+        pe = f.get("period_end", "")
+        if pe and len(pe) >= 4:
+            filing_years.append(pe[:4])
+
+    all_facts = []
+    for filing in filings[:3]:
+        logger.info("Fetching facts: period_end=%s", filing.get("period_end"))
+        facts = _fetch_xbrl_facts(filing)
+        all_facts.extend(facts)
+        logger.info("Got %d facts", len(facts))
+
+    if not all_facts:
+        raise ValueError(f"No XBRL facts found for LEI {lei}")
+
+    result = _build_consolidated(all_facts)
+    result["filing_years"] = sorted(set(filing_years), reverse=True)
+    return result
+
+
+async def fetch_xbrl_financials(lei: str, year: int = None) -> dict:
+    result = await asyncio.to_thread(_fetch_sync, lei)
+
+    for key in ("income_statement", "balance_sheet", "cash_flow"):
+        if result.get(key) is None:
+            result[key] = {
+                "rows": [],
+                "year_headers": [],
+                "unit_scale": None,
+                "currency": None,
+            }
+
+    logger.info(
+        "XBRL extraction complete: IS=%d rows, BS=%d rows, CF=%d rows",
+        len(result["income_statement"]["rows"]),
+        len(result["balance_sheet"]["rows"]),
+        len(result["cash_flow"]["rows"]),
+    )
+    return result
