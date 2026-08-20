@@ -1,0 +1,89 @@
+"""
+Unified BREF Mapping Module
+============================
+Single import path for all mapping functionality.
+
+Usage:
+    from src.mapping import get_field_mappings, map_all_fields, load_bref_fields
+"""
+
+# ── Field definitions (aliases, formulas, calculated flags) ──────────────
+from src.mapping.field_mappings import (
+    get_field_mappings,
+    get_calculated_with_fallback,
+    FIELD_MAPPINGS,
+    FIELD_MAPPINGS_APAC,
+    FIELD_MAPPINGS_EMEA,
+    INCOME_STATEMENT_FIELDS,
+    BALANCE_SHEET_FIELDS,
+    CASH_FLOW_FIELDS,
+    APAC_INCOME_STATEMENT_FIELDS,
+    APAC_BALANCE_SHEET_FIELDS,
+    APAC_CASH_FLOW_FIELDS,
+)
+
+# ── Calculation engine ───────────────────────────────────────────────────
+from src.mapping.bref_calculated import (
+    calculate_field_value,
+    calculate_all_fields,
+    parse_calculation_formula,
+    recalculate_dependent_fields,
+    get_dependent_fields,
+    get_calculated_fields,
+    get_ordered_fields,
+    create_ordered_output,
+)
+
+# ── Pipeline, template loading, LLM mapping (from mapping_v1) ───────────
+from src.mapping_v1.adapter import (
+    map_all_fields,
+    validate_mappings,
+    load_bref_fields,
+    create_clean_output_excel,
+    STATEMENT_SHEET_MAP,
+    fast_map_fields,
+    apply_sign_corrections,
+    _to_old_shape,
+)
+
+# ── Pipeline internals (deep imports consolidated here) ─────────────────
+from src.mapping_v1.mapper             import map_fields
+from src.mapping_v1.validator          import validate_results
+from src.mapping_v1.pipeline           import (
+    run as run_pipeline,
+    run_calculations,
+    generate_summary,
+)
+
+__all__ = [
+    # Field definitions
+    "get_field_mappings",
+    "get_calculated_with_fallback",
+    "FIELD_MAPPINGS",
+    "FIELD_MAPPINGS_APAC",
+    "FIELD_MAPPINGS_EMEA",
+    # Calculation engine
+    "calculate_field_value",
+    "calculate_all_fields",
+    "parse_calculation_formula",
+    "recalculate_dependent_fields",
+    "get_dependent_fields",
+    "get_calculated_fields",
+    "get_ordered_fields",
+    "create_ordered_output",
+    # Pipeline / mapping
+    "map_all_fields",
+    "validate_mappings",
+    "load_bref_fields",
+    "create_clean_output_excel",
+    "STATEMENT_SHEET_MAP",
+    "fast_map_fields",
+    "apply_sign_corrections",
+    "_to_old_shape",
+    # Pipeline internals
+    "map_fields",
+    "validate_results",
+    "run_pipeline",
+    "run_calculations",
+    "generate_summary",
+]
