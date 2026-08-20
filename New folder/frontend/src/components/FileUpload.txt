@@ -7,6 +7,8 @@ import {
   uploadAnnualReport,
   uploadBrefTemplate,
   fetchDocuments,
+  createSource,
+  downloadBrefTemplate,
 } from '@/api/client'
 import type { Company, Country, Region, Source } from '@/types'
 import {
@@ -15,6 +17,8 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   Loader2,
+  Database,
+  Download,
 } from 'lucide-react'
 import { useEffect } from 'react'
 
@@ -39,18 +43,69 @@ export function FileUpload({
   const onSourceReadyRef = useRef(onSourceReady)
   onSourceReadyRef.current = onSourceReady
 
+  const needsPdf = region.region_code !== 'AMER' && region.region_code !== 'EMEA'
+  const needsYearInput = region.region_code !== 'EMEA'
+
+  const handleYearChange = useCallback(async (newYear: number) => {
+    setReportYear(newYear)
+    // Check if we have a source for this year
+    const matchingSource = sources.find(s => s.report_year === newYear)
+    if (matchingSource) {
+      setActiveSource(matchingSource)
+      const isReady = needsPdf
+        ? matchingSource.annual_report && matchingSource.bref_template
+        : matchingSource.bref_template
+      if (isReady) {
+        onSourceReadyRef.current(matchingSource)
+      }
+    } else if (!needsPdf) {
+      // For EDGAR/XBRL, create a new source automatically
+      const method = region.region_code === 'AMER' ? 'edgar' : 'xbrl'
+      const result = await createSource(
+        company.company_id,
+        region.region_code,
+        country.country_code,
+        newYear,
+        method
+      )
+      const newSource: Source = {
+        id: result.source_id,
+        company_id: company.company_id,
+        region_code: region.region_code,
+        country_code: country.country_code,
+        report_year: newYear,
+        annual_report: null,
+        bref_template: null,
+        uploaded_at: new Date().toISOString(),
+      }
+      setActiveSource(newSource)
+      setSources(prev => [newSource, ...prev])
+    } else {
+      // For PDF, just clear the active source
+      setActiveSource(null)
+    }
+  }, [sources, needsPdf, region.region_code, company.company_id, country.country_code])
+
   const loadDocuments = useCallback(async () => {
     const docs = await fetchDocuments(company.company_id)
     setSources(docs)
     if (docs.length > 0) {
-      const latest = docs[0]
-      setActiveSource(latest)
-      setReportYear(latest.report_year)
-      if (latest.annual_report && latest.bref_template) {
-        onSourceReadyRef.current(latest)
+      // Find source matching current reportYear, or use latest
+      const matchingSource = docs.find(d => d.report_year === reportYear)
+      const sourceToUse = matchingSource || docs[0]
+      setActiveSource(sourceToUse)
+      // Only update reportYear if we're using a different source
+      if (!matchingSource) {
+        setReportYear(sourceToUse.report_year)
+      }
+      const isReady = needsPdf
+        ? sourceToUse.annual_report && sourceToUse.bref_template
+        : sourceToUse.bref_template
+      if (isReady) {
+        onSourceReadyRef.current(sourceToUse)
       }
     }
-  }, [company.company_id])
+  }, [company.company_id, needsPdf, reportYear])
 
   useEffect(() => {
     loadDocuments()
@@ -83,9 +138,29 @@ export function FileUpload({
 
   const handleBrefUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file || !activeSource) return
+    if (!file) return
     setUploading('bref')
     try {
+      if (!activeSource && !needsPdf) {
+        const method = region.region_code === 'AMER' ? 'edgar' : 'xbrl'
+        const result = await createSource(
+          company.company_id,
+          region.region_code,
+          country.country_code,
+          reportYear,
+          method
+        )
+        setActiveSource({
+          id: result.source_id,
+          company_id: company.company_id,
+          region_code: region.region_code,
+          country_code: country.country_code,
+          report_year: reportYear,
+          annual_report: null,
+          bref_template: null,
+          uploaded_at: new Date().toISOString(),
+        })
+      }
       await uploadBrefTemplate(file, company.company_id, reportYear)
       await loadDocuments()
     } finally {
@@ -93,14 +168,34 @@ export function FileUpload({
     }
   }
 
+  const handleBrefDownload = async () => {
+    if (!activeSource?.id) return
+    try {
+      const blob = await downloadBrefTemplate(activeSource.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = activeSource.bref_template?.filename || 'BREF_Template.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download BREF template:', error)
+    }
+  }
+
   const hasAR = activeSource?.annual_report != null
   const hasBREF = activeSource?.bref_template != null
+  const brefReady = needsPdf ? hasAR : true
+
+  const dataSourceLabel = region.region_code === 'AMER'
+    ? `SEC EDGAR (Ticker: ${company.ticker || 'not set'})`
+    : `XBRL / IFRS (LEI: ${company.lei || 'not set'})`
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-base">
-          <span>Documents - {company.company_name}</span>
+          <span>Company - {company.company_name}</span>
           {sources.length > 0 && (
             <Badge variant="secondary">
               {sources.length} report{sources.length > 1 ? 's' : ''} cached
@@ -110,105 +205,143 @@ export function FileUpload({
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
-          <div className="flex items-end gap-4">
-            <div className="space-y-2">
-              <Label>Report Year</Label>
-              <input
-                type="number"
-                className="flex h-9 w-28 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={reportYear}
-                onChange={(e) => setReportYear(Number(e.target.value))}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="rounded-lg border-2 border-dashed p-4">
-              <div className="flex items-center gap-3">
-                <FileText className="h-8 w-8 text-muted-foreground" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Annual Report (PDF)</p>
-                  {hasAR ? (
-                    <div className="flex items-center gap-1 text-xs text-green-600">
-                      <CheckCircle2 className="h-3 w-3" />
-                      {activeSource.annual_report?.filename}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      No report uploaded
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <input
-                    type="file"
-                    accept=".pdf"
-                    className="hidden"
-                    id="ar-upload"
-                    onChange={handleAnnualReportUpload}
-                  />
-                  <label htmlFor="ar-upload">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={uploading === 'ar'}
-                      onClick={() => document.getElementById('ar-upload')?.click()}
-                    >
-                      {uploading === 'ar' ? (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      ) : (
-                        <Upload className="mr-1 h-3 w-3" />
-                      )}
-                      {hasAR ? 'Replace' : 'Upload'}
-                    </Button>
-                  </label>
-                </div>
+          {needsYearInput && (
+            <div className="flex items-end gap-4">
+              <div className="space-y-2">
+                <Label>Report Year</Label>
+                <input
+                  type="number"
+                  className="flex h-9 w-28 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={reportYear}
+                  min={2000}
+                  max={new Date().getFullYear()}
+                  onChange={(e) => {
+                    const val = Number(e.target.value)
+                    if (val >= 2000 && val <= new Date().getFullYear()) {
+                      handleYearChange(val)
+                    }
+                  }}
+                />
               </div>
             </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {needsPdf ? (
+              <div className="rounded-lg border-2 border-dashed p-4">
+                <div className="flex items-center gap-3">
+                  <FileText className="h-8 w-8 text-muted-foreground" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">Annual Report (PDF)</p>
+                    {hasAR ? (
+                      <div className="flex items-center gap-1 text-xs text-green-600">
+                        <CheckCircle2 className="h-3 w-3" />
+                        {activeSource.annual_report?.filename}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No report uploaded
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      className="hidden"
+                      id="ar-upload"
+                      onChange={handleAnnualReportUpload}
+                    />
+                    <label htmlFor="ar-upload">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={uploading === 'ar'}
+                        onClick={() => document.getElementById('ar-upload')?.click()}
+                      >
+                        {uploading === 'ar' ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Upload className="mr-1 h-3 w-3" />
+                        )}
+                        {hasAR ? 'Replace' : 'Upload'}
+                      </Button>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border-2 border-solid border-blue-200 bg-blue-50/30 p-4">
+                <div className="flex items-center gap-3">
+                  <Database className="h-8 w-8 text-blue-500" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">
+                      {region.region_code === 'AMER' ? 'SEC EDGAR API' : 'XBRL / IFRS API'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {dataSourceLabel}
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="text-xs">
+                    Auto
+                  </Badge>
+                </div>
+              </div>
+            )}
 
             <div className="rounded-lg border-2 border-dashed p-4">
               <div className="flex items-center gap-3">
                 <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium">BREF Template (Excel)</p>
-                  {hasBREF ? (
-                    <div className="flex items-center gap-1 text-xs text-green-600">
-                      <CheckCircle2 className="h-3 w-3" />
-                      {activeSource.bref_template?.filename}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      {hasAR
-                        ? 'Upload BREF template'
-                        : 'Upload annual report first'}
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    className="hidden"
-                    id="bref-upload"
-                    onChange={handleBrefUpload}
-                    disabled={!hasAR}
-                  />
-                  <label htmlFor="bref-upload">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!hasAR || uploading === 'bref'}
-                      onClick={() => document.getElementById('bref-upload')?.click()}
-                    >
-                      {uploading === 'bref' ? (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      ) : (
-                        <Upload className="mr-1 h-3 w-3" />
-                      )}
-                      {hasBREF ? 'Replace' : 'Upload'}
-                    </Button>
-                  </label>
-                </div>
+                                  <div className="flex-1">
+                    <p className="text-sm font-medium">BREF Template (Excel)</p>
+                    {hasBREF ? (
+                      <div className="flex items-center gap-1 text-xs text-green-600">
+                        <CheckCircle2 className="h-3 w-3" />
+                        {activeSource?.bref_template?.filename}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        {brefReady
+                          ? 'Upload BREF template'
+                          : 'Upload annual report first'}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    {hasBREF && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBrefDownload}
+                      >
+                        <Download className="mr-1 h-3 w-3" />
+                        Download
+                      </Button>
+                    )}
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      className="hidden"
+                      id="bref-upload"
+                      onChange={handleBrefUpload}
+                      disabled={!brefReady}
+                    />
+                    <label htmlFor="bref-upload">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!brefReady || uploading === 'bref'}
+                        onClick={() => document.getElementById('bref-upload')?.click()}
+                      >
+                        {uploading === 'bref' ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Upload className="mr-1 h-3 w-3" />
+                        )}
+                        {hasBREF ? 'Replace' : 'Upload'}
+                      </Button>
+                    </label>
+                  </div>
               </div>
             </div>
           </div>
