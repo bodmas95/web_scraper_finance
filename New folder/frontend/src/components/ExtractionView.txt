@@ -15,6 +15,8 @@ interface ExtractionViewProps {
   mappingInProgress?: boolean
   hasBrefTemplate?: boolean
   hasMapping?: boolean
+  regionCode?: string
+  currency?: string
 }
 
 const STATEMENT_TABS = [
@@ -63,6 +65,7 @@ function normalizeStatementData(
     year_headers: yearHeaders.length > 0 ? yearHeaders : [String(reportYear), String(reportYear - 1)],
     pages,
     unit_scale: (data.unit_scale as string) || null,
+    currency: (data.currency as string) || null,
   }
 }
 
@@ -234,8 +237,15 @@ export function ExtractionView({
   mappingInProgress,
   hasBrefTemplate,
   hasMapping,
+  regionCode,
+  currency,
 }: ExtractionViewProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('income_statement')
+
+  const hideNotes = regionCode === 'AMER' || regionCode === 'EMEA'
+  const visibleTabs = hideNotes
+    ? STATEMENT_TABS.filter((t) => t.key !== 'notes')
+    : STATEMENT_TABS
 
   const getNormalized = (key: StatementKey): StatementData | null => {
     return normalizeStatementData(extraction[key], extraction.report_year)
@@ -268,6 +278,11 @@ export function ExtractionView({
           <span className="flex items-center gap-2">
             Extracted Financial Statements
             <Badge variant="secondary">Year {extraction.report_year}</Badge>
+            {extraction.filing_years && extraction.filing_years.length > 0 && (
+              <Badge variant="outline" className="text-xs">
+                Filings: {extraction.filing_years.join(', ')}
+              </Badge>
+            )}
           </span>
           <div className="flex items-center gap-2">
             {onReExtract && (
@@ -308,7 +323,7 @@ export function ExtractionView({
       </CardHeader>
       <CardContent>
         <div className="mb-4 flex gap-1 rounded-lg border bg-muted/50 p-1">
-          {STATEMENT_TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             const count =
               tab.key === 'notes'
                 ? getNoteCount()
@@ -346,6 +361,8 @@ export function ExtractionView({
                 data={data}
                 sourceId={extraction.source_id}
                 onUpdateRows={handleUpdateRows}
+                regionCode={regionCode}
+                currency={currency}
               />
             ) : (
               <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
