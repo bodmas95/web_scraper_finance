@@ -79,7 +79,20 @@ def _process_statement(stmt_obj, report_year: int) -> dict | None:
         if df.empty:
             return None
 
-        # Identify year columns and build mapping
+        currency = None
+        if "Currency" in df.columns:
+            currencies = df["Currency"].dropna().unique()
+            if len(currencies) > 0:
+                currency = str(currencies[0])
+
+        concept_label_map: dict[str, str] = {}
+        if "concept" in df.columns and "label" in df.columns:
+            for _, r in df.iterrows():
+                c = str(r.get("concept", "")).replace(":", "_").strip()
+                l = str(r.get("label", "")).strip()
+                if c and l:
+                    concept_label_map[c] = l
+
         year_col_map: dict[str, str] = {}
         for col in df.columns:
             if col in METADATA_COLUMNS:
@@ -93,37 +106,26 @@ def _process_statement(stmt_obj, report_year: int) -> dict | None:
 
         years = sorted(set(year_col_map.values()), reverse=True)
 
-        # Build scale map from XBRL facts if available
-        concept_scales: dict[str, str] = {}
-        try:
-            if hasattr(stmt_obj, "xbrl") and hasattr(stmt_obj.xbrl, "facts"):
-                facts_df = stmt_obj.xbrl.facts.to_dataframe()
-                scale_mapping = {-12: "Trillions", -9: "Billions", -6: "Millions", -3: "Thousands"}
-                for _, fact in facts_df.iterrows():
-                    concept = str(fact.get("concept", "")).replace(":", "_")
-                    decimals = fact.get("decimals")
-                    if concept and decimals is not None and concept not in concept_scales:
-                        try:
-                            concept_scales[concept] = scale_mapping.get(int(float(decimals)), "")
-                        except (ValueError, TypeError):
-                            pass
-        except Exception:
-            pass
+        all_values: list[float] = []
+        for _, row in df.iterrows():
+            is_abstract = row.get("abstract") in (True, "true", "True")
+            if is_abstract:
+                continue
+            for orig_col in year_col_map:
+                val = _parse_number(row.get(orig_col))
+                if val is not None and val != 0:
+                    all_values.append(abs(val))
 
-        # Determine dominant scale
-        if concept_scales:
-            from collections import Counter
-            scale_counts = Counter(s for s in concept_scales.values() if s)
-            unit_scale = scale_counts.most_common(1)[0][0] if scale_counts else None
-        else:
-            unit_scale = None
-
-        scale_factors = {
-            "Trillions": 1_000_000_000_000,
-            "Billions": 1_000_000_000,
-            "Millions": 1_000_000,
-            "Thousands": 1_000,
-        }
+        unit_scale = None
+        divisor = 1
+        if all_values:
+            median_val = sorted(all_values)[len(all_values) // 2]
+            if median_val >= 1_000_000:
+                unit_scale = "Millions"
+                divisor = 1_000_000
+            elif median_val >= 1_000:
+                unit_scale = "Thousands"
+                divisor = 1_000
 
         rows = []
         for _, row in df.iterrows():
@@ -135,24 +137,29 @@ def _process_statement(stmt_obj, report_year: int) -> dict | None:
             if not label:
                 continue
 
-            parent = str(row.get("parent_abstract_concept", "") or "").strip() or None
+            parent_raw = str(row.get("parent_abstract_concept", "") or "").replace(":", "_").strip()
+            parent = concept_label_map.get(parent_raw) if parent_raw else None
 
             row_dict: dict[str, Any] = {"label": label}
             if parent:
                 row_dict["parent"] = parent
 
-            has_value = False
-            concept = str(row.get("concept", "")).replace(":", "_")
-            row_scale = concept_scales.get(concept, unit_scale or "")
-            divisor = scale_factors.get(row_scale, 1)
+            concept_val = str(row.get("concept", "") or "").strip()
+            if concept_val:
+                row_dict["concept"] = concept_val
 
+            std_concept = str(row.get("standard_concept", "") or "").strip()
+            if std_concept:
+                row_dict["standard_concept"] = std_concept
+
+            has_value = False
             for orig_col, yr in year_col_map.items():
                 raw = row.get(orig_col)
                 val = _parse_number(raw)
                 if val is not None:
                     if divisor > 1:
                         val = val / divisor
-                    row_dict[yr] = round(val)
+                    row_dict[yr] = round(val, 1)
                     has_value = True
 
             if has_value:
@@ -163,8 +170,9 @@ def _process_statement(stmt_obj, report_year: int) -> dict | None:
 
         return {
             "rows": rows,
-            "year_headers": years[:2],
+            "year_headers": years[:3],
             "unit_scale": unit_scale,
+            "currency": currency,
         }
 
     except Exception as e:
@@ -185,11 +193,17 @@ def _fetch_sync(ticker: str, year: int) -> dict:
     try:
         filings = company.get_filings(form="10-K")
         for filing in filings:
-            fy = getattr(filing, "fiscal_year", None)
+            fy = None
+            por = getattr(filing, "period_of_report", None)
+            if por and hasattr(por, "year"):
+                fy = por.year
+            if fy is None:
+                fy = getattr(filing, "fiscal_year", None)
             if fy is None and hasattr(filing, "filing_date"):
-                fy = filing.filing_date.year
+                fd = filing.filing_date
+                fy = fd.year - 1 if fd.month <= 6 else fd.year
             if fy == year:
-                logger.info("Found 10-K filing for FY%d", year)
+                logger.info("Found 10-K filing for FY%d (period_of_report=%s)", year, por)
                 try:
                     obj = filing.obj()
                     financials = obj.financials if hasattr(obj, "financials") else obj
@@ -231,8 +245,9 @@ async def fetch_edgar_financials(ticker: str, year: int) -> dict:
         if result.get(key) is None:
             result[key] = {
                 "rows": [],
-                "year_headers": [str(year), str(year - 1)],
+                "year_headers": [str(year), str(year - 1), str(year - 2)],
                 "unit_scale": None,
+                "currency": None,
             }
 
     logger.info(
