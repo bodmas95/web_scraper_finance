@@ -17,6 +17,7 @@ import { Download, Loader2, BarChart3 } from 'lucide-react'
 interface SummaryViewProps {
   sourceId: string
   reportYear: number
+  refreshKey?: number
 }
 
 const SUMMARY_TABS = [
@@ -46,7 +47,7 @@ function formatValue(val: number | null, metric: string): string {
   return val.toLocaleString()
 }
 
-export function SummaryView({ sourceId, reportYear }: SummaryViewProps) {
+export function SummaryView({ sourceId, reportYear, refreshKey }: SummaryViewProps) {
   const [activeTab, setActiveTab] = useState<SummaryKey>('income_statement')
   const [summaryData, setSummaryData] = useState<Record<string, SummaryRow[]> | null>(null)
   const [loading, setLoading] = useState(true)
@@ -67,7 +68,7 @@ export function SummaryView({ sourceId, reportYear }: SummaryViewProps) {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [sourceId])
+  }, [sourceId, refreshKey])
 
   const handleExport = async () => {
     const blob = await exportSummary(sourceId)
