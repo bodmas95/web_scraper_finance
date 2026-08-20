@@ -44,10 +44,7 @@ def _rows_to_fields(rows: list) -> dict:
     return fields
 
 
-async def run_extraction_pipeline(source_id: str) -> dict:
-    db = get_db()
-    source = await db["source"].find_one({"_id": ObjectId(source_id)})
-
+async def _run_pdf_extraction(source_id: str, source: dict) -> dict:
     pdf_bytes = await download_file(source["annual_report"]["gridfs_id"])
     pdf_text = await extract_pdf_text(pdf_bytes)
     pdf_tables = await extract_pdf_tables(pdf_bytes)
@@ -69,22 +66,136 @@ async def run_extraction_pipeline(source_id: str) -> dict:
 
     extraction_graph = build_extraction_graph()
     result = await extraction_graph.ainvoke(initial_state)
-
     fs = result.get("financial_statements", {})
-
-    cache_doc = {
-        "source_id": source_id,
-        "company_id": source["company_id"],
-        "report_year": source["report_year"],
+    return {
         "income_statement": fs.get("income_statement"),
         "balance_sheet": fs.get("balance_sheet"),
         "cash_flow": fs.get("cash_flow"),
         "notes": result.get("notes"),
+    }
+
+
+async def _run_edgar_extraction(source_id: str, source: dict) -> dict:
+    from services.edgar_service import fetch_edgar_financials
+
+    db = get_db()
+    company_id = source["company_id"]
+    region_code = source["region_code"]
+    country_code = source.get("country_code", "")
+
+    region_doc = await db["region"].find_one({"region_code": region_code})
+    ticker = None
+    if region_doc:
+        for country in region_doc.get("countries", []):
+            if country["country_code"] == country_code:
+                for comp in country.get("companies", []):
+                    if comp["company_id"] == company_id:
+                        ticker = comp.get("ticker")
+                        break
+                break
+
+    if not ticker:
+        raise ValueError(f"No ticker found for company {company_id}")
+
+    year = source["report_year"]
+    logger.info("EDGAR extraction: ticker=%s, year=%d", ticker, year)
+    fs = await fetch_edgar_financials(ticker, year)
+    return {
+        "income_statement": fs.get("income_statement"),
+        "balance_sheet": fs.get("balance_sheet"),
+        "cash_flow": fs.get("cash_flow"),
+        "notes": None,
+    }
+
+
+async def _run_xbrl_extraction(source_id: str, source: dict) -> dict:
+    from services.xbrl_service import fetch_xbrl_financials
+
+    db = get_db()
+    company_id = source["company_id"]
+    region_code = source["region_code"]
+    country_code = source.get("country_code", "")
+
+    region_doc = await db["region"].find_one({"region_code": region_code})
+    lei = None
+    if region_doc:
+        for country in region_doc.get("countries", []):
+            if country["country_code"] == country_code:
+                for comp in country.get("companies", []):
+                    if comp["company_id"] == company_id:
+                        lei = comp.get("lei")
+                        break
+                break
+
+    if not lei:
+        raise ValueError(f"No LEI found for company {company_id}")
+
+    logger.info("XBRL extraction: LEI=%s (auto-discover years)", lei)
+    fs = await fetch_xbrl_financials(lei)
+
+    year_headers = []
+    for key in ("income_statement", "balance_sheet", "cash_flow"):
+        stmt = fs.get(key) or {}
+        yh = stmt.get("year_headers", [])
+        if yh:
+            year_headers = yh
+            break
+    report_year = int(year_headers[0]) if year_headers else source.get("report_year", 2024)
+
+    return {
+        "income_statement": fs.get("income_statement"),
+        "balance_sheet": fs.get("balance_sheet"),
+        "cash_flow": fs.get("cash_flow"),
+        "notes": None,
+        "_report_year": report_year,
+        "_filing_years": fs.get("filing_years", []),
+    }
+
+
+async def run_extraction_pipeline(source_id: str) -> dict:
+    db = get_db()
+    source = await db["source"].find_one({"_id": ObjectId(source_id)})
+
+    region = source.get("region_code", "APAC")
+
+    if region == "AMER":
+        extracted = await _run_edgar_extraction(source_id, source)
+    elif region == "EMEA":
+        extracted = await _run_xbrl_extraction(source_id, source)
+    else:
+        extracted = await _run_pdf_extraction(source_id, source)
+
+    report_year = extracted.pop("_report_year", None) or source.get("report_year")
+    filing_years = extracted.pop("_filing_years", None)
+
+    cache_doc = {
+        "source_id": source_id,
+        "company_id": source["company_id"],
+        "report_year": report_year,
+        "income_statement": extracted.get("income_statement"),
+        "balance_sheet": extracted.get("balance_sheet"),
+        "cash_flow": extracted.get("cash_flow"),
+        "notes": extracted.get("notes"),
         "extracted_at": datetime.utcnow(),
     }
-    await db["extraction_cache"].replace_one(
-        {"source_id": source_id}, cache_doc, upsert=True
-    )
+    if filing_years:
+        cache_doc["filing_years"] = filing_years
+    
+    # Try to save, handling duplicate key error from old cache_key index
+    try:
+        await db["extraction_cache"].replace_one(
+            {"source_id": source_id}, cache_doc, upsert=True
+        )
+    except Exception as e:
+        if "duplicate key error" in str(e) and "cache_key" in str(e):
+            # Delete old documents with null cache_key and retry
+            logger.warning("Cleaning up old extraction_cache documents with null cache_key")
+            await db["extraction_cache"].delete_many({"cache_key": None})
+            await db["extraction_cache"].replace_one(
+                {"source_id": source_id}, cache_doc, upsert=True
+            )
+        else:
+            raise
 
     return cache_doc
 
@@ -141,8 +252,21 @@ async def run_mapping_pipeline(source_id: str) -> dict:
         "cash_flow": result.get("bref_mappings", {}).get("cash_flow"),
         "mapped_at": datetime.utcnow(),
     }
-    await db["bref_mapping_cache"].replace_one(
-        {"source_id": source_id}, cache_doc, upsert=True
-    )
+    
+    # Try to save, handling duplicate key error from old cache_key index
+    try:
+        await db["bref_mapping_cache"].replace_one(
+            {"source_id": source_id}, cache_doc, upsert=True
+        )
+    except Exception as e:
+        if "duplicate key error" in str(e) and "cache_key" in str(e):
+            # Delete old documents with null cache_key and retry
+            logger.warning("Cleaning up old bref_mapping_cache documents with null cache_key")
+            await db["bref_mapping_cache"].delete_many({"cache_key": None})
+            await db["bref_mapping_cache"].replace_one(
+                {"source_id": source_id}, cache_doc, upsert=True
+            )
+        else:
+            raise
 
     return cache_doc
