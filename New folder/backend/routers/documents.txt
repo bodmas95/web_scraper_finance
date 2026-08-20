@@ -114,6 +114,49 @@ async def upload_bref_template(
     }
 
 
+@router.post("/create-source")
+async def create_source(
+    company_id: str = Form(...),
+    region_code: str = Form(...),
+    country_code: str = Form(...),
+    report_year: int = Form(...),
+    extraction_method: str = Form("pdf"),
+):
+    db = get_db()
+    source = await db["source"].find_one(
+        {"company_id": company_id, "report_year": report_year}
+    )
+    if source:
+        await db["source"].update_one(
+            {"_id": source["_id"]},
+            {
+                "$set": {
+                    "region_code": region_code,
+                    "country_code": country_code,
+                    "extraction_method": extraction_method,
+                    "uploaded_at": datetime.utcnow(),
+                }
+            },
+        )
+        source_id = str(source["_id"])
+    else:
+        result = await db["source"].insert_one(
+            {
+                "company_id": company_id,
+                "region_code": region_code,
+                "country_code": country_code,
+                "report_year": report_year,
+                "annual_report": None,
+                "bref_template": None,
+                "extraction_method": extraction_method,
+                "uploaded_at": datetime.utcnow(),
+            }
+        )
+        source_id = str(result.inserted_id)
+
+    return {"source_id": source_id, "status": "created"}
+
+
 @router.get("/{company_id}")
 async def get_documents(company_id: str):
     db = get_db()
@@ -133,3 +176,28 @@ async def get_source(source_id: str):
         raise HTTPException(404, "Source not found")
     source["id"] = str(source.pop("_id"))
     return source
+
+
+@router.get("/source/{source_id}/bref-template")
+async def download_bref_template(source_id: str):
+    from fastapi.responses import StreamingResponse
+    from services.gridfs_service import download_file
+    import io
+    
+    db = get_db()
+    source = await db["source"].find_one({"_id": ObjectId(source_id)})
+    if not source:
+        raise HTTPException(404, "Source not found")
+    if not source.get("bref_template"):
+        raise HTTPException(404, "No BREF template uploaded for this source")
+    
+    gridfs_id = source["bref_template"]["gridfs_id"]
+    filename = source["bref_template"]["filename"]
+    
+    content = await download_file(gridfs_id)
+    
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
